@@ -1,6 +1,7 @@
 //! État applicatif **sans dépendance GPU** : scène, sélection, caméra, mode Play,
 //! interaction pointeur. Le `Renderer` consomme cet état pour dessiner.
 
+pub mod ability_hud;
 pub mod ai;
 pub mod asset_ops;
 mod autosave;
@@ -924,6 +925,12 @@ pub struct NetworkPlayersState {
     /// touche de ruée en continu, symétrique du cooldown d'attaque
     /// (`network_attack_cooldowns`, non montré ici mais même motif).
     network_dash_cooldowns: HashMap<crate::net::protocol::PlayerId, f32>,
+    /// Minuteurs d'animation des capacités par joueur réseau (14 septembre
+    /// 2026 au soir) : côté serveur, le clip Attack/Cast/Block/Dash de chaque
+    /// joueur est élu d'après son `Input` et part dans `EntityDelta::anim_clip`
+    /// — sans quoi les **autres** joueurs ne voyaient jamais un coup ou un sort
+    /// (seul Walk/Idle était diffusé), cf. `multiplayer::update_network_ability_animations`.
+    network_ability_anims: HashMap<crate::net::protocol::PlayerId, multiplayer::NetAbilityAnim>,
 }
 
 pub struct AsyncLoadState {
@@ -1698,6 +1705,7 @@ impl AppState {
                 bite_cooldowns: HashMap::new(),
                 recent_damage: HashMap::new(),
                 network_dash_cooldowns: HashMap::new(),
+                network_ability_anims: HashMap::new(),
             },
             projectiles: ProjectilesState {
                 fireballs: Vec::new(),

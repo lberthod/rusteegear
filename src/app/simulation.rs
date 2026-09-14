@@ -1657,6 +1657,7 @@ impl AppState {
         // entièrement avant qu'aucun script ne tourne : aucune ambiguïté d'ordre à éviter.
         let anim_notify_events = advance_animation_clips(&mut self.scene, dt);
         self.apply_ability_animations(dt);
+        self.update_network_ability_animations(dt);
         // Zones de déclenchement : objets `trigger` visibles dont l'AABB monde touche
         // celui du joueur. Test d'*intersection* de volumes (et non « centre du joueur
         // dans la zone ») : quand la zone est un ennemi doté d'un corps physique, les

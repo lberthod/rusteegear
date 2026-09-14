@@ -533,6 +533,38 @@ fn scripted_walker_scene(kind: PhysicsKind) -> Scene {
     scene
 }
 
+/// Filet de sécurité (14 septembre 2026 au soir, incident water.loicberthod.ch :
+/// 4 renards enragés sur 6 retrouvés à y = −155 … −1881 côté serveur, tombant à
+/// `SCRIPTED_FALL_SPEED` constante, x/z inchangés) : un corps scripté dont le
+/// collider a fini **dans** le décor (bousculade, dépénétration, sol
+/// accidenté) ne doit pas traverser le sol et chuter pour toujours — il est
+/// reposé sur la surface trouvée juste au-dessus de lui.
+#[test]
+fn a_scripted_body_pushed_into_the_floor_is_lifted_back_instead_of_falling_forever() {
+    let mut scene = scripted_walker_scene(PhysicsKind::Kinematic);
+    let walker = 3;
+    // Cube de 1 m dont le centre est enfoncé dans le sol (dessus du sol à
+    // y = −0.5, cube de −1.3 à −0.3).
+    scene.objects[walker].transform.position.y = -0.8;
+    let mut phys = Physics::build(&scene);
+    let dt = 1.0 / 60.0;
+    let mut lowest = f32::MAX;
+    for _ in 0..180 {
+        phys.resolve_scripted_moves(dt, &mut scene);
+        phys.step(dt, &mut scene);
+        lowest = lowest.min(scene.objects[walker].transform.position.y);
+    }
+    let y = scene.objects[walker].transform.position.y;
+    assert!(
+        lowest > -1.6,
+        "le corps ne doit jamais traverser le sol (y minimal observé {lowest})"
+    );
+    assert!(
+        (-0.1..=0.1).contains(&y),
+        "il doit finir posé sur le sol (centre attendu ≈ 0, dessus du sol −0.5 + demi-cube 0.5) : y={y}"
+    );
+}
+
 /// Preuve de la demande gameplay « les créatures ne doivent pas marcher sur
 /// le joueur ni traverser murs et objets fixes » : un corps scripté
 /// (`PhysicsKind::Kinematic`) dont le script force tout droit est bloqué par

@@ -464,6 +464,22 @@ const PVP_MELEE_DAMAGE: f32 = 0.15;
 pub(super) const DASH_DISTANCE: f32 = 5.0;
 pub(super) const DASH_COOLDOWN: f32 = 1.5;
 
+/// Minuteurs d'animation des capacités d'un joueur réseau (cf.
+/// `AppState::update_network_ability_animations`) : même mécanique que
+/// `PlayerAttackState::swing_anim_remaining` pour le joueur local — un
+/// **appui** (front montant) arme un minuteur pour que le clip joue en entier,
+/// même sur une pression brève.
+#[derive(Debug, Default, Clone, Copy, PartialEq)]
+pub struct NetAbilityAnim {
+    pub swing_remaining: f32,
+    pub cast_remaining: f32,
+    pub attack_was_down: bool,
+    pub cast_was_down: bool,
+    /// Clip de capacité choisi au tick précédent (`None` = aucun) : détecte
+    /// le front montant pour remettre le clip au début.
+    pub current: Option<&'static str>,
+}
+
 /// Fenêtre (s) après laquelle un dégât porté à un monstre ne compte plus pour
 /// l'assist (GDD §8.3) si un autre joueur l'achève — borne volontairement
 /// courte : un dégât porté puis oublié pendant de longues secondes n'a plus
@@ -1105,6 +1121,75 @@ impl AppState {
             self.network
                 .network_attack_cooldowns
                 .insert(id, NETWORK_ATTACK_COOLDOWN);
+        }
+    }
+
+    /// Anime les joueurs **réseau** selon la capacité qu'ils tiennent (14
+    /// septembre 2026 au soir, `Scene::ability_bar`) : pendant de
+    /// `simulation::apply_ability_animations` (joueur local) pour les objets
+    /// pilotés par un `Input` réseau — côté serveur, le clip élu ici part tel
+    /// quel dans `EntityDelta::anim_clip` et anime le fantôme chez **tous** les
+    /// autres clients ; avant, seul Walk/Idle était diffusé et un coup ou un
+    /// sort restait invisible pour les autres joueurs. Priorités et durées
+    /// identiques au joueur local (Block > Attack > Cast > Dash,
+    /// `ABILITY_ANIM_SECONDS`). Côté client, `network_inputs` est vide : no-op.
+    pub(super) fn update_network_ability_animations(&mut self, dt: f32) {
+        if !self.scene.ability_bar {
+            return;
+        }
+        let anim_secs = Self::ABILITY_ANIM_SECONDS;
+        let ids: Vec<PlayerId> = self.network.network_inputs.keys().copied().collect();
+        for id in ids {
+            let Some(inp) = self.network.network_inputs.get(&id).copied() else {
+                continue;
+            };
+            let Some(&index) = self.network.network_players.get(&id) else {
+                continue;
+            };
+            let dashing = self
+                .network
+                .network_dash_cooldowns
+                .get(&id)
+                .is_some_and(|cd| *cd > DASH_COOLDOWN - Self::ROLL_ANIM_SECONDS);
+            let t = self.network.network_ability_anims.entry(id).or_default();
+            if inp.attack && !t.attack_was_down {
+                t.swing_remaining = anim_secs;
+            }
+            t.attack_was_down = inp.attack;
+            let cast_down = inp.fire || inp.heal;
+            if cast_down && !t.cast_was_down {
+                t.cast_remaining = anim_secs;
+            }
+            t.cast_was_down = cast_down;
+            t.swing_remaining = (t.swing_remaining - dt).max(0.0);
+            t.cast_remaining = (t.cast_remaining - dt).max(0.0);
+            let desired = if inp.block {
+                Some("Block")
+            } else if inp.attack || t.swing_remaining > 0.0 {
+                Some("Attack")
+            } else if cast_down || t.cast_remaining > 0.0 {
+                Some("Cast")
+            } else if dashing {
+                Some("Dash")
+            } else {
+                None
+            };
+            let rising_edge = desired.is_some() && desired != t.current;
+            t.current = desired;
+            let Some(clip) = desired else { continue };
+            if let Some(anim) = self
+                .scene
+                .objects
+                .get_mut(index)
+                .and_then(|o| o.animation.as_mut())
+            {
+                anim.clip = clip.to_string();
+                anim.prev_clip.clear();
+                anim.blend = 1.0;
+                if rising_edge {
+                    anim.time = 0.0;
+                }
+            }
         }
     }
 
@@ -1969,6 +2054,49 @@ mod tests {
             entity.visible,
             "le snapshot diffusé doit refléter visible=true"
         );
+    }
+
+    /// 14 septembre 2026 au soir : un coup/sort d'un joueur réseau doit
+    /// s'animer côté serveur (donc chez les autres joueurs via
+    /// `EntityDelta::anim_clip`), et jouer en entier même sur un appui bref.
+    #[test]
+    fn a_network_players_brief_attack_press_plays_the_attack_clip_for_all() {
+        let mut app = AppState::new();
+        app.scene = crate::scene::Scene::default();
+        app.scene.ability_bar = true;
+        app.scene.objects.push(crate::scene::SceneObject {
+            name: "Héros".into(),
+            controller: Some(crate::scene::Controller {
+                input: true,
+                ..Default::default()
+            }),
+            animation: Some(crate::scene::AnimationState::default()),
+            ..Default::default()
+        });
+        let idx = app.spawn_network_player(7, PlayerClass::Assault).expect("gabarit pilotable");
+        let clip = |app: &AppState| app.scene.objects[idx].animation.as_ref().unwrap().clip.clone();
+        let input = NetworkInput {
+            attack: true,
+            ..Default::default()
+        };
+        app.set_network_input(7, input);
+        app.update_network_ability_animations(1.0 / 60.0);
+        assert_eq!(clip(&app), "Attack", "appui : le clip Attack part");
+        // Touche relâchée dès le tick suivant : le clip continue le temps du
+        // minuteur, puis s'arrête de lui-même.
+        app.set_network_input(7, NetworkInput::default());
+        app.update_network_ability_animations(1.0 / 60.0);
+        assert_eq!(clip(&app), "Attack", "relâché : le clip joue encore");
+        for _ in 0..40 {
+            app.update_network_ability_animations(1.0 / 60.0);
+        }
+        // Une fois le minuteur écoulé, la fonction ne touche plus au clip
+        // (Walk/Idle reprennent la main dans `sim_step`).
+        let t = app.network.network_ability_anims[&7];
+        assert_eq!(t.swing_remaining, 0.0);
+        assert_eq!(t.current, None);
+        let snap = app.network_snapshot(1);
+        assert!(snap.entities.iter().any(|e| e.player_id == Some(7)));
     }
 
     #[test]

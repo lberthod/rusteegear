@@ -211,7 +211,8 @@ impl AppState {
         });
         let mut survivors = Vec::with_capacity(flying.len());
         for fb in flying {
-            match self.fireball_impact(&fb) {
+            let step = RANGED_WEAPONS[fb.weapon].speed * dt;
+            match self.fireball_impact(&fb, step) {
                 Some(Impact::Monster(i)) => {
                     self.resolve_fireball_hit(i, fb.pos, RANGED_WEAPONS[fb.weapon].damage, fb.owner)
                 }
@@ -269,7 +270,22 @@ impl AppState {
     /// pilotable (joueurs — pas de dégâts joueur-contre-joueur tant que la vie
     /// n'est pas individualisée, cf. `network_snapshot`), l'ancre FX d'attaque, et
     /// les objets ni `attackable` ni physiques (fantômes réseau, pool...).
-    fn fireball_impact(&self, fb: &Fireball) -> Option<Impact> {
+    ///
+    /// **Obstacles par rayon physique, pas par AABB** (14 septembre 2026 au
+    /// soir, correctif « K/3 ne tire jamais dans la démo Rivière ») : l'ancien
+    /// test « le point est dans l'AABB monde d'un objet solide » éteignait le
+    /// projectile **dès son apparition** dans toute scène dont le décor est un
+    /// seul grand maillage (le terrain « Vallée » couvre toute la carte, donc
+    /// tout point de tir), solo comme en ligne — aucun tir n'était jamais
+    /// visible. Les obstacles sont désormais détectés par `Physics::raycast`
+    /// sur le segment parcouru ce tick (`step`, plus le rayon de l'arme),
+    /// contre les colliders réels du décor (`OBSTACLE_MASK`, le même que la
+    /// caméra et la ruée) ; les cibles (monstres `attackable`, joueurs PvP)
+    /// gardent leur AABB gonflée (généreuse, cohérente avec les dégâts
+    /// de zone). Sans physique construite (scène jamais jouée), repli sur
+    /// l'ancien test AABB pour ne pas laisser un projectile traverser les murs.
+    fn fireball_impact(&self, fb: &Fireball, step: f32) -> Option<Impact> {
+        let has_physics = self.physics.is_some();
         for (i, o) in self.scene.objects.iter().enumerate() {
             if i == fb.owner || !o.visible {
                 continue;
@@ -303,7 +319,7 @@ impl AppState {
                 continue;
             }
             let solid = o.physics != PhysicsKind::None;
-            if !attackable && !solid {
+            if !attackable && (!solid || has_physics) {
                 continue;
             }
             let (wmin, wmax) = self.scene.world_aabb(o);
@@ -317,6 +333,22 @@ impl AppState {
             } else {
                 Impact::Obstacle
             });
+        }
+        // Décor : rayon sur le segment parcouru ce tick, cf. la doc ci-dessus.
+        // Origine = position d'avant le vol de ce tick (le projectile naît déjà
+        // `SPAWN_AHEAD` devant le tireur, hors de sa capsule).
+        if let Some(phys) = self.physics.as_ref() {
+            /// Décor fixe/murs, ni capteurs ni joueurs — même masque que
+            /// `combat::update_dash` et la collision caméra.
+            const OBSTACLE_MASK: u32 = 1;
+            let radius = RANGED_WEAPONS[fb.weapon].radius;
+            let origin = fb.pos - fb.dir * step;
+            if phys
+                .raycast(origin, fb.dir, step + radius, OBSTACLE_MASK)
+                .is_some()
+            {
+                return Some(Impact::Obstacle);
+            }
         }
         None
     }
@@ -609,6 +641,32 @@ mod tests {
             "le monstre droit devant doit être vaincu par la boule de feu"
         );
         assert_eq!(app.score(), 1, "un monstre vaincu = +1 au score");
+    }
+
+    /// Régression du 14 septembre 2026 au soir : dans la démo Rivière, le
+    /// terrain « Vallée » (un seul grand maillage `Static`) contient tout point
+    /// de tir dans son AABB monde — l'ancien test d'obstacle par AABB éteignait
+    /// chaque boule de feu à sa naissance, K/3 ne montrait jamais rien.
+    #[test]
+    fn a_fireball_survives_over_the_riviere_terrain_mesh() {
+        let mut app = AppState::new();
+        app.load_riviere_demo();
+        app.playing = true;
+        // Physique construite, joueur posé au sol.
+        advance(&mut app, 10, 0.05);
+        app.input_state.fire = true;
+        let mut ticks_with_projectile = 0;
+        for k in 0..20 {
+            advance(&mut app, 1, 0.05);
+            if !app.network_snapshot(k).projectiles.is_empty() {
+                ticks_with_projectile += 1;
+            }
+        }
+        assert!(
+            ticks_with_projectile >= 10,
+            "la boule de feu doit voler au-dessus du terrain, pas s'éteindre dans son AABB \
+             ({ticks_with_projectile} ticks avec projectile sur 20)"
+        );
     }
 
     #[test]

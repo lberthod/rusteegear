@@ -812,32 +812,84 @@ pub(super) fn wave_hud(
     );
 }
 
-/// Rappel du kit de capacités 1-2-3-4 (14 septembre 2026, `Scene::ability_bar`
-/// — démo Rivière & cascade PvE/PvP) : simple ligne de texte en bas de
-/// l'écran, sans fond ni cadre — un vrai widget de barre de capacités avec
-/// icônes/cooldowns a été délibérément écarté pour tenir le budget de cette
-/// itération (cf. la doc de `Scene::ability_bar`) ; non déplaçable
-/// (`Scene::hud_layout` n'a pas d'entrée dédiée), contrairement aux autres
-/// widgets du HUD ci-dessus.
-pub(super) fn ability_bar_hint(
+/// Barre de capacités 1-2-3-4 (14 septembre 2026 au soir, `Scene::ability_bar`
+/// — démo Rivière & cascade PvE/PvP), à la place de l'arme équipée : cinq
+/// cases (1/J mêlée, 2 bouclier, 3/K sort, 4 ruée, H soin) qui **s'allument**
+/// quand la capacité est en cours (`AbilitySlot::active`) et se voilent le
+/// temps de leur recharge (`AbilitySlot::cooldown`). Remplace l'ancienne simple
+/// ligne de texte (retour utilisateur « 1-2-3 / J / K ne donnent aucun retour
+/// à l'écran » : le clip du personnage, petit et vu de dos, ne suffisait pas)
+/// et le `weapon_hud` de ces scènes, dont l'aide « 1/2/3 : changer d'arme »
+/// était fausse ici — les deux se superposaient au même endroit. Non
+/// déplaçable (`Scene::hud_layout` n'a pas d'entrée dédiée).
+pub(super) fn ability_bar(
     ctx: &egui::Context,
     area: egui::Rect,
+    hud: &crate::app::ability_hud::AbilityHud,
     locale: crate::app::locale::Locale,
     scale: f32,
 ) {
-    use egui::{Align2, Color32, FontId};
+    use egui::{Align2, Color32, FontId, Stroke};
     let scale = clamp_hud_scale(scale);
     let painter = ctx.layer_painter(egui::LayerId::new(
         egui::Order::Foreground,
         egui::Id::new("hud_ability_bar"),
     ));
-    painter.text(
-        egui::pos2(area.center().x, area.bottom() - 14.0 * scale),
-        Align2::CENTER_CENTER,
-        crate::app::locale::ability_bar_hint(locale),
-        FontId::proportional(13.0 * scale),
-        Color32::from_white_alpha(190),
-    );
+    let names = crate::app::locale::ability_slot_names(locale);
+    let slots = hud.slots();
+    let size = 54.0 * scale;
+    let gap = 8.0 * scale;
+    let n = slots.len() as f32;
+    let total_w = n * size + (n - 1.0) * gap;
+    let left = area.center().x - total_w / 2.0;
+    let cy = area.bottom() - 16.0 * scale - size / 2.0;
+    for (i, (slot, (key, alt, name))) in slots.iter().zip(names).enumerate() {
+        let cx = left + i as f32 * (size + gap) + size / 2.0;
+        let rect = egui::Rect::from_center_size(egui::pos2(cx, cy), egui::vec2(size, size));
+        let (fill, stroke, text) = if slot.active {
+            (
+                Color32::from_rgba_unmultiplied(255, 170, 80, 230),
+                Stroke::new(2.0 * scale, Color32::WHITE),
+                Color32::from_rgb(30, 20, 10),
+            )
+        } else {
+            (
+                Color32::from_black_alpha(120),
+                Stroke::new(1.0 * scale, Color32::from_white_alpha(90)),
+                Color32::from_white_alpha(230),
+            )
+        };
+        painter.rect(rect, 8.0 * scale, fill, stroke, egui::StrokeKind::Inside);
+        // Recharge : voile sombre qui descend du haut vers le bas en se vidant.
+        if slot.cooldown > 0.0 && !slot.active {
+            let h = size * slot.cooldown.clamp(0.0, 1.0);
+            let veil = egui::Rect::from_min_size(rect.min, egui::vec2(size, h));
+            painter.rect_filled(veil, 8.0 * scale, Color32::from_black_alpha(140));
+        }
+        painter.text(
+            egui::pos2(cx, rect.top() + 17.0 * scale),
+            Align2::CENTER_CENTER,
+            key,
+            FontId::proportional(20.0 * scale),
+            text,
+        );
+        if !alt.is_empty() {
+            painter.text(
+                rect.right_top() + egui::vec2(-6.0 * scale, 6.0 * scale),
+                Align2::RIGHT_TOP,
+                alt,
+                FontId::proportional(10.0 * scale),
+                text,
+            );
+        }
+        painter.text(
+            egui::pos2(cx, rect.bottom() - 11.0 * scale),
+            Align2::CENTER_CENTER,
+            name,
+            FontId::proportional(11.0 * scale),
+            text,
+        );
+    }
 }
 
 /// Borne `Settings::hud_scale` à une plage sûre (au cas où un `settings.json`

@@ -59,6 +59,47 @@ travail n'est pas mergé dans `main` — vérifier après coup que le salon
 `riviere` route encore vers la vallée avant de considérer un déploiement
 « normal » comme neutre.
 
+### Kit de capacités 1-2-3-4 : retours à l'écran (14 septembre 2026 au soir)
+
+Retour utilisateur après mise en ligne : « 1-2-3, J, K… ne donnent aucun
+retour à l'écran ». Sondé sur le site en ligne (`window.__rusteegear_state`
+après un `KeyboardEvent` sur le canvas), les touches arrivaient bien au moteur ;
+trois vrais défauts en aval, tous corrigés et couverts par des tests :
+
+- **Le sort (K/3) ne partait jamais** — solo comme en ligne, et pas seulement
+  ici : `fireball_impact` éteignait le projectile dès sa naissance parce que le
+  terrain « Vallée » (un seul grand maillage `Static`) contient tout point de
+  tir dans son AABB monde. Les obstacles sont désormais détectés par un rayon
+  physique sur le segment parcouru à chaque tick (`Physics::raycast`, même
+  masque que la caméra et la ruée), les cibles gardent leur AABB gonflée.
+  Test : `app::fireball::tests::a_fireball_survives_over_the_riviere_terrain_mesh`.
+- **Aucun retour visible hors du clip d'animation** (petit, vu de dos) : une
+  vraie barre de capacités (`editor::hud::ability_bar`, état pris dans
+  `app::ability_hud::AbilityHud`) remplace en bas de l'écran l'arme équipée et
+  l'ancienne ligne de texte qui se superposaient — chaque case (1/J mêlée,
+  2 bouclier, 3/K sort, 4 ruée, H soin) **s'allume** tant que la capacité est
+  en cours et se voile le temps de sa recharge (ruée, sort en solo ; les
+  recharges serveur ne sont pas diffusées).
+- **Les autres joueurs ne voyaient jamais un coup ou un sort** : le serveur ne
+  diffusait que Walk/Idle. `multiplayer::update_network_ability_animations`
+  élit le clip Block/Attack/Cast/Dash de chaque joueur réseau d'après son
+  `Input` (mêmes minuteurs que le joueur local, un appui bref joue le clip en
+  entier) — il part dans `EntityDelta::anim_clip` comme avant.
+
+Au passage, une sonde réseau headless à deux clients sur le salon `riviere`
+en production a montré 4 renards enragés sur 6 à y = −155 … −1881, tombant à
+vitesse constante : un corps scripté (`resolve_scripted_moves`) dont le
+collider finit **dans** le décor (bousculade, dépénétration) n'est plus retenu
+par `move_shape` et traverse le sol pour toujours. Filet de sécurité : quand
+un tel corps descend à pleine vitesse de chute, un rayon cherche le décor
+fixe juste au-dessus de son origine et l'y repose. Test :
+`runtime::physics::tests::a_scripted_body_pushed_into_the_floor_is_lifted_back_instead_of_falling_forever`.
+
+Limite connue relevée pendant ces sondes : `MAX_CONNECTIONS_PER_IP` (4) compte
+des connexions déjà fermées côté client tant que le serveur ne les a pas vues
+tomber — plusieurs sondes successives depuis la même IP finissent refusées
+(« Serveur plein ») ; un joueur seul n'est pas concerné.
+
 ## Ce qui a été ajouté au moteur
 
 ### Composant « Surface d'eau » (`SceneObject::water`)

@@ -362,6 +362,7 @@ impl Renderer {
                 let net_hud = app.net_hud_info();
                 let welcome_error = app.welcome_error.clone();
                 let weapon_label = app.selected_weapon_label();
+                let ability = app.ability_hud();
                 let defeated = app.is_locally_defeated();
                 let kills = app.displayed_kill_count();
                 let assists = app.displayed_assist_count();
@@ -401,6 +402,7 @@ impl Renderer {
                     net_connected,
                     net_hud,
                     weapon_label,
+                    ability,
                     defeated,
                     app.death_cause,
                     kills,
@@ -489,6 +491,7 @@ impl Renderer {
             let net_connected = app.is_connected();
             let has_firebase_account = app.has_firebase_account();
             let weapon_label = app.selected_weapon_label();
+                let ability = app.ability_hud();
             let defeated = app.is_locally_defeated();
             let kills = app.displayed_kill_count();
             let assists = app.displayed_assist_count();
@@ -546,6 +549,7 @@ impl Renderer {
                 &app.net_panels.leaderboard,
                 &app.net_panels.online_players,
                 weapon_label,
+                ability,
                 defeated,
                 app.death_cause,
                 kills,

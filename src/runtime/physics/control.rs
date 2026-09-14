@@ -394,6 +394,46 @@ impl Physics {
                 translation.x *= k;
                 translation.z *= k;
             }
+            // Filet de sécurité (14 septembre 2026 au soir, incident
+            // water.loicberthod.ch : 4 renards enragés sur 6 retrouvés à
+            // y = −155 … −1881 côté serveur, x/z inchangés, chutant à
+            // `SCRIPTED_FALL_SPEED` constante) : un corps scripté dont le
+            // collider a fini **dans** le décor (bousculade entre créatures,
+            // dépénétration, pente accidentée) n'est plus retenu par
+            // `move_shape` — le contrôleur ignore une pénétration déjà
+            // installée — et la descente constante le fait traverser le sol,
+            // puis tomber pour toujours. Quand il descend à (presque) pleine
+            // vitesse de chute, on cherche le **décor fixe** juste au-dessus
+            // de son origine (jamais son propre corps, ni joueurs/créatures :
+            // `ONLY_FIXED`) : s'il y en a un, il est reposé dessus. Un corps
+            // au repos (translation ≈ 0) ou en chute libre normale (rien à
+            // moins de `PROBE_DOWN` sous lui) n'est jamais touché. Preuve :
+            // `tests::a_scripted_body_pushed_into_the_floor_is_lifted_back_instead_of_falling_forever`.
+            if !self.platformer_feel && translation.y < -0.5 * SCRIPTED_FALL_SPEED * dt {
+                const PROBE_UP: f32 = 1.5;
+                const PROBE_DOWN: f32 = 0.5;
+                let ground_filter = QueryFilter::from(QueryFilterFlags::ONLY_FIXED)
+                    .exclude_sensors()
+                    .exclude_rigid_body(handle);
+                let ground_queries = self.broad.as_query_pipeline(
+                    self.narrow.query_dispatcher(),
+                    &self.bodies,
+                    &self.colliders,
+                    ground_filter,
+                );
+                let ray = Ray::new(cur + Vec3::Y * PROBE_UP, -Vec3::Y);
+                if let Some((_, toi)) = ground_queries.cast_ray(&ray, PROBE_UP + PROBE_DOWN, true) {
+                    let ground_y = cur.y + PROBE_UP - toi;
+                    // Origine reposée de sorte que le **bas du collider** (pas
+                    // l'origine du corps : un cube est centré, un personnage a
+                    // ses pieds à l'origine) affleure la surface trouvée.
+                    let bottom = shape.compute_aabb(&local).mins.y;
+                    let rest_y = ground_y - bottom;
+                    if rest_y > cur.y + translation.y {
+                        translation.y = rest_y - cur.y;
+                    }
+                }
+            }
             let resolved = cur + translation;
             let next_rotation = obj.transform.rotation;
             // Un corps qui **tourne** (pont pivotant, hélice du plateformer 2D)

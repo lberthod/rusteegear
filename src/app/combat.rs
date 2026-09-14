@@ -469,7 +469,7 @@ impl AppState {
     /// sur ce point d'arrivée, ce qui se lisait comme un flip acrobatique plutôt
     /// qu'un glissage au sol). Correspond exactement à la durée du clip `Dash`
     /// dans `creature_ronde.glb`.
-    const ROLL_ANIM_SECONDS: f32 = 0.5;
+    pub(super) const ROLL_ANIM_SECONDS: f32 = 0.5;
 
     /// Ruée du joueur local (14 septembre 2026, capacité 4 du kit 1-2-3-4,
     /// `Scene::ability_bar`) : glissement de `multiplayer::DASH_DISTANCE` étalé

@@ -450,6 +450,28 @@ pub fn ability_bar_hint(locale: Locale) -> &'static str {
     }
 }
 
+/// Cases de la barre de capacités (cf. `editor::hud::ability_bar`), dans
+/// l'ordre de `app::ability_hud::AbilityHud::slots` : (touche principale,
+/// touche secondaire ou vide, nom court).
+pub fn ability_slot_names(locale: Locale) -> [(&'static str, &'static str, &'static str); 5] {
+    match locale {
+        Locale::Fr => [
+            ("1", "J", "Mêlée"),
+            ("2", "", "Bouclier"),
+            ("3", "K", "Sort"),
+            ("4", "", "Ruée"),
+            ("H", "", "Soin"),
+        ],
+        Locale::En => [
+            ("1", "J", "Melee"),
+            ("2", "", "Shield"),
+            ("3", "K", "Spell"),
+            ("4", "", "Dash"),
+            ("H", "", "Heal"),
+        ],
+    }
+}
+
 pub fn controls_hint(locale: Locale) -> &'static str {
     match locale {
         Locale::Fr => {
