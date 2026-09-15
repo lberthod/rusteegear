@@ -244,6 +244,12 @@ pub struct GamepadBindings {
     /// Masque/affiche les widgets HUD en Play (bascule sur front montant) —
     /// capture d'écran propre, spectacle, ou simple désencombrement.
     pub hud: String,
+    /// Bouclier (15 septembre 2026) — pendant manette de `kb.block`
+    /// (clavier Digit2) et de `Controller::block_button` (tactile).
+    pub block: String,
+    /// Ruée (15 septembre 2026) — pendant manette de `kb.dash`
+    /// (clavier Digit4) et de `Controller::dash_button` (tactile).
+    pub dash: String,
 }
 
 impl Default for GamepadBindings {
@@ -252,7 +258,10 @@ impl Default for GamepadBindings {
     /// Soin groupés), sans obliger à une manette précise (les noms `gilrs`
     /// sont génériques par position, pas par étiquette de fabricant). Changer
     /// d'arme sur RightTrigger (bumper droit RB) : les quatre boutons de façade
-    /// sont pris, et un bumper se presse sans lâcher le stick.
+    /// sont pris, et un bumper se presse sans lâcher le stick. Bouclier/Ruée
+    /// sur LeftTrigger/LeftTrigger2 (LB/LT) : miroir de Changer d'arme côté
+    /// gauche, symétrique aux touches clavier Digit2/Digit4 qui encadrent la
+    /// barre de capacités, et se pressent sans lâcher le stick gauche.
     fn default() -> Self {
         Self {
             jump: "South".into(),
@@ -262,6 +271,8 @@ impl Default for GamepadBindings {
             weapon: "RightTrigger".into(),
             menu: "Start".into(),
             hud: "Select".into(),
+            block: "LeftTrigger".into(),
+            dash: "LeftTrigger2".into(),
         }
     }
 }
@@ -664,6 +675,37 @@ mod tests {
         let settings: Settings = serde_json::from_str(old_json)
             .expect("un ancien settings.json sans `gamepad` doit rester lisible");
         assert_eq!(settings.gamepad, GamepadBindings::default());
+    }
+
+    /// 15 septembre 2026 : un `settings.json` antérieur avec un objet `gamepad`
+    /// déjà présent (7 actions) mais SANS les clés `block`/`dash` (ajoutées par
+    /// ce cycle-ci) doit charger avec les défauts LeftTrigger/LeftTrigger2 pour
+    /// ces deux champs, plutôt qu'une chaîne vide qui rendrait Bouclier/Ruée
+    /// silencieusement inertes à la manette — `#[serde(default)]` au niveau du
+    /// conteneur `GamepadBindings` comble les champs manquants à partir de
+    /// `GamepadBindings::default()`, pas d'un `String::default()` vide par champ.
+    #[test]
+    fn an_old_settings_file_with_gamepad_but_without_block_dash_loads_with_default_bindings() {
+        let old_json = r#"{
+            "deepseek_api_key": "",
+            "deepseek_model": "deepseek-chat",
+            "deepseek_temperature": 0.2,
+            "firebase_api_key": "",
+            "firebase_database_url": "",
+            "gamepad": {
+                "jump": "South",
+                "attack": "West",
+                "fire": "East",
+                "heal": "North",
+                "weapon": "RightTrigger",
+                "menu": "Start",
+                "hud": "Select"
+            }
+        }"#;
+        let settings: Settings = serde_json::from_str(old_json)
+            .expect("un ancien `gamepad` sans `block`/`dash` doit rester lisible");
+        assert_eq!(settings.gamepad.block, "LeftTrigger");
+        assert_eq!(settings.gamepad.dash, "LeftTrigger2");
     }
 
     /// Sprint F-13 : un `settings.json` antérieur (sans le champ `muted_players`)

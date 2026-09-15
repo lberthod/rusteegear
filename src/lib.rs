@@ -554,20 +554,22 @@ impl App {
         inp.attack = keys.contains(&kb.attack) || gp.attack;
         inp.fire = keys.contains(&kb.fire) || gp.fire;
         inp.heal = keys.contains(&kb.heal) || gp.heal;
-        // Bouclier/ruée (14 septembre 2026, `Scene::ability_bar`) : pas de
-        // pendant manette pour l'instant (`gp.block`/`gp.dash` n'existent pas),
-        // clavier seulement ici — cf. la limite documentée dans
-        // docs/RIVIERE_CASCADE.md. Le tactile (`Controller::block_button`/
-        // `dash_button`, ajouté le 15 septembre 2026) n'est PAS fusionné ici :
-        // cette fonction ne tourne pas à chaque frame (seulement sur événement
-        // clavier/manette), donc un joueur pur tactile ne la déclencherait
-        // quasiment jamais. Le OR touche+tactile est plutôt refait à chaque
-        // point de lecture, par-frame (`combat::update_dash`,
-        // `simulation::apply_ability_animations`,
+        // Bouclier/ruée (14 septembre 2026, `Scene::ability_bar` ; pendant
+        // manette ajouté le 15 septembre 2026, `GamepadBindings::block`/`dash`) :
+        // même motif que jump/attack/fire/heal ci-dessus (touche OU bouton
+        // manette). Le tactile (`Controller::block_button`/`dash_button`)
+        // n'est PAS fusionné ici : cette fonction ne tourne pas à chaque frame
+        // (seulement sur événement clavier/manette), donc un joueur pur
+        // tactile ne la déclencherait quasiment jamais. Le OR touche+tactile
+        // est plutôt refait à chaque point de lecture, par-frame
+        // (`combat::update_dash`, `simulation::apply_ability_animations`,
         // `network_client::network_input_msg`) — même motif que
-        // `attack_button`/`fire_button`/`heal_button`.
-        inp.block = keys.contains(&kb.block);
-        inp.dash = keys.contains(&kb.dash);
+        // `attack_button`/`fire_button`/`heal_button`. Ces points de lecture
+        // héritent automatiquement de la source manette ajoutée ici, sans OR
+        // supplémentaire à ajouter chez eux : ils lisent déjà
+        // `self.input_state.block`/`.dash` posé ci-dessous.
+        inp.block = keys.contains(&kb.block) || gp.block;
+        inp.dash = keys.contains(&kb.dash) || gp.dash;
         // Kit de capacités 1-2-3-4 (14 septembre 2026, `Scene::ability_bar` —
         // démo Rivière & cascade) : 1 = coup de mêlée, 3 = sort à distance,
         // en plus des touches historiques J/K (qui continuent de fonctionner,

@@ -108,6 +108,11 @@ pub struct GamepadInput {
     pub menu: bool,
     /// Masquer/afficher le HUD : état **tenu**, bascule sur front montant.
     pub hud: bool,
+    /// Bouclier : état **tenu** (cf. `Scene::ability_bar`, le bloc script Lua
+    /// `blocking` lit `input_state.block` directement).
+    pub block: bool,
+    /// Ruée : état **tenu**, front montant détecté en aval par `combat::update_dash`.
+    pub dash: bool,
 }
 
 /// Zone morte standard (15 %) appliquée aux deux sticks avant résolution.
@@ -139,6 +144,8 @@ pub fn resolve_gamepad_input(
             &bindings.weapon,
             &bindings.menu,
             &bindings.hud,
+            &bindings.block,
+            &bindings.dash,
         ]
         .iter()
         .any(|name| gamepad_button_from_name(name) == Some(btn))
@@ -167,6 +174,8 @@ pub fn resolve_gamepad_input(
         weapon: pressed(&bindings.weapon),
         menu: pressed(&bindings.menu),
         hud: pressed(&bindings.hud),
+        block: pressed(&bindings.block),
+        dash: pressed(&bindings.dash),
     }
 }
 
@@ -300,6 +309,42 @@ mod tests {
         assert_eq!(
             resolved.look_y, -0.7,
             "axe vertical du stick droit transmis"
+        );
+    }
+
+    /// 15 septembre 2026 : Bouclier/Ruée à la manette, pendant de
+    /// `resolve_gamepad_input_reads_right_stick_and_menu_hud_defaults` pour les
+    /// deux nouvelles actions — défauts LeftTrigger (LB, Bouclier) et
+    /// LeftTrigger2 (LT, Ruée).
+    #[test]
+    fn resolve_gamepad_input_reads_block_and_dash_defaults() {
+        let mut held = std::collections::HashSet::new();
+        held.insert(gilrs::Button::LeftTrigger);
+        held.insert(gilrs::Button::LeftTrigger2);
+        let bindings = GamepadBindings::default();
+        let resolved = resolve_gamepad_input(&held, (0.0, 0.0), (0.0, 0.0), &bindings);
+        assert!(resolved.block, "LeftTrigger (LB) est le défaut de Bouclier");
+        assert!(resolved.dash, "LeftTrigger2 (LT) est le défaut de Ruée");
+        assert!(!resolved.jump);
+        assert!(!resolved.attack);
+    }
+
+    /// Un bouton de croix remappé sur Bouclier/Ruée doit, comme les autres
+    /// actions, être exclu du déplacement de secours (même garde-fou que
+    /// `a_dpad_button_bound_to_an_action_no_longer_moves_the_player`).
+    #[test]
+    fn a_dpad_button_bound_to_block_no_longer_moves_the_player() {
+        let mut held = std::collections::HashSet::new();
+        held.insert(gilrs::Button::DPadUp);
+        let bindings = GamepadBindings {
+            block: "DPadUp".into(),
+            ..GamepadBindings::default()
+        };
+        let resolved = resolve_gamepad_input(&held, (0.0, 0.0), (0.0, 0.0), &bindings);
+        assert!(resolved.block, "DPadUp remappé sur Bouclier doit bloquer");
+        assert_eq!(
+            resolved.move_y, 0.0,
+            "un bouton de croix assigné à Bouclier est exclu du déplacement"
         );
     }
 }

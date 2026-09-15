@@ -165,6 +165,43 @@ Tests : `combat::tests::holding_the_touch_dash_button_moves_the_player_forward`,
 `simulation::tests::holding_the_touch_block_button_reduces_solo_bite_damage_from_creature_1`,
 `network_client::tests::network_input_msg_sends_touch_block_and_dash_like_local_prediction`.
 
+### Parité manette Bouclier/Ruée (15 septembre 2026)
+
+Suite directe du point précédent : le tactile avait Bouclier/Ruée, la manette
+non — `GamepadBindings`/`GamepadInput` n'avaient tout simplement pas ces deux
+champs (contrairement à `Controller::block_button`/`dash_button` côté
+tactile), donc aucun bouton manette ne pouvait déclencher ces actions, même
+en remapping. Corrigé, plus simplement que le correctif tactile ci-dessus :
+
+- `GamepadBindings::block`/`dash` (`app/settings.rs`, défauts `LeftTrigger`/
+  `LeftTrigger2` — LB/LT, miroir de Changer d'arme sur RightTrigger) et
+  `GamepadInput::block`/`dash` (`app/input.rs`, résolus par
+  `resolve_gamepad_input`, inclus dans le tableau `bound` pour qu'un bouton
+  de croix assigné à Bouclier/Ruée soit exclu du déplacement de secours,
+  comme les 7 actions existantes).
+- Un seul point d'intégration, contrairement au tactile : `lib.rs::
+  recompute_action_buttons` fixe `inp.block`/`inp.dash` sur
+  `keys.contains(&kb.block) || gp.block` (même motif que jump/attack/fire/
+  heal), **pas** un OR à chaque point de lecture. Cette fonction tourne à
+  chaque événement `gilrs` (bouton ou axe, cf. `poll_gamepad`), donc un OR
+  simple suffit ici — au contraire du tactile qui n'a pas d'équivalent
+  déclenché par un événement tactile et a dû répliquer le OR dans
+  `combat::update_dash`/`simulation::apply_ability_animations`/
+  `network_client::network_input_msg`.
+- Vérifié explicitement que le troisième chemin découvert pour le tactile (le
+  global Lua `blocking` lisant `self.input_state.block`) n'a besoin d'aucun
+  changement : il lit déjà `input_state.block` posé par
+  `recompute_action_buttons`, donc hérite automatiquement de la source
+  manette une fois celle-ci fusionnée là — pas de copie de `PlayerInput`
+  supplémentaire comme celle ajoutée pour le tactile.
+- Panneau ⚙ Paramètres › 🎮 Manette (`editor::windows::settings_player_sections`) :
+  deux lignes `gamepad_binding_row` de plus (Bouclier, Ruée), même fonction
+  générique réutilisée telle quelle.
+
+Tests : `app::input::tests::resolve_gamepad_input_reads_block_and_dash_defaults`,
+`app::input::tests::a_dpad_button_bound_to_block_no_longer_moves_the_player`,
+`app::settings::tests::an_old_settings_file_with_gamepad_but_without_block_dash_loads_with_default_bindings`.
+
 ## Ce qui a été ajouté au moteur
 
 ### Composant « Surface d'eau » (`SceneObject::water`)

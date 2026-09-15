@@ -1161,6 +1161,8 @@ fn settings_player_sections(
     changed |= gamepad_binding_row(ui, "Changer d'arme", &mut settings.gamepad.weapon);
     changed |= gamepad_binding_row(ui, "Fenêtre Multijoueur", &mut settings.gamepad.menu);
     changed |= gamepad_binding_row(ui, "Masquer le HUD", &mut settings.gamepad.hud);
+    changed |= gamepad_binding_row(ui, "Bouclier", &mut settings.gamepad.block);
+    changed |= gamepad_binding_row(ui, "Ruée", &mut settings.gamepad.dash);
     if changed {
         settings.save();
     }

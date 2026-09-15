@@ -439,10 +439,11 @@ Technique de test physique headless sans GPU ni réseau : `AppState::new()` +
 - Un seul salon Rivière public, pas d'équipes, pas de classement PvP.
 - Réflexion planaire unique (la rivière amont, 9 m plus haut, reflète le ciel) ;
   feuillage en triangles colorés, pas de textures alpha.
-- Manette : toujours pas de bouclier/ruée (`gp.block`/`gp.dash` n'existent pas
-  côté manette). Tactile (15 septembre 2026) : Saut/Mêlée/Bouclier/Ruée/Soin
-  ont chacun un bouton dédié dans la grille d'action bas-droite ; Sort/Feu et
-  changement d'arme restent clavier/manette seulement sur cette démo (aucun
+- Manette (15 septembre 2026) : Bouclier/Ruée remappables comme les 7 autres
+  actions (`GamepadBindings::block`/`dash`, défauts LeftTrigger/LeftTrigger2).
+  Tactile (15 septembre 2026) : Saut/Mêlée/Bouclier/Ruée/Soin ont chacun un
+  bouton dédié dans la grille d'action bas-droite ; Sort/Feu et changement
+  d'arme restent clavier/manette seulement sur cette démo (aucun
   `Controller::fire_button`/`weapon_button` configuré dans
   `scene::demos::riviere`).
 - `MAX_CONNECTIONS_PER_IP` compte un moment les connexions fermées.
