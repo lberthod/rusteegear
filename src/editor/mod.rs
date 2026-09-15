@@ -3582,6 +3582,111 @@ fn inspector_panel(
                             }
                         });
                         ui.separator();
+                        ui.collapsing("✨ Particules", |ui| {
+                            use crate::runtime::particles::ParticleEmitter;
+                            let mut particles_on = obj.particle_emitter.is_some();
+                            if ui
+                                .checkbox(&mut particles_on, "Émetteur de particules")
+                                .on_hover_text(
+                                    "Quads billboardés (toujours face caméra), alpha-blend, \
+                                     triés par distance — fumée, étincelles, poussière, traînées \
+                                     de vent. Scriptable via `particles(...)` (cf. LUA_API.md), qui \
+                                     prend le dessus tant qu'il est rappelé.",
+                                )
+                                .changed()
+                            {
+                                obj.particle_emitter =
+                                    particles_on.then(ParticleEmitter::default);
+                            }
+                            if let Some(em) = obj.particle_emitter.as_mut() {
+                                ui.checkbox(&mut em.enabled, "Actif")
+                                    .on_hover_text(
+                                        "Décoché : garde les réglages mais n'émet rien (comme une \
+                                         zone de vent sans `trigger`).",
+                                    );
+                                ui.horizontal(|ui| {
+                                    ui.label("Taux");
+                                    ui.add(egui::Slider::new(&mut em.rate, 0.0..=200.0))
+                                        .on_hover_text("Particules émises par seconde.");
+                                });
+                                ui.horizontal(|ui| {
+                                    ui.label("Durée de vie");
+                                    ui.add(
+                                        egui::Slider::new(&mut em.lifetime_min, 0.05..=10.0)
+                                            .text("min"),
+                                    );
+                                    ui.add(
+                                        egui::Slider::new(&mut em.lifetime_max, 0.05..=10.0)
+                                            .text("max"),
+                                    );
+                                });
+                                if em.lifetime_max < em.lifetime_min {
+                                    em.lifetime_max = em.lifetime_min;
+                                }
+                                ui.horizontal(|ui| {
+                                    ui.label("Vitesse");
+                                    ui.add(
+                                        egui::Slider::new(&mut em.speed_min, 0.0..=20.0)
+                                            .text("min"),
+                                    );
+                                    ui.add(
+                                        egui::Slider::new(&mut em.speed_max, 0.0..=20.0)
+                                            .text("max"),
+                                    );
+                                });
+                                if em.speed_max < em.speed_min {
+                                    em.speed_max = em.speed_min;
+                                }
+                                ui.horizontal(|ui| {
+                                    ui.label("Direction");
+                                    ui.add(egui::DragValue::new(&mut em.direction[0]).speed(0.02));
+                                    ui.add(egui::DragValue::new(&mut em.direction[1]).speed(0.02));
+                                    ui.add(egui::DragValue::new(&mut em.direction[2]).speed(0.02));
+                                })
+                                .response
+                                .on_hover_text("Direction de base (monde), pas besoin d'être normalisée.");
+                                ui.horizontal(|ui| {
+                                    ui.label("Étalement");
+                                    ui.add(egui::Slider::new(
+                                        &mut em.spread,
+                                        0.0..=std::f32::consts::PI,
+                                    ))
+                                    .on_hover_text(
+                                        "Demi-angle du cône d'émission autour de la direction (0 = \
+                                         toutes les particules partent exactement dans la direction).",
+                                    );
+                                });
+                                ui.horizontal(|ui| {
+                                    ui.label("Taille");
+                                    ui.add(
+                                        egui::Slider::new(&mut em.size_min, 0.01..=2.0).text("min"),
+                                    );
+                                    ui.add(
+                                        egui::Slider::new(&mut em.size_max, 0.01..=2.0).text("max"),
+                                    );
+                                });
+                                if em.size_max < em.size_min {
+                                    em.size_max = em.size_min;
+                                }
+                                ui.horizontal(|ui| {
+                                    ui.label("Couleur");
+                                    ui.color_edit_button_rgb(&mut em.color);
+                                    ui.label("Opacité de départ");
+                                    ui.add(egui::Slider::new(&mut em.start_alpha, 0.0..=1.0));
+                                });
+                                ui.horizontal(|ui| {
+                                    ui.label("Gravité");
+                                    ui.add(egui::Slider::new(&mut em.gravity, -10.0..=10.0))
+                                        .on_hover_text(
+                                            "Accélération le long de -Y : positif = tombe \
+                                             (étincelles), négatif = monte (fumée).",
+                                        );
+                                    ui.label("Freinage");
+                                    ui.add(egui::Slider::new(&mut em.drag, 0.0..=5.0));
+                                });
+                            }
+                        });
+                        ui.separator();
                         ui.collapsing("🧩 Composants mobiles (Android)", |ui| {
                             use crate::scene::Controller;
                             ui.weak("Touch Area : voir « Tactile » ci-dessus.");

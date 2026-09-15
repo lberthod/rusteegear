@@ -355,12 +355,21 @@ impl Renderer {
         let shake = app.camera_shake_offset();
         let eye = app.camera.eye() + shake;
         let view_proj = app.camera.view_proj_shaken(shake);
+        // Base droite/haut de la caméra (billboards de particules,
+        // `particles.wgsl`) : même idiome que `OrbitCamera::pan` — le décalage
+        // de tremblement s'annule dans la direction (`target`/`eye` décalés
+        // à l'identique par `view_proj_shaken`), pas besoin de le reprendre ici.
+        let forward = (app.camera.target - app.camera.eye()).normalize_or_zero();
+        let cam_right = forward.cross(glam::Vec3::Y).normalize_or_zero();
+        let cam_up = cam_right.cross(forward);
         let camera_uniform = CameraUniform {
             view_proj: view_proj.to_cols_array_2d(),
             eye: [eye.x, eye.y, eye.z, self.anim_time],
             // `view_proj` est toujours inversible (projection perspective + vue
             // rigide, jamais dégénérée) : pas de garde-fou nécessaire ici.
             inv_view_proj: view_proj.inverse().to_cols_array_2d(),
+            cam_right: [cam_right.x, cam_right.y, cam_right.z, 0.0],
+            cam_up: [cam_up.x, cam_up.y, cam_up.z, 0.0],
         };
         self.queue
             .write_buffer(&self.camera_buf, 0, bytemuck::bytes_of(&camera_uniform));
@@ -483,6 +492,10 @@ impl Renderer {
                 view_proj: vp_r.to_cols_array_2d(),
                 eye: [eye_r.x, eye_r.y, eye_r.z, self.anim_time],
                 inv_view_proj: vp_r.inverse().to_cols_array_2d(),
+                // Passe de réflexion planaire : ne dessine jamais de particules
+                // (texture lue par le shader d'eau, cf. plus haut), inutilisé.
+                cam_right: [0.0; 4],
+                cam_up: [0.0; 4],
             };
             self.queue
                 .write_buffer(&r.camera_buf, 0, bytemuck::bytes_of(&camera_r));
@@ -672,6 +685,40 @@ impl Renderer {
         if !models.is_empty() {
             self.queue
                 .write_buffer(&self.models_buf, 0, bytemuck::cast_slice(models));
+        }
+
+        // Particules (Sprint 132) : buffer/pipeline/shader dédiés (`particles.wgsl`,
+        // `particle_buf`), pas mêlées à `models`/`model_layout` — triées du plus
+        // loin au plus près comme les objets transparents ci-dessus (même `eye`
+        // « pure », sans tremblement de caméra), dessinées après eux
+        // (`draw_particles`, appelée en tout dernier de la passe principale).
+        let live: Vec<&crate::runtime::particles::Particle> = app.particles.iter().collect();
+        let mut particle_order: Vec<usize> = (0..live.len()).collect();
+        particle_order.sort_by(|&a, &b| {
+            let da = eye.distance_squared(live[a].pos);
+            let db = eye.distance_squared(live[b].pos);
+            db.total_cmp(&da)
+        });
+        self.particle_scratch.clear();
+        for &i in &particle_order {
+            let p = live[i];
+            let alpha = p.current_alpha();
+            if alpha <= 0.001 {
+                continue;
+            }
+            self.particle_scratch.push(ParticleInstance {
+                center: [p.pos.x, p.pos.y, p.pos.z],
+                size: p.size,
+                color: [p.color[0], p.color[1], p.color[2], alpha],
+            });
+        }
+        if !self.particle_scratch.is_empty() {
+            self.ensure_particle_capacity(self.particle_scratch.len());
+            self.queue.write_buffer(
+                &self.particle_buf,
+                0,
+                bytemuck::cast_slice(&self.particle_scratch),
+            );
         }
     }
 }

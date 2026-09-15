@@ -102,7 +102,7 @@ tapis d'usine), en plus du déplacement de la plateforme s'il y en a un.
 | `set_ambient(a)` | — | Lumière ambiante de la scène (`Scene::light.ambient`, 0..2). |
 | `set_fx(bloom, brouillard, r, g, b)` | — | Intensité du bloom, densité et couleur (linéaire) du brouillard (`Scene::sky`). |
 | `gravity(s)` | — | Échelle de gravité du joueur (0,15..3), plateformer 2D ; remise à 1 à chaque mort. |
-| `wind(x)` | — | Vent : vitesse X ajoutée au joueur **en l'air** (−12..12) ; remise à 0 à chaque mort. |
+| `wind(x)` | — | Vent : vitesse X ajoutée au joueur **en l'air** (−12..12) ; remise à 0 à chaque mort. Déclenche aussi automatiquement une traînée de particules autour du joueur (Sprint 132, couplage automatique décrit sous `particles(...)`), sans rien à changer côté script. |
 | `slow(f, s)` | — | Échelle de vitesse de course (0,2..2) pendant `s` secondes. |
 | `set_camera(h)` | — | Hauteur orthographique de la caméra de jeu (6..30), 0 = celle de la scène. |
 | `shake(f)` | — | Secousse de caméra (0..1), cumulée au maximum avec celle en cours. |
@@ -114,6 +114,7 @@ tapis d'usine), en plus du déplacement de la plateforme s'il y en a un.
 | `hud_text(id, texte)` | — | Remplace le contenu du widget HUD `Text` dont l'id est `id` (fenêtre 🧩 Widgets HUD) ; `""` l'efface. Survit aux réapparitions, effacé à l'entrée en Play. Vannes de mort, nom de niveau… |
 | `bone(nom, dx, dy, dz)` | — | Impose la **direction monde** de l'os `nom` (joint du rig glTF de l'objet, ex. `UpperArm.L`) vers son premier enfant — retargeting d'une pose captée (`pose`/`hand`) sur un mesh skinné, par-dessus le clip en cours ; seule l'orientation change, pas la longueur. À rappeler à chaque pas : sans appel, l'os revient à son animation. Sans effet sur un mesh non skinné. |
 | `teleport(x, y, z)` | — | Déplace le joueur local (corps physique et caméra de suivi compris) — typiquement depuis la zone `trigger` d'une porte de sortie, pour enchaîner les niveaux d'une même scène. |
+| `particles(rate, dx, dy, dz, spread, speed, size, r, g, b)` | — | Sprint 132 : active/met à jour l'émetteur de particules (`SceneObject::particle_emitter`) de l'objet qui appelle — billboards alpha-blend triés par distance. `rate` = particules/s (`0` désactive) ; `dx,dy,dz` = direction de base (pas besoin d'être normalisée) ; `spread` = demi-angle du cône (radians) ; `speed`/`size` = valeurs moyennes (le moteur tire ±30 % autour) ; `r,g,b` = couleur. Générique (pas spécifique au vent) : impact, fumée de torche, traînée de projectile… À rappeler chaque pas pour rester actif, comme `wind()`. N'écrase **jamais** un émetteur réglé dans l'inspecteur sur un objet par ailleurs scripté tant que ce script n'appelle pas `particles(...)` lui-même. |
 
 ## Événements émis par le moteur
 

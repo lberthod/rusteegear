@@ -2920,14 +2920,83 @@ connection may not be initiated from a page loaded over HTTPS »*.
   `shuffle_is_a_permutation_and_is_reproducible_with_the_same_seed`), clippy
   -D warnings et fmt propres, build wasm32 vert.
 
-#### Sprint 132 — Particules CPU + billboards + transparence triée ⬜
+#### Sprint 132 — Particules CPU + billboards + transparence triée ✅ FAIT
 **Objectif** : chantier 🟢 catalogué dès le premier audit (n° 61–62, 64, 74), jamais programmé.
-- [ ] Pool de quads billboardés sur l'instancing existant (impacts, fumée, pluie).
-- [ ] Émetteurs édités dans l'inspecteur (taux, durée de vie, vitesse, couleur).
-- [ ] Alpha blending + tri par distance pour les billboards transparents.
+- [x] Pool de quads billboardés — **pas** sur l'instancing existant (`models_buf`/
+      `ModelUniform`/`main.wgsl`) comme envisagé au catalogage : un pipeline/shader
+      dédié (`particles.wgsl`, `particle_buf`, `particle_layout`) s'est avéré plus
+      simple et plus sûr — les particules n'ont pas de normale géométrique stable
+      à éclairer en PBR, et coupler leur capacité de buffer à celle des objets de
+      scène (`sync_objects`) aurait ajouté une dépendance croisée non nécessaire.
+      Quad entièrement déplié dans le vertex shader depuis `center`/`size`
+      (aucun vertex/index buffer par particule) et la base droite/haut de la
+      caméra (`CameraUniform::cam_right`/`cam_up`, calculée une fois par frame,
+      même idiome que `OrbitCamera::pan`) — un seul `draw()` instancié par frame,
+      pas un par particule. Pool CPU à plat (`runtime::particles::ParticlePool`,
+      `Vec<Particle>`, `swap_remove`), capacité globale bornée à 4000
+      (`MAX_LIVE_PARTICLES`) : au-delà, un spawn est silencieusement ignoré,
+      jamais de falaise de temps de frame. RNG unifié (`runtime::rng::Rng`,
+      Sprint 131) pour toute la dispersion (vitesse/taille/durée de
+      vie/direction), déterministe à graine fixée.
+- [x] Émetteurs édités dans l'inspecteur (`SceneObject::particle_emitter: Option<
+      ParticleEmitter>`, section « ✨ Particules », même idiome checkbox →
+      `Option::default()` que « Surface d'eau »/« Audio ») : actif, taux, durée de
+      vie min/max, vitesse min/max, direction, étalement (cône), taille min/max,
+      couleur, opacité de départ, gravité, freinage. Champ purement additif
+      (`#[serde(default)]`, `None` par défaut) : aucune scène existante ne change
+      de comportement, pas de bump de version de schéma (même raisonnement que
+      `water`/`audio`, Sprint 131).
+- [x] Alpha blending + tri par distance : mêmes réglages de blend/profondeur que
+      `transparent_pipeline` (`ALPHA_BLENDING`, profondeur lue jamais écrite),
+      tri du plus loin au plus près sur la même `eye` « pure » que les objets
+      transparents, dessinées en tout dernier de la passe principale.
+- [x] Scriptable en Lua : `particles(rate, dx, dy, dz, spread, speed, size, r, g,
+      b)` (les deux backends, `scripting.rs`/`scripting_web.rs`, testé en
+      différentiel) — pose l'émetteur de l'objet appelant, sans écraser un
+      émetteur réglé dans l'inspecteur tant que le script ne l'appelle pas
+      lui-même (même idiome que `bone()`/`bone_dirs`, mais **pas** inconditionnel
+      comme lui : seulement si appelé ce tick). Couplage automatique choisi pour
+      le vent : `wind(x)` (mode plateformer 2D, scalaire global sans objet-zone)
+      déclenche désormais aussi une rafale de traînées autour du joueur
+      (`AppState::apply_script_outcomes`), **sans aucun changement de script** —
+      RageQuit (`scripts/wind_gust.lua`) et le jeu Méca héritent de l'effet
+      visuel gratuitement. Alternative écartée : une fonction Lua dédiée
+      aurait exigé d'éditer `wind_gust.lua` dans le dépôt RageQuit, hors du
+      dépôt moteur travaillé par cette session.
+- [x] Tests : `src/runtime/particles.rs` (9, taux de spawn exact, mort à
+      l'échéance, plafond global respecté par émetteur et par rafale,
+      reproductibilité à graine fixe, cône de dispersion, estompage par âge),
+      `src/app/scripting_web.rs` (1 test différentiel `particles(...)`
+      natif/web), `src/gfx/renderer/tests.rs` (1 test headless : une particule
+      vivante éclaire bien le pixel devant la caméra — preuve que le pipeline
+      dédié dessine réellement quelque chose).
 - [ ] Trails/ribbons et particules GPU compute : non — hors scope de ce sprint (et probablement définitivement, cf. OIT/GPU-driven déjà refusés).
-- **Fichiers** : nouveau `src/runtime/particles.rs`, `src/gfx/renderer.rs`, `src/scene/mod.rs`.
-- **Livrable** : le missile du mode combat laisse une traînée de particules à l'impact, éditable sans toucher au moteur.
+- [ ] Traînée de particules sur le missile du mode combat à l'impact : **non
+      câblée** — le livrable initial visait ce cas précis, mais le besoin réel
+      qui a motivé ce sprint (rendre visible la rafale de vent de RageQuit,
+      invisible jusqu'ici) est couvert par le couplage automatique `wind()`
+      ci-dessus. Rien n'empêche un futur script de combat d'appeler
+      `particles(...)` sur le missile à l'impact — pas fait ici faute de script
+      de combat identifié à modifier dans ce dépôt.
+- **Fichiers** : nouveau `src/runtime/particles.rs`, nouveau `src/gfx/shaders/particles.wgsl`,
+  `src/gfx/pipelines.rs`, `src/gfx/renderer/{types,sync,frame,headless,resources,tests}.rs`,
+  `src/scene/mod.rs`, `src/app/{scripting.rs,scripting_web.rs,script_ctx.rs,simulation.rs,mod.rs}`,
+  `src/editor/mod.rs`, `src/runtime/mod.rs`, `docs/LUA_API.md`.
+- **Livrable** : un émetteur posé dans l'inspecteur sur n'importe quel objet
+  produit des billboards animés, alpha-blend, triés par distance ; `wind(x)`
+  (RageQuit, `wind_gust.lua`) fait désormais souffler des traînées visibles
+  autour du joueur en plus de le pousser — la rafale n'est plus seulement un
+  bandeau d'avertissement, sans avoir touché un seul fichier `.lua`.
+- **Qualité** : 977 tests lib verts (11 nouveaux touchant les particules : 9 dans
+  `runtime::particles`, 1 différentiel `particles(...)` natif/web, 1 rendu headless),
+  `cargo clippy --all-targets -- -D warnings` et `cargo build --profile
+  dev-fast --bin motor3derust --bin pilot` propres, `cargo build --target
+  wasm32-unknown-unknown --lib --release` vert. `cargo fmt --check` : **déjà en
+  échec sur `main` avant ce sprint** (~1300 lignes de diff sur des fichiers non
+  touchés ici, vérifié par un `git stash` sur la branche propre — dérive de
+  version de `rustfmt` dans cet environnement, pas une régression de ce sprint) ;
+  tous les fichiers ajoutés/modifiés par ce sprint sont formatés proprement
+  (`rustfmt --check` ciblé, nouveau fichier `particles.rs` compris).
 
 #### Sprint 133 — Ombres : cascades + point/spot ⬜
 **Objectif** : promotion raisonnée de 🟠 vers 🟢 (n° 30–31) — la cible HDR et le SSAO (Sprints 90, 123) rendent le rendu assez mûr pour approfondir les ombres plutôt que d'ouvrir un nouveau continent.

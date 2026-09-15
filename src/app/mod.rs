@@ -1488,6 +1488,13 @@ pub struct AppState {
     play_snapshot: Vec<SceneObject>,
     physics: Option<crate::runtime::physics::Physics>,
     audio: crate::runtime::audio::Audio,
+    /// Pool de particules CPU (Sprint 132) : émetteurs de `scene.objects`
+    /// (`SceneObject::particle_emitter`) et rafales ponctuelles (couplage
+    /// `wind()`, cf. `apply_script_outcomes`), avancé chaque pas fixe
+    /// (`sim_step_inner`). Lu par le renderer (`gfx::renderer::sync`) pour
+    /// bâtir les instances de billboards de la frame — champ public comme
+    /// `scene`, pas d'accesseur dédié.
+    pub particles: crate::runtime::particles::ParticlePool,
 
     // --- chargements asynchrones (import glTF, scène) ---
     async_load: AsyncLoadState,
@@ -1882,6 +1889,7 @@ impl AppState {
             play_snapshot: Vec::new(),
             physics: None,
             audio,
+            particles: crate::runtime::particles::ParticlePool::default(),
             async_load: AsyncLoadState {
                 import_tx: tx,
                 import_rx: rx,
