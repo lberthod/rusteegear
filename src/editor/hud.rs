@@ -325,34 +325,57 @@ pub(super) fn kills_hud(
 ) {
     use egui::{Align2, Color32, FontId};
     let scale = clamp_hud_scale(scale);
-    // Boîte alignée à droite avec une marge fixe (8 px) plutôt que centrée sur un
-    // point à distance fixe du bord : centrer débordait de ~55 px au-delà de `area`
-    // (donc par-dessus l'Inspecteur en mode Édition), la largeur de la boîte n'étant
-    // pas prise en compte dans le calcul du centre.
-    let box_size = egui::vec2(150.0, 30.0) * scale;
-    let base = egui::pos2(area.right() - 8.0 - box_size.x / 2.0, area.top() + 112.0);
-    let pos = hud_anchor(ctx, "hud_kills", base, offset, box_size, draggable);
-    let painter = ctx.layer_painter(egui::LayerId::new(
-        egui::Order::Foreground,
-        egui::Id::new("hud_kills"),
-    ));
-    let bg = egui::Rect::from_center_size(pos, box_size);
-    painter.rect_filled(bg, 6.0, Color32::from_black_alpha(110));
-    // Détail frags/assists (Phase L Sprint 3, `sprint2audijeu0718.md`) : les
-    // deux valeurs séparées plutôt qu'un seul total — un assist n'est pas un
-    // frag (cf. `app::multiplayer::credit_assists_on_kill`), la contribution
-    // en solo (jamais d'assist) reste lisible telle quelle (« 0 🤝 »).
     // Niveau (14 septembre 2026, boucle de progression PvE/PvP) : calcul
     // purement client, un palier tous les `KILLS_PER_LEVEL` frags — pas un
     // système de paliers serveur séparé, juste un repère de progression
     // affiché au même endroit que les frags qui le déterminent.
     const KILLS_PER_LEVEL: u32 = 5;
     let level = 1 + kills / KILLS_PER_LEVEL;
+    let text = crate::app::locale::level_kills_and_assists(locale, level, kills, assists);
+    let font = FontId::proportional(18.0 * scale);
+    let painter = ctx.layer_painter(egui::LayerId::new(
+        egui::Order::Foreground,
+        egui::Id::new("hud_kills"),
+    ));
+    // Boîte de fond mesurée sur le texte réel (roadmap post-audit UX
+    // 2026-09-15) : une largeur fixe (150 px) débordait systématiquement hors
+    // du canvas à droite dès que `level_kills_and_assists` (locale.rs)
+    // dépassait cette largeur — reproduit identique à 800 et 1280 px, donc
+    // indépendant de l'étroitesse de la fenêtre. Alignée à droite avec une
+    // marge fixe (8 px) plutôt que centrée sur un point à distance fixe du
+    // bord : centrer sur une largeur supposée débordait par-dessus
+    // l'Inspecteur en mode Édition, la largeur réelle n'étant pas prise en
+    // compte dans le calcul du centre.
+    let galley = painter.layout_no_wrap(text.clone(), font.clone(), Color32::from_rgb(255, 170, 130));
+    let padding = egui::vec2(24.0, 12.0) * scale;
+    // Bordé aux deux bords de `area` (roadmap post-audit UX 2026-09-15) :
+    // `box_size.x` mesuré sur le texte réel évite déjà le débordement à
+    // droite (cf. commentaire plus haut), mais rien ne l'empêchait de sortir
+    // à GAUCHE sur un écran étroit une fois le texte assez long (ex. niveau à
+    // deux chiffres + frags/aides à trois chiffres). Rétrécir la boîte plutôt
+    // que de la repositionner : le texte, centré indépendamment de la boîte
+    // ci-dessous, peut légèrement déborder de son fond mais la boîte
+    // elle-même — et donc le point d'ancrage de repositionnement — reste
+    // toujours dans `area`.
+    let max_box_w = (area.width() - 16.0).max(1.0);
+    let box_size = egui::vec2((galley.size().x + padding.x).min(max_box_w), galley.size().y + padding.y);
+    let base = egui::pos2(area.right() - 8.0 - box_size.x / 2.0, area.top() + 112.0);
+    let pos = hud_anchor(ctx, "hud_kills", base, offset, box_size, draggable);
+    let pos = egui::pos2(
+        pos.x.clamp(area.left() + box_size.x / 2.0, area.right() - box_size.x / 2.0),
+        pos.y,
+    );
+    let bg = egui::Rect::from_center_size(pos, box_size);
+    painter.rect_filled(bg, 6.0, Color32::from_black_alpha(110));
+    // Détail frags/assists (Phase L Sprint 3, `sprint2audijeu0718.md`) : les
+    // deux valeurs séparées plutôt qu'un seul total — un assist n'est pas un
+    // frag (cf. `app::multiplayer::credit_assists_on_kill`), la contribution
+    // en solo (jamais d'assist) reste lisible telle quelle (« 0 🤝 »).
     painter.text(
         pos,
         Align2::CENTER_CENTER,
-        crate::app::locale::level_kills_and_assists(locale, level, kills, assists),
-        FontId::proportional(18.0 * scale),
+        text,
+        font,
         Color32::from_rgb(255, 170, 130),
     );
 }
@@ -925,7 +948,7 @@ pub(super) fn world_health_labels(
         if ndc.x.abs() > 1.05 || ndc.y.abs() > 1.05 {
             continue;
         }
-        let p = egui::pos2(
+        let mut p = egui::pos2(
             area.left() + (ndc.x + 1.0) * 0.5 * area.width(),
             area.top() + (1.0 - ndc.y) * 0.5 * area.height(),
         );
@@ -933,6 +956,37 @@ pub(super) fn world_health_labels(
             LabelKind::Player => (56.0 * scale, 7.0 * scale, health_color(l.health, colorblind)),
             LabelKind::Monster => (40.0 * scale, 6.0 * scale, Color32::from_rgb(220, 70, 60)),
         };
+        // Glisse `p.x` pour rester dans `area` plutôt que de laisser le nom/la
+        // barre/le texte de vie déborder hors écran une fois l'ancre proche du
+        // bord (roadmap post-audit UX 2026-09-15 — observé aussi bien à
+        // gauche, « ...e la rivière » tronqué, qu'à droite en mobile,
+        // « Grenouille des b... » coupé). Le texte HP prolonge le groupe à
+        // droite du bord de la barre, le nom peut dépasser la barre des deux
+        // côtés s'il est plus large qu'elle : les deux sont mesurés pour ne
+        // jamais couper ni l'un ni l'autre.
+        let hp_font = FontId::proportional(10.0 * scale);
+        let hp_galley = painter.layout_no_wrap(l.hp_text.clone(), hp_font.clone(), Color32::WHITE);
+        let name_half = if l.name.is_empty() {
+            0.0
+        } else {
+            // Même taille que celle utilisée pour peindre le nom plus bas
+            // (12.0 * scale) : mesurer avec une taille différente (11.0)
+            // sous-estimait la largeur réelle d'environ 9 %, donc un nom
+            // proche du bord pouvait encore être légèrement rogné malgré le
+            // clamp ci-dessous.
+            let name_galley = painter.layout_no_wrap(
+                l.name.clone(),
+                FontId::proportional(12.0 * scale),
+                Color32::WHITE,
+            );
+            name_galley.size().x / 2.0
+        };
+        let margin = 4.0 * scale;
+        let left_extent = (w / 2.0).max(name_half);
+        let right_extent = (w / 2.0).max(name_half) + hp_galley.size().x + 4.0 * scale;
+        let min_x = area.left() + margin + left_extent;
+        let max_x = (area.right() - margin - right_extent).max(min_x);
+        p.x = p.x.clamp(min_x, max_x);
         let bar = egui::Rect::from_center_size(p, egui::vec2(w, h));
         painter.rect_filled(bar.expand(1.5 * scale), 3.0 * scale, Color32::from_black_alpha(150));
         let filled = egui::Rect::from_min_size(bar.min, egui::vec2(w * l.health.clamp(0.0, 1.0), h));
@@ -980,12 +1034,28 @@ pub(super) fn world_health_labels(
 /// phase (« Veille »/« Courroux »/« Dernier sursaut ») est calculé côté
 /// client à partir de ce même ratio déjà synchronisé (`app::boss::
 /// phase_for_ratio`), pas un nouveau champ réseau non plus.
+///
+/// `buttons_left` (roadmap post-audit UX 2026-09-15, collision mobile) : bord
+/// gauche mesuré du groupe ⏸/🔇/Carte/? (`TopButtons::rect`, même valeur que
+/// reçoit déjà `net_status_pill`). Sur un écran étroit ce groupe et la barre,
+/// toutes deux ancrées sur des largeurs fixes codées en dur, se chevauchaient
+/// entièrement (observé à 375 px : boutons peints par-dessus la barre de vie
+/// du boss). Quand il reste assez de place à gauche des boutons (desktop, et
+/// la plupart des mobiles), la barre s'y rétrécit et s'y recentre, comme
+/// avant. En dessous d'un certain seuil (essayé et rejeté à 375 px : la barre
+/// finissait écrasée dans un espace si étroit — moins large que le nom du
+/// boss — qu'elle chevauchait alors `net_status_pill` à gauche ET débordait
+/// le bord de l'écran avec son propre nom, un problème pire que celui
+/// corrigé), la barre entière (nom, jauge, libellé de phase) passe sous la
+/// rangée de boutons plutôt que de s'y écraser : sur presque toute la largeur
+/// de l'écran à cet endroit, elle reste lisible.
 pub(super) fn boss_health_bar(
     ctx: &egui::Context,
     area: egui::Rect,
     scene: &Scene,
     scale: f32,
     colorblind: bool,
+    buttons_left: f32,
 ) {
     use egui::{Align2, Color32, FontId, Stroke};
     let scale = clamp_hud_scale(scale);
@@ -1010,14 +1080,45 @@ pub(super) fn boss_health_bar(
         egui::Order::Foreground,
         egui::Id::new("hud_boss"),
     ));
-    let w = 340.0 * scale;
     let h = 15.0 * scale;
-    let bar = egui::Rect::from_center_size(
-        egui::pos2(area.center().x, area.top() + 30.0 * scale),
-        egui::vec2(w, h),
-    );
+    let nominal_w = 340.0 * scale;
+    // En dessous de cette largeur disponible, le nom du boss (bien plus large
+    // que la jauge elle-même) déborderait de toute façon hors de cet espace
+    // réduit : mieux vaut passer sous les boutons plutôt que de continuer à
+    // rétrécir.
+    let min_w_beside_buttons = 170.0 * scale;
+    let margin = 8.0;
+    let left_limit = area.left() + margin;
+    let beside_buttons_right_limit = (buttons_left.min(area.right()) - margin).max(left_limit);
+    let (w, center_x, bar_top) =
+        if beside_buttons_right_limit - left_limit >= min_w_beside_buttons {
+            let w = nominal_w.min(beside_buttons_right_limit - left_limit);
+            let center_x = area
+                .center()
+                .x
+                .clamp(left_limit + w / 2.0, beside_buttons_right_limit - w / 2.0);
+            (w, center_x, area.top() + 30.0 * scale)
+        } else {
+            // Passe sous la rangée de boutons/pastille réseau (hauteur
+            // `TOUCH_TARGET`, même ancrage vertical qu'eux) : toute la largeur
+            // de `area` redevient disponible, comme sur un écran assez large.
+            let right_limit = (area.right() - margin).max(left_limit);
+            let w = nominal_w.min(right_limit - left_limit);
+            let center_x = area
+                .center()
+                .x
+                .clamp(left_limit + w / 2.0, right_limit - w / 2.0);
+            // Décalage resserré (22, pas 30) : juste assez pour ne pas coller à
+            // la rangée de boutons, en laissant le plus de marge possible avant
+            // `kills_hud` juste en dessous (`area.top() + 112`, indépendant de
+            // ce widget) — les deux n'ont qu'une quarantaine de points pour
+            // tenir nom + jauge + libellé de phase sur un écran très étroit.
+            let below_buttons = area.top() + TOUCH_TARGET + 8.0 + 22.0 * scale;
+            (w, center_x, below_buttons)
+        };
+    let bar = egui::Rect::from_center_size(egui::pos2(center_x, bar_top), egui::vec2(w, h));
     painter.text(
-        egui::pos2(bar.center().x, bar.top() - 11.0 * scale),
+        egui::pos2(bar.center().x, bar.top() - 9.0 * scale),
         Align2::CENTER_CENTER,
         &boss.name,
         FontId::proportional(15.0 * scale),
@@ -1034,7 +1135,7 @@ pub(super) fn boss_health_bar(
         egui::StrokeKind::Outside,
     );
     painter.text(
-        egui::pos2(bar.center().x, bar.bottom() + 9.0 * scale),
+        egui::pos2(bar.center().x, bar.bottom() + 7.0 * scale),
         Align2::CENTER_CENTER,
         phase_label,
         FontId::proportional(11.0 * scale),

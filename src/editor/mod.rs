@@ -1504,6 +1504,50 @@ impl Editor {
             if !arcade && let Some(h) = hud_health.or_else(|| mobile.health_bar.then_some(1.0)) {
                 health_bar(ctx, area, h, hud_scale, settings.colorblind);
             }
+            // ⏸ / 🔇 / Carte / ? (roadmap 2.5, 5.5 ; v2 5.3/5.5) — calculés ici,
+            // avant `boss_health_bar`, pour que ce dernier connaisse déjà
+            // `top.rect.left()` et évite le groupe de boutons (roadmap post-audit
+            // UX 2026-09-15, collision barre de vie du boss / boutons sur mobile
+            // étroit) — même bord mesuré que `net_status_pill` reçoit plus bas.
+            // L'empilement visuel (quel calque est au-dessus) reste piloté par
+            // `egui::Order` (Tooltip au-dessus de Foreground), pas par cet ordre
+            // d'appel : avancer ce bloc ne change donc pas le rendu des boutons
+            // eux-mêmes, seulement la disponibilité de leur rect mesuré.
+            // Page hôte qui dessine le HUD elle-même (`Scene::hud_widgets_hidden`,
+            // PhysioTech.ch) : elle a ses propres boutons Pause / Arrêter.
+            let top = if scene.hud_widgets_hidden {
+                TopButtons {
+                    pause: false,
+                    map: false,
+                    help: false,
+                    mute: false,
+                    pads: false,
+                    // Aucun bouton réellement dessiné dans ce mode (page hôte
+                    // qui gère son propre Pause/Arrêter) : `rect.left()` doit
+                    // valoir « aucune réservation », même convention que
+                    // `play_rect.right()` passé à `boss_health_bar` depuis
+                    // l'aperçu HUD de l'éditeur ci-dessous (`buttons_left`
+                    // borné par `.min(area.right())` dans `boss_health_bar` /
+                    // `net_status_pill`) — PAS `Rect::ZERO`, dont `.left()`
+                    // vaut 0.0 et se lit à tort comme « boutons collés au
+                    // bord gauche », forçant `boss_health_bar` à toujours
+                    // passer sous un groupe de boutons qui n'existe pas.
+                    rect: egui::Rect::from_min_size(
+                        egui::pos2(area.right(), area.top()),
+                        egui::Vec2::ZERO,
+                    ),
+                }
+            } else {
+                mobile_top_buttons(
+                    ctx,
+                    area,
+                    paused,
+                    settings.muted,
+                    map_open,
+                    locale,
+                    scene.platformer.is_some(),
+                )
+            };
             // Décalages persistés dans la scène (Scene::hud_layout) : pas de
             // glisser possible ici (`draggable: false`), l'overlay mobile autonome n'a
             // pas de panneau 👁 Aperçu HUD — copies locales, `scene` n'est pas `&mut`.
@@ -1511,7 +1555,7 @@ impl Editor {
             if !arcade {
                 world_health_labels(ctx, area, view_proj, world_labels, hud_scale, settings.colorblind);
                 wave_hud(ctx, area, scene, wave, locale, hud_scale);
-                boss_health_bar(ctx, area, scene, hud_scale, settings.colorblind);
+                boss_health_bar(ctx, area, scene, hud_scale, settings.colorblind, top.rect.left());
                 // Kit de capacités : la barre 1-2-3-4 remplace l'arme équipée
                 // (cf. `hud::ability_bar`).
                 if let Some(hud) = ability.filter(|_| scene.ability_bar) {
@@ -1688,31 +1732,11 @@ impl Editor {
                 input_state.touch_zones = None;
                 *jump_touch_was_held = false;
             }
-            // ⏸ / 🔇 / Carte / ? (roadmap 2.5, 5.5 ; v2 5.3/5.5) — sans clavier,
-            // ni Échap, ni M, ni F1 ; utiles à la souris aussi, donc pour toute
-            // scène (roadmap v2 1.1). Au-dessus de la carte quand elle est ouverte.
-            // Page hôte qui dessine le HUD elle-même (`Scene::hud_widgets_hidden`,
-            // PhysioTech.ch) : elle a ses propres boutons Pause / Arrêter.
-            let top = if scene.hud_widgets_hidden {
-                TopButtons {
-                    pause: false,
-                    map: false,
-                    help: false,
-                    mute: false,
-                    pads: false,
-                    rect: egui::Rect::ZERO,
-                }
-            } else {
-                mobile_top_buttons(
-                    ctx,
-                    area,
-                    paused,
-                    settings.muted,
-                    map_open,
-                    locale,
-                    scene.platformer.is_some(),
-                )
-            };
+            // ⏸ / 🔇 / Carte / ? : `top` a déjà été calculé plus haut (avant
+            // `boss_health_bar`, qui a besoin de `top.rect.left()`) — sans
+            // clavier, ni Échap, ni M, ni F1 ; utiles à la souris aussi, donc
+            // pour toute scène (roadmap v2 1.1). Au-dessus de la carte quand
+            // elle est ouverte.
             if top.pause {
                 actions.toggle_pause = true;
             }
@@ -2848,7 +2872,17 @@ fn play_area_and_in_game_hud(
         // entier se masque d'un Select à la manette (`Panels::hud_hidden`) —
         // la vignette de dégâts et la barre de vie, au-dessus, jamais.
         wave_hud(root.ctx(), play_rect, scene, wave, locale, hud_scale);
-        boss_health_bar(root.ctx(), play_rect, scene, hud_scale, settings.colorblind);
+        // Aperçu mobile de l'éditeur : pas de groupe ⏸/🔇/Carte/? dessiné ici
+        // (propre à la boucle de jeu réelle, cf. l'autre appel ci-dessus) —
+        // `play_rect.right()` en `buttons_left` équivaut à « aucune réservation ».
+        boss_health_bar(
+            root.ctx(),
+            play_rect,
+            scene,
+            hud_scale,
+            settings.colorblind,
+            play_rect.right(),
+        );
         // Kit de capacités : la barre 1-2-3-4 remplace l'arme équipée
         // (cf. `hud::ability_bar`).
         if let Some(hud) = ability.filter(|_| scene.ability_bar) {

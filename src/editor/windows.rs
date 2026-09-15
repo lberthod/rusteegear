@@ -2914,18 +2914,26 @@ pub(super) fn player_welcome_window(
     let mut choice = None;
     let mut frame = egui::Frame::window(&ctx.global_style());
     frame.fill = frame.fill.to_opaque();
+    // Largeur bornée à la zone de jeu (même patron que `player_corner_minimap`,
+    // ~l.591) : une largeur fixe de 380 px débordait entièrement hors d'un
+    // viewport mobile de 375 px CSS (roadmap post-audit UX 2026-09-15) —
+    // premier écran vu par tout joueur mobile, texte tronqué net au bord
+    // (sous-titre, compteur de pseudo, champ Salon, hint de contrôles).
+    let win_w = (area.width() * 0.92).min(380.0);
     egui::Window::new("RusteeGear")
         .id(egui::Id::new("player_welcome"))
         .collapsible(false)
         .resizable(false)
         .title_bar(true)
         .frame(frame)
-        .fixed_pos(egui::pos2(area.center().x - 190.0, area.center().y - 190.0))
-        .default_width(380.0)
+        .fixed_pos(egui::pos2(area.center().x - win_w / 2.0, area.center().y - 190.0))
+        .default_width(win_w)
+        .max_width(win_w)
         .show(ctx, |ui| {
-            ui.horizontal(|ui| {
-                ui.label(l::welcome_subtitle(locale));
-            });
+            // Hors `horizontal()` (qui offre une largeur non bornée au label et
+            // l'empêchait de retourner à la ligne) : replié dans `win_w` au lieu
+            // de déborder hors du cadre sur un écran étroit.
+            ui.label(l::welcome_subtitle(locale));
             ui.horizontal(|ui| {
                 if ui
                     .button("⚙")
