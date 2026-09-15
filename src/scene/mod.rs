@@ -647,12 +647,19 @@ pub struct Weapon {
     pub mode: AttackMode,
 }
 
-/// Les 5 profils d'arme connus, du plus risqué (corps-à-corps rapide) au plus prudent
+/// Les 6 profils d'arme connus, du plus risqué (corps-à-corps rapide) au plus prudent
 /// (portée longue, lent à préparer). Table publique : partagée entre la génération de
 /// la démo (tirage de l'arme de départ + placement des butins) et la résolution du
 /// ramassage en jeu (cf. `Scene::weapon_pickup_at`), pour n'avoir qu'une seule source
-/// de vérité sur les profils.
-pub const WEAPONS: [Weapon; 5] = [
+/// de vérité sur les profils. Le 6ᵉ profil (« Sceptre du Roi Champignon »,
+/// `WEAPONS[5]`) est le butin garanti du second boss de la démo Rivière
+/// (`scene::demos::riviere`, `app::boss2`) — posé ici plutôt qu'en dur dans cette
+/// seule démo car `Scene::weapon_pickup_at`/`WeaponPickup::weapon` indexent
+/// génériquement cette table entière, quelle que soit la démo. `Scene::
+/// roguelike_demo` exclut délibérément cet indice de son propre tirage (cf. sa
+/// doc) : le Sceptre reste un butin exclusif au boss de Rivière, pas un profil
+/// ordinaire du donjon.
+pub const WEAPONS: [Weapon; 6] = [
     Weapon {
         label: "Dague",
         range: 0.9,
@@ -686,6 +693,13 @@ pub const WEAPONS: [Weapon; 5] = [
         range: 4.0,
         cooldown: 1.0,
         windup: 0.45,
+        mode: AttackMode::Single,
+    },
+    Weapon {
+        label: "Sceptre du Roi Champignon",
+        range: 1.8,
+        cooldown: 0.7,
+        windup: 0.35,
         mode: AttackMode::Single,
     },
 ];

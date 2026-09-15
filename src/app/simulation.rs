@@ -953,6 +953,7 @@ impl AppState {
         self.clear_fireballs();
         self.clear_creature_shots();
         self.clear_boss_shots();
+        self.clear_boss2_hazards();
         self.physics = None;
         self.paused = false;
         self.hud_health = None;
@@ -1707,6 +1708,9 @@ impl AppState {
         // ordre que l'appel ci-dessus (gèle sa position avant la physique).
         // No-op (retour anticipé) tant que la scène courante n'a pas de boss.
         self.update_boss(dt, time);
+        // Second boss de fin de parcours (cf. `app::boss2`) : même ordre et
+        // même no-op tant que la scène courante n'a pas ce boss.
+        self.update_boss2(dt, time);
 
         // 2. physique (écrase les poses des corps dynamiques)
         // Cibles de poursuite pour l'IA (`AiChaser`, cf. plus bas) : en solo, le
@@ -1766,6 +1770,7 @@ impl AppState {
                     o.ai_chaser.is_some()
                         && (self.creature_is_aim_frozen(*idx)
                             || self.boss_is_frozen(*idx)
+                            || self.boss2_is_frozen(*idx)
                             || (online
                                 && o.controller.is_none()
                                 && o.combat.as_ref().is_some_and(|c| c.attackable)
@@ -1883,6 +1888,7 @@ impl AppState {
             // atteinte (bousculades comprises), cf. `refresh_frozen_anchors`.
             self.refresh_frozen_anchors();
             self.refresh_boss_frozen_anchor();
+            self.refresh_boss2_frozen_anchor();
             // Cf. la note plus haut : appliqué après `step` pour ne jamais passer par
             // le corps rigide, qui écraserait sinon (et déstabiliserait) cette valeur.
             for (idx, yaw) in player_facing {

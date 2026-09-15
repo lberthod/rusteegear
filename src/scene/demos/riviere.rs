@@ -1260,6 +1260,162 @@ impl Scene {
             }
         }
 
+        // --- Second boss (15 septembre 2026, évènement de fin de parcours) ---
+        // « Le Roi-Champignon du Sous-bois » : un patriarche fongique
+        // retranché dans le sous-bois le plus profond et le plus reculé de
+        // la vallée, en aval — à l'opposé géographique ET thématique de
+        // « L'Aîné de la Cascade » ci-dessus (plateau rocheux amont, rive
+        // est) : ici rive OUEST, au-delà du dernier poste du roster
+        // ordinaire (Blob des sous-bois rose, z=56), jusqu'à la limite du
+        // monde (z=75). Prolonge le thème champignons/sous-bois déjà amorcé
+        // par le Champignon mordeur et `riviere/nature_mushrooms.glb` —
+        // `monster_mushroom_king.glb`, inemployé ailleurs ici. Nom, tag et
+        // groupe dédiés (PAS "monstre"/"Monstre", PAS "boss"/"Boss" non plus
+        // : un second boss distinct, pas un doublon du premier) — ne doit se
+        // compter ni parmi les 9 emplacements du roster ordinaire, ni comme
+        // le premier boss (cf. `riviere_demo_boss_is_not_counted_among_the_
+        // ordinary_monster_roster` et son pendant `riviere_demo_second_boss_
+        // is_not_counted_among_the_ordinary_monster_roster_or_the_first_boss`
+        // ci-dessous). Phases (vitesse/zone de spores/invocation de couvée
+        // selon le ratio de PV) dans `app::boss2`, mécaniquement distinct du
+        // premier boss (cf. sa doc) : aucun jet télégraphié, une zone de
+        // dégâts au sol ancrée sur la position du joueur plutôt qu'un
+        // projectile visé.
+        //
+        // Position hors du chenal comme le reste du roster (`channel_dist >=
+        // 1.3`, même contrainte que le premier boss) : rive ouest à
+        // channel_dist ≈ 5.0 (calculé, cf. `riviere_demo_second_boss_is_
+        // placed_on_dry_ground_away_from_the_channel`), largement hors de
+        // l'eau. Distance vérifiée à la construction (calcul manuel, 15
+        // septembre 2026) aux deux voisins les plus proches du roster
+        // ordinaire : ≈ 42 m du Champignon mordeur (x≈10.6, z=36.5) et
+        // ≈ 24,9 m du Blob des sous-bois rose (x≈5.8, z=56, `Archetype::
+        // Meute`) — au-dessus des 18 m (9 m Colosse + 9 m Meute) requis pour
+        // ne jamais recouvrir leurs portées d'éveil (cf. `riviere_demo_
+        // second_boss_stays_out_of_every_monsters_combined_aggro_range`),
+        // avec une marge de ≈ 6,9 m au-delà du minimum — même ordre de
+        // grandeur que la marge retenue pour le Golem des berges plus haut.
+        const BOSS2_NAME: &str = "Le Roi-Champignon du Sous-bois";
+        const BOSS2_LOOT_NAME: &str = "Sceptre du Roi Champignon";
+        let boss2_x = river_center(70.0) - 18.0;
+        let boss2_z = 70.0;
+        let boss2_y = terrain_height(&terrain, boss2_x, boss2_z);
+        if let Some(idx) = loader.load("monster_mushroom_king.glb") {
+            let mut boss2 = demo_obj(
+                BOSS2_NAME,
+                MeshKind::Imported(idx),
+                Vec3::new(boss2_x, boss2_y, boss2_z),
+            );
+            boss2.transform = boss2.transform.with_scale(Vec3::splat(2.2));
+            boss2.transform.rotation = Quat::from_rotation_y(rng.range(0.0, std::f32::consts::TAU));
+            boss2.tag = "boss2".into();
+            boss2.group = "Boss2".into();
+            boss2.physics = PhysicsKind::Kinematic;
+            boss2.trigger = true;
+            boss2.combat = Some(Combat {
+                attackable: true,
+                hp: 70,
+                ..Default::default()
+            });
+            // Vitesse/archétype d'authoring : réécrits chaque tick par
+            // `app::boss2::update_boss2` selon la phase — mêmes valeurs
+            // d'avant-premier-coup que le premier boss ci-dessus.
+            boss2.ai_chaser = Some(AiChaser {
+                speed: 1.4,
+                archetype: Archetype::Colosse,
+            });
+            boss2.bite = Some(BiteAttack {
+                cooldown: 2.2,
+                chance: 0.5,
+                damage: 0.24,
+            });
+            boss2.respawn_delay = 600.0;
+            boss2.script = creature_bite_script("boss2_", 2.2, 0.5, 0.24, 191.0);
+            objects.push(boss2);
+
+            // Butin garanti à la mort (cf. `app::boss2::update_boss2_loot`,
+            // même patron que le premier boss) : Sceptre (`WEAPONS[5]`),
+            // profil de mêlée dédié à ce boss (cf. la doc de `scene::WEAPONS`)
+            // — `Scene::roguelike_demo` exclut délibérément cet indice de son
+            // propre tirage, ce Sceptre reste exclusif à ce boss.
+            if let Some(lidx) = loader.load("riviere/galet_a.glb") {
+                let mut loot = demo_obj(
+                    BOSS2_LOOT_NAME,
+                    MeshKind::Imported(lidx),
+                    Vec3::new(boss2_x + 1.4, boss2_y + 0.1, boss2_z - 1.3),
+                );
+                loot.transform = loot.transform.with_scale(Vec3::splat(0.55));
+                loot.color = [0.65, 0.85, 0.35];
+                loot.group = "Butin".into();
+                loot.visible = false;
+                loot.weapon_pickup = Some(WeaponPickup { weapon: 5 });
+                objects.push(loot);
+            }
+
+            // Couvée de trois Champiblobs (cf. `app::boss2::BOSS2_MINION_TAG`) :
+            // pré-placés tout près du boss, masqués dès la construction —
+            // révélés progressivement en combat (2 en Prolifération, le 3e
+            // en Éruption des spores) par `update_boss2`, jamais par un
+            // script Lua de spawn (aucun système de spawn dynamique dans ce
+            // moteur). Réutilise le mordeur de champignon déjà chargé
+            // (`monster_mushnub.glb`, même mesh que le Champignon mordeur du
+            // roster ordinaire un peu plus en amont) plutôt qu'un nouvel
+            // asset : de petites créatures fongiques, cohérent avec la
+            // couvée d'un boss champignon. `AiChaser`/`BiteAttack`/`Combat`
+            // déjà branchés pour que la simulation générique les fasse vivre
+            // dès que `update_boss2` les rend visibles — aucune logique d'IA
+            // nouvelle à écrire pour eux. Tag/groupe dédiés : EXCLUS du
+            // roster ordinaire (`tag == "monstre"`) et de ses tests de
+            // variété d'espèces (cf. `riviere_demo_monsters_are_varied_
+            // species` et consorts, qui filtrent strictement par ce tag).
+            let minion_offsets: [(f32, f32); 3] =
+                [(2.5, 2.0), (-2.0, 3.0), (3.0, -2.5)];
+            for (i, (dx, dz)) in minion_offsets.into_iter().enumerate() {
+                let Some(midx) = loader.load("monster_mushnub.glb") else {
+                    continue;
+                };
+                let mx = boss2_x + dx;
+                let mz = boss2_z + dz;
+                let my = terrain_height(&terrain, mx, mz);
+                let mut minion = demo_obj(
+                    &format!("Champiblob {}", i + 1),
+                    MeshKind::Imported(midx),
+                    Vec3::new(mx, my, mz),
+                );
+                minion.transform = minion.transform.with_scale(Vec3::splat(0.85));
+                minion.color = [0.7, 0.35, 0.75];
+                minion.tag = "boss2_minion".into();
+                minion.group = "Boss2".into();
+                minion.physics = PhysicsKind::Kinematic;
+                minion.trigger = true;
+                // Masqué dès la construction : révélé uniquement par
+                // `app::boss2::update_boss2` au fil du combat, cf. la doc
+                // ci-dessus (pas de couvée active hors combat contre le
+                // premier boss).
+                minion.visible = false;
+                minion.combat = Some(Combat {
+                    attackable: true,
+                    hp: 3,
+                    ..Default::default()
+                });
+                minion.ai_chaser = Some(AiChaser {
+                    speed: 1.7,
+                    archetype: Archetype::Meute,
+                });
+                minion.bite = Some(BiteAttack {
+                    cooldown: 1.6,
+                    chance: 0.5,
+                    damage: 0.1,
+                });
+                // Pas de réapparition individuelle (`respawn_delay` par
+                // défaut à 0) : la couvée entière revient avec le boss, via
+                // `update_boss2`, pas via la file de réapparition générique.
+                let prefix = format!("boss2_minion{i}_");
+                minion.script = creature_bite_script(&prefix, 1.6, 0.5, 0.1, 211.0 + i as f32 * 7.0);
+                objects.push(minion);
+            }
+        }
+
         // --- Butin (armes de mêlée et soins à ramasser au contact) ---
         // Réutilise les rochers/galets déjà chargés comme socle visuel du
         // butin (pas de nouvel asset) : l'arme/l'objet est ramassé au contact
@@ -1345,6 +1501,7 @@ impl Scene {
             "Faune",
             "Monstre",
             "Boss",
+            "Boss2",
             "Butin",
         ]
         .into_iter()
@@ -1701,6 +1858,138 @@ mod tests {
                 .iter()
                 .any(|o| o.name == crate::app::boss::BOSS_LOOT_NAME),
             "aucun objet nommé `app::boss::BOSS_LOOT_NAME` dans la démo Rivière"
+        );
+    }
+
+    /// Pendant de `riviere_demo_boss_stays_out_of_every_monsters_combined_
+    /// aggro_range`, pour le second boss (sous-bois aval).
+    #[test]
+    fn riviere_demo_second_boss_stays_out_of_every_monsters_combined_aggro_range() {
+        const CHASER_DETECT_RANGE: f32 = 9.0;
+        const FURTIVE_DETECT_RANGE: f32 = 5.0;
+        let scene = Scene::riviere_demo();
+        let boss2 = scene
+            .objects
+            .iter()
+            .find(|o| o.group == "Boss2" && o.tag == "boss2")
+            .expect("le second boss doit être présent dans la démo Rivière");
+        let boss2_pos = boss2.transform.position;
+        let boss2_range = CHASER_DETECT_RANGE; // Colosse.
+        for m in scene.objects.iter().filter(|o| o.tag == "monstre") {
+            let range = if m.ai_chaser.as_ref().unwrap().archetype == Archetype::Furtive {
+                FURTIVE_DETECT_RANGE
+            } else {
+                CHASER_DETECT_RANGE
+            };
+            let required = boss2_range + range;
+            let dist = boss2_pos.distance(m.transform.position);
+            assert!(
+                dist > required,
+                "{} : {dist:.1} m du second boss, en-dessous du minimum requis {required:.1} m (double-pull possible)",
+                m.name
+            );
+        }
+        // Le premier boss (extrémité amont) ne doit évidemment pas non plus
+        // se retrouver dans la portée d'éveil combinée du second (extrémité
+        // aval) — même garde-fou, cas trivial vu la distance, mais vérifié
+        // explicitement plutôt que supposé.
+        let boss1 = scene
+            .objects
+            .iter()
+            .find(|o| o.group == "Boss")
+            .expect("le premier boss doit être présent dans la démo Rivière");
+        let required = boss2_range + CHASER_DETECT_RANGE;
+        assert!(boss2_pos.distance(boss1.transform.position) > required);
+    }
+
+    /// Pendant de `riviere_demo_boss_is_placed_on_dry_ground_away_from_the_
+    /// channel`, pour le second boss et son butin garanti.
+    #[test]
+    fn riviere_demo_second_boss_is_placed_on_dry_ground_away_from_the_channel() {
+        let scene = Scene::riviere_demo();
+        let boss2 = scene
+            .objects
+            .iter()
+            .find(|o| o.group == "Boss2" && o.tag == "boss2")
+            .expect("le second boss doit être présent dans la démo Rivière");
+        let p = boss2.transform.position;
+        assert!(
+            channel_dist(p.x, p.z) >= 1.3 && p.y >= water_level(p.z) + 0.25,
+            "{} planté dans l'eau ou trop près du lit : {p:?}",
+            boss2.name
+        );
+        let loot = scene
+            .objects
+            .iter()
+            .find(|o| o.name == "Sceptre du Roi Champignon")
+            .expect("le butin du second boss doit être présent dans la démo Rivière");
+        let lp = loot.transform.position;
+        assert!(
+            channel_dist(lp.x, lp.z) >= 1.3 && lp.y >= water_level(lp.z) + 0.25,
+            "{} planté dans l'eau ou trop près du lit : {lp:?}",
+            loot.name
+        );
+        // Les trois Champiblobs (masqués mais déjà positionnés) doivent eux
+        // aussi être posés sur la terre ferme.
+        for m in scene.objects.iter().filter(|o| o.tag == "boss2_minion") {
+            let mp = m.transform.position;
+            assert!(
+                channel_dist(mp.x, mp.z) >= 1.3 && mp.y >= water_level(mp.z) + 0.25,
+                "{} planté dans l'eau ou trop près du lit : {mp:?}",
+                m.name
+            );
+        }
+    }
+
+    /// Le second boss est, comme le premier, un évènement de fin de
+    /// parcours : ni compté parmi les 9 emplacements du roster ordinaire, ni
+    /// confondu avec le premier boss (groupe/tag distincts) — pendant de
+    /// `riviere_demo_boss_is_not_counted_among_the_ordinary_monster_roster`.
+    #[test]
+    fn riviere_demo_second_boss_is_not_counted_among_the_ordinary_monster_roster_or_the_first_boss()
+    {
+        let scene = Scene::riviere_demo();
+        assert!(scene.objects.iter().any(|o| o.group == "Boss2" && o.tag == "boss2"));
+        assert_eq!(
+            scene.objects.iter().filter(|o| o.tag == "monstre").count(),
+            9,
+            "le roster ordinaire doit rester à 9, le second boss (ni ses Champiblobs) ne doit pas y être tagué"
+        );
+        assert_eq!(scene.objects.iter().filter(|o| o.group == "Monstre").count(), 9);
+        assert_eq!(
+            scene.objects.iter().filter(|o| o.group == "Boss").count(),
+            1,
+            "un seul objet du groupe \"Boss\" : le second boss ne doit pas s'y confondre"
+        );
+        assert_eq!(
+            scene.objects.iter().filter(|o| o.tag == "boss2_minion").count(),
+            3,
+            "3 Champiblobs attendus, tous dans le groupe \"Boss2\", jamais taggés \"monstre\""
+        );
+    }
+
+    /// Même verrou de cohérence des chaînes que `riviere_demo_boss_names_
+    /// match_app_boss_module`, pour le second boss (`app::boss2`).
+    #[test]
+    fn riviere_demo_second_boss_names_match_app_boss2_module() {
+        let scene = Scene::riviere_demo();
+        assert!(
+            scene
+                .objects
+                .iter()
+                .any(|o| o.name == crate::app::boss2::BOSS2_NAME),
+            "aucun objet nommé `app::boss2::BOSS2_NAME` dans la démo Rivière"
+        );
+        assert!(
+            scene
+                .objects
+                .iter()
+                .any(|o| o.name == crate::app::boss2::BOSS2_LOOT_NAME),
+            "aucun objet nommé `app::boss2::BOSS2_LOOT_NAME` dans la démo Rivière"
+        );
+        assert!(
+            scene.objects.iter().any(|o| o.tag == crate::app::boss2::BOSS2_MINION_TAG),
+            "aucun Champiblob taggé `app::boss2::BOSS2_MINION_TAG` dans la démo Rivière"
         );
     }
 

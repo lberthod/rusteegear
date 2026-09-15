@@ -31,13 +31,20 @@ impl Scene {
         let mut joueur = demo_obj("Joueur", MeshKind::Capsule, Vec3::new(0.0, 1.0, room_z[0]));
         joueur.color = [0.95, 0.6, 0.25];
 
-        // --- Tirage de 3 armes DISTINCTES parmi les 5 profils connus (`WEAPONS`) : une
-        // pour l'équipement de départ, les 2 autres cachées en butin plus bas (cf.
-        // `WeaponPickup`). Mélange de Fisher-Yates via `runtime::rng::Rng` (Sprint 131,
-        // unifie ce qui était une copie locale du même xorshift64 maison que
-        // `runtime::sfx`) : l'horloge système sert de graine.
+        // --- Tirage de 3 armes DISTINCTES parmi les 5 profils de mêlée/portée
+        // ordinaires de `WEAPONS` (Dague/Épée/Lance/Marteau/Arc) : une pour
+        // l'équipement de départ, les 2 autres cachées en butin plus bas (cf.
+        // `WeaponPickup`). `WEAPONS[5]` (Sceptre du Roi Champignon,
+        // `app::boss2`) est délibérément EXCLU de ce tirage — décision
+        // explicite (pas un oubli) : c'est un butin garanti exclusif au
+        // second boss de la démo Rivière, pas un profil ordinaire à trouver
+        // au hasard dans le donjon. Mélange de Fisher-Yates via
+        // `runtime::rng::Rng` (Sprint 131, unifie ce qui était une copie
+        // locale du même xorshift64 maison que `runtime::sfx`) : l'horloge
+        // système sert de graine.
+        const ROGUELIKE_WEAPON_POOL: usize = 5;
         let mut rng = crate::runtime::rng::Rng::from_system_time();
-        let mut order: [usize; WEAPONS.len()] = std::array::from_fn(|i| i);
+        let mut order: [usize; ROGUELIKE_WEAPON_POOL] = std::array::from_fn(|i| i);
         rng.shuffle(&mut order);
         let (starting_idx, found_idx) = (order[0], [order[1], order[2]]);
         let weapon = WEAPONS[starting_idx];

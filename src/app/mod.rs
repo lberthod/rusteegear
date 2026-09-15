@@ -7,6 +7,7 @@ pub mod world_labels;
 pub mod asset_ops;
 mod autosave;
 pub mod boss;
+pub mod boss2;
 pub mod build_config;
 mod combat;
 mod console;
@@ -1417,6 +1418,13 @@ pub struct AppState {
     /// dédiée, pas une extension de `creature_attack::RANGED_CREATURE_ATTACKS`
     /// — cf. la doc de `app::boss`).
     boss: boss::BossState,
+    /// État du second boss de fin de parcours de la démo Rivière, « Le
+    /// Roi-Champignon du Sous-bois » (cf. `app::boss2`) : zone de spores
+    /// ancrée-joueur et invocation de couvée, séparé de `boss` (patron
+    /// dupliqué, PAS une collection — cf. la doc de `app::boss2` pour la
+    /// justification : deux mécaniques radicalement différentes, seulement
+    /// 2 bosses prévus).
+    boss2: boss2::Boss2State,
     /// Arme à distance équipée par le joueur local (indice dans
     /// `fireball::RANGED_WEAPONS`) : clavier 1/2/3, ou bouton tactile « Arme »
     /// qui cycle (cf. `Controller::weapon_button`). Envoyée au serveur à chaque
@@ -1746,6 +1754,7 @@ impl AppState {
                 net_creature_shots: Vec::new(),
             },
             boss: boss::BossState::default(),
+            boss2: boss2::Boss2State::default(),
             selected_weapon: 0,
             weapon_button_was_down: false,
             net_conn: NetConnectionState {

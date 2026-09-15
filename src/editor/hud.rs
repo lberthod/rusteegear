@@ -299,6 +299,42 @@ pub(super) fn weapon_hud(
     );
 }
 
+/// Décalage vertical (pt, avant mise à l'échelle par l'appelant — cf. son
+/// usage dans `kills_hud`) à ajouter à l'ancrage normal de `kills_hud`
+/// lorsque les barres de vie de boss empilées (`boss_health_bar`, cf.
+/// `BOSSES`/`BOSS_BAR_ROW_HEIGHT`) tombent dans sa branche « sous les
+/// boutons » (petit écran, ~375 px — même condition de seuil que
+/// `boss_health_bar`, recalculée ici à l'identique faute d'état partagé) :
+/// dans cette branche, la barre du DERNIER boss visible empiète sur l'ancrage
+/// fixe (`y = area.top() + 112`) de `kills_hud` dès que 2 barres sont
+/// empilées (observé à 375 px, roadmap post-audit UX 2026-09-15 : un
+/// chevauchement, pas une collision "boutons vs barre" comme le garde-fou de
+/// `boss_health_bar` visait à corriger). Repousse `kills_hud` d'exactement
+/// une bande de plus par barre de boss au-delà de la première
+/// (`BOSS_BAR_ROW_HEIGHT * scale` par barre supplémentaire) : la première
+/// barre seule reste dans l'espace déjà validé (aucune collision connue/
+/// signalée pour un seul boss), donc `visible_bosses <= 1` ne décale rien.
+/// Hors de cette branche (barres à côté des boutons, `y` bien plus haut,
+/// desktop ou mobile assez large) : aucun décalage, la disposition existante
+/// n'a jamais chevauché `kills_hud`.
+pub(super) fn boss_hud_extra_offset(area: egui::Rect, scene: &Scene, scale: f32, buttons_left: f32) -> f32 {
+    let scale = clamp_hud_scale(scale);
+    let margin = 8.0;
+    let left_limit = area.left() + margin;
+    let beside_buttons_right_limit = (buttons_left.min(area.right()) - margin).max(left_limit);
+    let min_w_beside_buttons = 170.0 * scale;
+    if beside_buttons_right_limit - left_limit >= min_w_beside_buttons {
+        // Barres à côté des boutons : bien au-dessus de `kills_hud`, jamais
+        // de collision (cf. la doc plus haut).
+        return 0.0;
+    }
+    let visible_bosses = BOSSES
+        .iter()
+        .filter(|(name, _)| scene.objects.iter().any(|o| o.name == *name && o.visible))
+        .count();
+    (visible_bosses.saturating_sub(1)) as f32 * BOSS_BAR_ROW_HEIGHT * scale
+}
+
 /// Frags (haut-droite) : compteur individualisé en multijoueur (brique de
 /// progression pour un futur MMORPG, cf. `AppState::displayed_kill_count`),
 /// ou simplement le score solo hors ligne — un seul nombre, la distinction
@@ -312,6 +348,12 @@ pub(super) fn weapon_hud(
 /// `y=56`, ~30 px de haut une fois repliée) — `y=112` garde une vraie marge
 /// en dessous (cf. docs/audits/editor.md pour le premier réglage qui la
 /// chevauchait encore).
+///
+/// `extra_offset` (pt, déjà mis à l'échelle par l'appelant, cf.
+/// `boss_hud_extra_offset`) : ajouté tel quel à l'ancrage `y` normal, pour ne
+/// pas chevaucher les barres de vie de boss empilées quand elles tombent
+/// dans leur branche « sous les boutons » (cf. sa doc) — `0.0` reproduit
+/// exactement l'ancrage historique.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn kills_hud(
     ctx: &egui::Context,
@@ -322,6 +364,7 @@ pub(super) fn kills_hud(
     draggable: bool,
     locale: crate::app::locale::Locale,
     scale: f32,
+    extra_offset: f32,
 ) {
     use egui::{Align2, Color32, FontId};
     let scale = clamp_hud_scale(scale);
@@ -359,7 +402,7 @@ pub(super) fn kills_hud(
     // toujours dans `area`.
     let max_box_w = (area.width() - 16.0).max(1.0);
     let box_size = egui::vec2((galley.size().x + padding.x).min(max_box_w), galley.size().y + padding.y);
-    let base = egui::pos2(area.right() - 8.0 - box_size.x / 2.0, area.top() + 112.0);
+    let base = egui::pos2(area.right() - 8.0 - box_size.x / 2.0, area.top() + 112.0 + extra_offset);
     let pos = hud_anchor(ctx, "hud_kills", base, offset, box_size, draggable);
     let pos = egui::pos2(
         pos.x.clamp(area.left() + box_size.x / 2.0, area.right() - box_size.x / 2.0),
@@ -682,7 +725,10 @@ pub(super) fn hud_preview_overlays(
         );
     }
     if preview.kills {
-        kills_hud(ctx, area, 3, 1, &mut hud_layout.kills, drag, locale, scale);
+        // Pas de boss dessiné dans cet aperçu HUD d'éditeur (valeurs
+        // d'exemple hors Play, cf. la doc de `hud_preview_overlays`) : aucun
+        // décalage à appliquer, `0.0` reproduit l'ancrage historique.
+        kills_hud(ctx, area, 3, 1, &mut hud_layout.kills, drag, locale, scale, 0.0);
     }
     if preview.crosshair {
         crosshair(ctx, area, &mut hud_layout.crosshair, drag, scale);
@@ -1029,19 +1075,57 @@ pub(super) fn world_health_labels(
     }
 }
 
-/// Barre de vie du boss « L'Aîné de la Cascade » (démo Rivière & cascade),
+/// Boss de fin de parcours connus de la démo Rivière & cascade, dans l'ordre
+/// d'empilement de leur barre de vie (cf. `boss_health_bar`, paramètre
+/// `row`) : « L'Aîné de la Cascade » (amont) puis « Le Roi-Champignon du
+/// Sous-bois » (aval, `app::boss2`) — les deux bosses restent quasi toujours
+/// `visible` (= vivant) simultanément dès que le joueur explore toute la
+/// vallée (zones géographiquement éloignées mais toutes deux hors caméra
+/// n'est pas « non vivant »), donc les deux barres empilées sont le cas
+/// **normal**, pas un cas limite. Table plutôt que deux fonctions dupliquées
+/// (cf. la doc du bloc « Boss » de `app::boss2` : c'est justement le seul
+/// endroit qui DOIT se généraliser, pas se dupliquer — un rendu HUD répété
+/// par boss visible, pas une logique de combat par-boss). Le second élément
+/// de chaque paire est le libellé de phase pour ce boss (`PhaseLabelFn`,
+/// coercée depuis une closure sans capture) : chaque boss a son propre enum
+/// de phases (`BossPhase`/`Boss2Phase`), pas un type partagé.
+type PhaseLabelFn = fn(f32) -> &'static str;
+pub(super) const BOSSES: [(&str, PhaseLabelFn); 2] = [
+    (crate::app::boss::BOSS_NAME, |r| {
+        crate::app::boss::phase_for_ratio(r).label()
+    }),
+    (crate::app::boss2::BOSS2_NAME, |r| {
+        crate::app::boss2::phase_for_ratio2(r).label()
+    }),
+];
+
+/// Hauteur (pt, avant mise à l'échelle `scale`) réservée par une barre de vie
+/// de boss empilée (`boss_health_bar`, paramètre `row`) : nom au-dessus
+/// (-9 pt), jauge (15 pt), libellé de phase en dessous (+7 pt jusqu'à sa
+/// propre hauteur de texte), plus une marge — dérivée des décalages déjà en
+/// dur dans cette fonction, avec de la place pour ne jamais chevaucher la
+/// barre suivante.
+const BOSS_BAR_ROW_HEIGHT: f32 = 46.0;
+
+/// Barre de vie d'un boss de fin de parcours de la démo Rivière & cascade,
 /// centrée en haut de l'écran façon boss de raid — même bandeau top-center
-/// que `wave_hud`, mais retrouve le boss **par nom** (`app::boss::BOSS_NAME`)
-/// plutôt que par `Combat::wave` : Rivière n'a pas de système de manches
-/// (`wave: 0` partout, cf. la doc de `Combat::wave`), `wave_hud` y resterait
-/// toujours invisible. Affichée seulement tant que l'objet existe dans la
-/// scène **et** reste visible (masquée le reste du temps, y compris pendant
-/// son délai de réapparition). Lit `Combat::hp/max_hp`, déjà répliqué à tous
-/// les clients réseau via `EntityDelta::health` (cf. sa doc) : aucune donnée
-/// protocole supplémentaire n'est nécessaire pour cette barre. Le libellé de
-/// phase (« Veille »/« Courroux »/« Dernier sursaut ») est calculé côté
-/// client à partir de ce même ratio déjà synchronisé (`app::boss::
-/// phase_for_ratio`), pas un nouveau champ réseau non plus.
+/// que `wave_hud`, mais retrouve le boss **par nom** (`boss_name`, cf.
+/// `BOSSES`) plutôt que par `Combat::wave` : Rivière n'a pas de système de
+/// manches (`wave: 0` partout, cf. la doc de `Combat::wave`), `wave_hud` y
+/// resterait toujours invisible. Affichée seulement tant que l'objet existe
+/// dans la scène **et** reste visible (masquée le reste du temps, y compris
+/// pendant son délai de réapparition) — ne dessine rien si CE boss précis
+/// n'est pas visible, donc rien à filtrer en amont dans `BOSSES`. Lit
+/// `Combat::hp/max_hp`, déjà répliqué à tous les clients réseau via
+/// `EntityDelta::health` (cf. sa doc) : aucune donnée protocole
+/// supplémentaire n'est nécessaire pour cette barre. Le libellé de phase est
+/// calculé côté client à partir de ce même ratio déjà synchronisé
+/// (`phase_label`, cf. `BOSSES`), pas un nouveau champ réseau non plus.
+///
+/// `row` (0-based) empile plusieurs barres verticalement sans chevauchement
+/// (`BOSS_BAR_ROW_HEIGHT` par rang) — les deux bosses de cette démo restent
+/// quasi toujours visibles ensemble (cf. la doc de `BOSSES`), donc l'appelant
+/// boucle sur `BOSSES` et passe l'indice de boucle comme `row`.
 ///
 /// `buttons_left` (roadmap post-audit UX 2026-09-15, collision mobile) : bord
 /// gauche mesuré du groupe ⏸/🔇/Carte/? (`TopButtons::rect`, même valeur que
@@ -1056,7 +1140,10 @@ pub(super) fn world_health_labels(
 /// le bord de l'écran avec son propre nom, un problème pire que celui
 /// corrigé), la barre entière (nom, jauge, libellé de phase) passe sous la
 /// rangée de boutons plutôt que de s'y écraser : sur presque toute la largeur
-/// de l'écran à cet endroit, elle reste lisible.
+/// de l'écran à cet endroit, elle reste lisible. À vérifier visuellement à
+/// 375 px avec les deux boss visibles (deux barres empilées, `row` 0 et 1) :
+/// ce garde-fou n'a été pensé à l'origine que pour une seule barre.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn boss_health_bar(
     ctx: &egui::Context,
     area: egui::Rect,
@@ -1064,14 +1151,13 @@ pub(super) fn boss_health_bar(
     scale: f32,
     colorblind: bool,
     buttons_left: f32,
+    boss_name: &str,
+    phase_label: PhaseLabelFn,
+    row: usize,
 ) {
     use egui::{Align2, Color32, FontId, Stroke};
     let scale = clamp_hud_scale(scale);
-    let Some(boss) = scene
-        .objects
-        .iter()
-        .find(|o| o.name == crate::app::boss::BOSS_NAME && o.visible)
-    else {
+    let Some(boss) = scene.objects.iter().find(|o| o.name == boss_name && o.visible) else {
         return;
     };
     let Some(c) = boss.combat.as_ref() else {
@@ -1083,11 +1169,12 @@ pub(super) fn boss_health_bar(
         1.0
     })
     .clamp(0.0, 1.0);
-    let phase_label = crate::app::boss::phase_for_ratio(ratio).label();
+    let phase_label = phase_label(ratio);
     let painter = ctx.layer_painter(egui::LayerId::new(
         egui::Order::Foreground,
-        egui::Id::new("hud_boss"),
+        egui::Id::new(format!("hud_boss_{row}")),
     ));
+    let row_offset = row as f32 * BOSS_BAR_ROW_HEIGHT * scale;
     let h = 15.0 * scale;
     let nominal_w = 340.0 * scale;
     // En dessous de cette largeur disponible, le nom du boss (bien plus large
@@ -1105,7 +1192,7 @@ pub(super) fn boss_health_bar(
                 .center()
                 .x
                 .clamp(left_limit + w / 2.0, beside_buttons_right_limit - w / 2.0);
-            (w, center_x, area.top() + 30.0 * scale)
+            (w, center_x, area.top() + 30.0 * scale + row_offset)
         } else {
             // Passe sous la rangée de boutons/pastille réseau (hauteur
             // `TOUCH_TARGET`, même ancrage vertical qu'eux) : toute la largeur
@@ -1121,7 +1208,7 @@ pub(super) fn boss_health_bar(
             // `kills_hud` juste en dessous (`area.top() + 112`, indépendant de
             // ce widget) — les deux n'ont qu'une quarantaine de points pour
             // tenir nom + jauge + libellé de phase sur un écran très étroit.
-            let below_buttons = area.top() + TOUCH_TARGET + 8.0 + 22.0 * scale;
+            let below_buttons = area.top() + TOUCH_TARGET + 8.0 + 22.0 * scale + row_offset;
             (w, center_x, below_buttons)
         };
     let bar = egui::Rect::from_center_size(egui::pos2(center_x, bar_top), egui::vec2(w, h));
@@ -2327,6 +2414,83 @@ mod tests {
         assert_eq!(clamp_hud_scale(1.0), 1.0);
         assert_eq!(clamp_hud_scale(0.0), 0.5);
         assert_eq!(clamp_hud_scale(100.0), 3.0);
+    }
+
+    /// Non-régression de la collision HUD à 375 px (roadmap post-audit UX
+    /// 2026-09-15) : avec les deux boss de la démo Rivière visibles
+    /// simultanément et dans la branche « sous les boutons » de
+    /// `boss_health_bar` (petit écran — même seuil `min_w_beside_buttons`
+    /// recalculé par `boss_hud_extra_offset`), l'ancrage `y` de `kills_hud`
+    /// (`area.top() + 112.0 + extra_offset`) doit rester en dessous du bas
+    /// de la seconde barre de boss (nom + jauge + libellé de phase, cf.
+    /// `BOSS_BAR_ROW_HEIGHT`) avec une marge d'au moins `margin` (8 pt) — pas
+    /// seulement un chevauchement réduit. Vérifié par arithmétique exacte,
+    /// avec les mêmes constantes que `boss_health_bar`, plutôt que deviné :
+    /// à `scale = 1.0`, la seconde barre (row = 1) est centrée à
+    /// `area.top() + 44.0 + 8.0 + 22.0 + 46.0 = area.top() + 120.0`, sa
+    /// jauge se termine à `+ 7.5` (`h / 2`, `h = 15.0`) et son libellé de
+    /// phase, centré `7.0` pt plus bas, ajoute encore une demi-hauteur de
+    /// texte (`FontId::proportional(11.0)`) — un contenu qui va donc
+    /// nettement au-delà de `area.top() + 130.0`. Sans décalage,
+    /// `kills_hud` resterait ancré à `area.top() + 112.0`, en plein dans
+    /// cette plage (chevauchement, pas empilement propre) ; ce test exige
+    /// que `boss_hud_extra_offset` le repousse d'au moins `120.0 + 7.5 +
+    /// 7.0 + 8.0 - 112.0 = 30.5` pt à `scale = 1.0` (une bande de boss
+    /// entière, `46.0`, largement suffisant) — et vaut `0.0` avec un seul
+    /// boss visible (aucune collision connue/signalée pour ce cas, cf. la
+    /// doc de `boss_hud_extra_offset`) ou hors de la branche « sous les
+    /// boutons » (bureau/mobile assez large).
+    #[test]
+    fn kills_hud_is_pushed_below_two_stacked_boss_bars_on_a_narrow_screen() {
+        let mut scene = crate::scene::Scene::riviere_demo();
+        for o in scene.objects.iter_mut() {
+            if o.name == crate::app::boss::BOSS_NAME || o.name == crate::app::boss2::BOSS2_NAME {
+                o.visible = true;
+            }
+        }
+        // Écran étroit (375 px, cf. la doc de `boss_health_bar`) : un groupe
+        // de boutons qui laisse moins que `min_w_beside_buttons` (170 pt à
+        // `scale = 1.0`) à sa gauche déclenche la branche « sous les
+        // boutons » — ici le groupe occupe toute la largeur disponible,
+        // comme observé sur mobile.
+        let area = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(375.0, 812.0));
+        // Groupe de boutons collé au bord gauche (même topologie que
+        // `mobile_top_buttons` sur un écran étroit) : ne laisse que ~44 pt à
+        // sa gauche, bien en-deçà de `min_w_beside_buttons` (170 pt à
+        // `scale = 1.0`) — déclenche donc la branche « sous les boutons »,
+        // celle qui expose la collision (cf. la doc de la fonction).
+        let buttons_left = area.left() + 60.0;
+        let scale = 1.0;
+
+        let extra_two = boss_hud_extra_offset(area, &scene, scale, buttons_left);
+        let required_min = 120.0_f32 + 7.5 + 7.0 + 8.0 - 112.0;
+        assert!(
+            extra_two >= required_min,
+            "décalage {extra_two} insuffisant pour ne pas chevaucher la 2e barre de boss (minimum {required_min})"
+        );
+        assert_eq!(
+            extra_two,
+            BOSS_BAR_ROW_HEIGHT * scale,
+            "une bande de boss entière de décalage, ni plus ni moins, pour 2 boss visibles"
+        );
+
+        // Un seul boss visible : pas de décalage (cf. la doc de la fonction).
+        if let Some(o) = scene.objects.iter_mut().find(|o| o.name == crate::app::boss2::BOSS2_NAME) {
+            o.visible = false;
+        }
+        assert_eq!(boss_hud_extra_offset(area, &scene, scale, buttons_left), 0.0);
+
+        // Écran large : `boss_health_bar` reste à côté des boutons, jamais
+        // de collision avec `kills_hud` (bien plus haut), même avec les deux
+        // boss visibles.
+        if let Some(o) = scene.objects.iter_mut().find(|o| o.name == crate::app::boss2::BOSS2_NAME) {
+            o.visible = true;
+        }
+        let wide_area = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(1280.0, 800.0));
+        assert_eq!(
+            boss_hud_extra_offset(wide_area, &scene, scale, wide_area.right() - 40.0),
+            0.0
+        );
     }
 
     /// Marqueur allié hors-écran (Phase L Sprint 2) : un allié déjà visible

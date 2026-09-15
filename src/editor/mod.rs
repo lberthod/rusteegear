@@ -1555,7 +1555,19 @@ impl Editor {
             if !arcade {
                 world_health_labels(ctx, area, view_proj, world_labels, hud_scale, settings.colorblind);
                 wave_hud(ctx, area, scene, wave, locale, hud_scale);
-                boss_health_bar(ctx, area, scene, hud_scale, settings.colorblind, top.rect.left());
+                for (row, &(boss_name, phase_label)) in hud::BOSSES.iter().enumerate() {
+                    boss_health_bar(
+                        ctx,
+                        area,
+                        scene,
+                        hud_scale,
+                        settings.colorblind,
+                        top.rect.left(),
+                        boss_name,
+                        phase_label,
+                        row,
+                    );
+                }
                 // Kit de capacités : la barre 1-2-3-4 remplace l'arme équipée
                 // (cf. `hud::ability_bar`). Ni l'une ni l'autre sur tactile
                 // (15 septembre 2026) : ability_bar est un pur painter sans
@@ -1594,6 +1606,7 @@ impl Editor {
                     false,
                     locale,
                     hud_scale,
+                    hud::boss_hud_extra_offset(area, scene, hud_scale, top.rect.left()),
                 );
                 multiplayer_roster_panel(
                     ctx,
@@ -2884,14 +2897,19 @@ fn play_area_and_in_game_hud(
         // Aperçu mobile de l'éditeur : pas de groupe ⏸/🔇/Carte/? dessiné ici
         // (propre à la boucle de jeu réelle, cf. l'autre appel ci-dessus) —
         // `play_rect.right()` en `buttons_left` équivaut à « aucune réservation ».
-        boss_health_bar(
-            root.ctx(),
-            play_rect,
-            scene,
-            hud_scale,
-            settings.colorblind,
-            play_rect.right(),
-        );
+        for (row, &(boss_name, phase_label)) in hud::BOSSES.iter().enumerate() {
+            boss_health_bar(
+                root.ctx(),
+                play_rect,
+                scene,
+                hud_scale,
+                settings.colorblind,
+                play_rect.right(),
+                boss_name,
+                phase_label,
+                row,
+            );
+        }
         // Kit de capacités : la barre 1-2-3-4 remplace l'arme équipée
         // (cf. `hud::ability_bar`).
         if let Some(hud) = ability.filter(|_| scene.ability_bar) {
@@ -2907,6 +2925,7 @@ fn play_area_and_in_game_hud(
                 hud_scale,
             );
         }
+        let kills_extra_offset = hud::boss_hud_extra_offset(play_rect, scene, hud_scale, play_rect.right());
         kills_hud(
             root.ctx(),
             play_rect,
@@ -2916,6 +2935,7 @@ fn play_area_and_in_game_hud(
             false,
             locale,
             hud_scale,
+            kills_extra_offset,
         );
         multiplayer_roster_panel(
             root.ctx(),

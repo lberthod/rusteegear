@@ -80,6 +80,13 @@ const EMBEDDED_MODELS: &[(&str, &[u8])] = &[
         "monster_dragon_evolved.glb",
         include_bytes!("../assets/models/monster_dragon_evolved.glb"),
     ),
+    // Second boss « Le Roi-Champignon du Sous-bois » (15 septembre 2026,
+    // `app::boss2` / `scene::demos::riviere`) : même raison que ci-dessus,
+    // inemployé ailleurs sous `assets/models/riviere/`.
+    (
+        "monster_mushroom_king.glb",
+        include_bytes!("../assets/models/monster_mushroom_king.glb"),
+    ),
 ];
 
 /// Assets de la démo « Rivière & cascade » (`assets/models/riviere/`, ≈ 12 Mo :
@@ -906,6 +913,7 @@ mod tests {
             "monster_mushnub.glb",
             "monster_orc.glb",
             "monster_dragon_evolved.glb",
+            "monster_mushroom_king.glb",
         ] {
             let bytes = read_bytes(&format!("embedded://{name}"))
                 .unwrap_or_else(|| panic!("modèle embarqué manquant : {name}"));
