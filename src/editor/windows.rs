@@ -1497,6 +1497,7 @@ pub(super) fn multiplayer_window(
                         ui.add(egui::TextEdit::singleline(lobby_code).hint_text("default"));
                         ui.add_space(4.0);
                         egui::ScrollArea::vertical()
+                            .id_salt("mp_chat_scroll")
                             .max_height(140.0)
                             .show(ui, |ui| {
                                 let visible: Vec<_> = chat_messages
@@ -1580,6 +1581,7 @@ pub(super) fn multiplayer_window(
                         ui.separator();
                         ui.heading("Classement");
                         egui::ScrollArea::vertical()
+                            .id_salt("mp_leaderboard_scroll")
                             .max_height(120.0)
                             .show(ui, |ui| {
                                 if leaderboard.is_empty() {
@@ -1615,6 +1617,7 @@ pub(super) fn multiplayer_window(
                             );
                         }
                         egui::ScrollArea::vertical()
+                            .id_salt("mp_presence_scroll")
                             .max_height(100.0)
                             .show(ui, |ui| {
                                 if online_players.is_empty() {
