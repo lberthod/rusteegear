@@ -30,6 +30,14 @@ thread_local! {
     /// Directions d'os poussées par `bone(nom, dx, dy, dz)` pendant le script
     /// courant, reprises dans `SceneObject::bone_dirs` juste après.
     static BONES: RefCell<Vec<(String, glam::Vec3)>> = const { RefCell::new(Vec::new()) };
+    /// Émetteur de particules posé par `particles(...)` (Sprint 132) sur
+    /// l'objet dont le script vient de s'exécuter — même patron que `BONES` :
+    /// `None` tant que le script ne l'a pas appelé ce tick, auquel cas
+    /// `SceneObject::particle_emitter` **n'est pas touché** (un émetteur posé
+    /// dans l'inspecteur sur un objet par ailleurs scripté n'est jamais
+    /// écrasé par un script qui n'a rien à voir avec les particules).
+    static PARTICLE_REQUEST: RefCell<Option<crate::runtime::particles::ParticleEmitter>> =
+        const { RefCell::new(None) };
     /// Cause et position de la dernière mort (mode plateformer 2D) : nom de
     /// l'objet mortel touché, `chute` sous `kill_y`, `vie` (santé à zéro) —
     /// pour des messages de mort contextuels (`death_cause`, `death_x`, `death_y`).
@@ -161,6 +169,39 @@ pub(crate) fn push_bone(name: String, dir: glam::Vec3) {
 /// Consomme les directions poussées par le script qui vient de s'exécuter.
 pub(crate) fn take_bones() -> Vec<(String, glam::Vec3)> {
     BONES.with(|b| std::mem::take(&mut *b.borrow_mut()))
+}
+
+/// `particles(rate, dx, dy, dz, spread, speed, size, r, g, b)` côté script
+/// (les deux backends) : pose l'émetteur que `SceneObject::particle_emitter`
+/// prendra si le script en cours en appelle un cette frame-ci.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn push_particles(
+    rate: f32,
+    dir: glam::Vec3,
+    spread: f32,
+    speed: f32,
+    size: f32,
+    color: [f32; 3],
+) {
+    let em = crate::runtime::particles::ParticleEmitter {
+        enabled: rate > 0.0,
+        rate: rate.max(0.0),
+        direction: dir.into(),
+        spread: spread.max(0.0),
+        speed_min: (speed * 0.7).max(0.0),
+        speed_max: (speed * 1.3).max(0.0),
+        size_min: (size * 0.7).max(0.001),
+        size_max: (size * 1.3).max(0.001),
+        color,
+        ..Default::default()
+    };
+    PARTICLE_REQUEST.with(|p| *p.borrow_mut() = Some(em));
+}
+
+/// Consomme l'émetteur posé par `particles(...)` pendant le script qui vient
+/// de s'exécuter, `None` s'il n'a pas été appelé ce tick.
+pub(crate) fn take_particle_request() -> Option<crate::runtime::particles::ParticleEmitter> {
+    PARTICLE_REQUEST.with(|p| p.borrow_mut().take())
 }
 
 /// Visibilité de l'objet dont le script va s'exécuter (valeur initiale de

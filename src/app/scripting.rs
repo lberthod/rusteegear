@@ -427,6 +427,38 @@ pub(super) fn run_script(
         Ok(())
     })?;
     g.set("bone", bone)?;
+    // `particles(rate, dx, dy, dz, spread, speed, size, r, g, b)` : active/met à
+    // jour l'émetteur de particules de cet objet pour cette frame (cf.
+    // `SceneObject::particle_emitter`, Sprint 132) — comme `wind()`, doit être
+    // rappelé chaque pas pour rester actif (`rate <= 0` désactive l'émetteur).
+    // Générique, sans rapport avec le vent : n'importe quel script peut s'en
+    // servir (impact, traînée de projectile, fumée d'une torche...).
+    let particles_fn = lua.create_function(
+        |_,
+         (rate, dx, dy, dz, spread, speed, size, r, g, b): (
+            f32,
+            f32,
+            f32,
+            f32,
+            f32,
+            f32,
+            f32,
+            f32,
+            f32,
+            f32,
+        )| {
+            super::script_ctx::push_particles(
+                rate,
+                Vec3::new(dx, dy, dz),
+                spread,
+                speed,
+                size,
+                [r, g, b],
+            );
+            Ok(())
+        },
+    )?;
+    g.set("particles", particles_fn)?;
     // Global `deaths` (lecture seule) : morts de la partie en cours — permet à un
     // piège de varier selon les tentatives (`if deaths % 2 == 1 then … end`).
     g.set("deaths", super::script_ctx::deaths())?;

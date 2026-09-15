@@ -784,6 +784,23 @@ impl Renderer {
         draws
     }
 
+    /// Particules (Sprint 132) : billboards toujours face caméra, déjà triés du
+    /// plus loin au plus près par `write_uniforms` (`particle_scratch`). Une
+    /// seule instance dessinée (6 sommets tirés du vertex shader, aucun vertex
+    /// buffer) : pas de mesh, pas de texture — pipeline/bind groups dédiés.
+    /// Appelée en tout dernier de la passe principale, après les objets
+    /// transparents, pour que le mélange se fasse sur une image déjà complète.
+    pub(super) fn draw_particles<'p>(&'p self, pass: &mut wgpu::RenderPass<'p>) -> u32 {
+        if self.particle_scratch.is_empty() {
+            return 0;
+        }
+        pass.set_pipeline(&self.particle_pipeline);
+        pass.set_bind_group(0, &self.camera_bind_group, &[]);
+        pass.set_bind_group(1, &self.particle_bind_group, &[]);
+        pass.draw(0..6, 0..self.particle_scratch.len() as u32);
+        1
+    }
+
     /// Viewport exprimé dans la cible HDR, plus petite que la surface quand la
     /// pixelisation est active (cf. `set_pixel_scale`) ; borné à la cible pour
     /// qu'un arrondi ne fasse jamais déborder le scissor (erreur de validation wgpu).
@@ -961,6 +978,9 @@ impl Renderer {
         );
         // Translucides en dernier (mélange sur l'image complète).
         scene_draw_calls += self.draw_transparent_objects(&mut pass, app);
+        // Particules tout en dernier (Sprint 132) : après les objets
+        // transparents, pour se mélanger sur une image déjà complète.
+        scene_draw_calls += self.draw_particles(&mut pass);
         scene_draw_calls
     }
 

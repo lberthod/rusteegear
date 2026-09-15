@@ -12,7 +12,7 @@ use super::mesh::{GpuMesh, Vertex};
 use super::passes::build_grid_verts;
 use super::renderer::{
     BLOOM_MIP_LEVELS, CASCADE_COUNT, CameraUniform, DEPTH_FORMAT, GizmoVertex, HDR_FORMAT,
-    JOINT_SLOT_BYTES, MAX_SKINNED_INSTANCES, ModelUniform, SceneUniform,
+    JOINT_SLOT_BYTES, MAX_SKINNED_INSTANCES, ModelUniform, ParticleInstance, SceneUniform,
 };
 use crate::app::RING_SEGMENTS;
 use crate::editor::Editor;
@@ -218,6 +218,32 @@ pub(super) fn create_models_buffer(
     (buf, bg)
 }
 
+/// Crée le buffer storage d'instances de particules + son bind group (groupe 1)
+/// pour `capacity` particules — même politique de croissance que
+/// `create_models_buffer` (doublée par `ensure_particle_capacity`, cf. `sync.rs`).
+pub(super) fn create_particle_buffer(
+    device: &wgpu::Device,
+    layout: &wgpu::BindGroupLayout,
+    capacity: usize,
+) -> (wgpu::Buffer, wgpu::BindGroup) {
+    let size = (capacity.max(1) * std::mem::size_of::<ParticleInstance>()) as wgpu::BufferAddress;
+    let buf = device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("particle_storage"),
+        size,
+        usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+        mapped_at_creation: false,
+    });
+    let bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: Some("particle_bg"),
+        layout,
+        entries: &[wgpu::BindGroupEntry {
+            binding: 0,
+            resource: buf.as_entire_binding(),
+        }],
+    });
+    (buf, bg)
+}
+
 /// Reconstruit le bind group du groupe 1 du pipeline skinné (`skinned_model_layout`) —
 /// à rappeler chaque fois que `models_buf` est recréé (`Renderer::sync_objects`), le
 /// bind group référençant le buffer par valeur au moment de sa création.
@@ -410,6 +436,11 @@ pub(super) struct PipelineBundle {
     pub(super) cascade_bind_groups: Vec<wgpu::BindGroup>,
     pub(super) cascade_bufs: Vec<wgpu::Buffer>,
     pub(super) transparent_pipeline: wgpu::RenderPipeline,
+    pub(super) particle_pipeline: wgpu::RenderPipeline,
+    pub(super) particle_layout: wgpu::BindGroupLayout,
+    pub(super) particle_buf: wgpu::Buffer,
+    pub(super) particle_bind_group: wgpu::BindGroup,
+    pub(super) particle_capacity: usize,
     pub(super) tex_layout: wgpu::BindGroupLayout,
     pub(super) tex_sampler: wgpu::Sampler,
     pub(super) textures: HashMap<String, wgpu::BindGroup>,
@@ -850,6 +881,78 @@ pub(super) fn build(
             format: DEPTH_FORMAT,
             depth_write_enabled: Some(false),
             depth_compare: Some(wgpu::CompareFunction::Always),
+            stencil: wgpu::StencilState::default(),
+            bias: wgpu::DepthBiasState::default(),
+        }),
+        multisample,
+        multiview_mask: None,
+        cache: None,
+    });
+
+    // --- Particules (Sprint 132) : quads billboardés dépliés dans le vertex
+    // shader depuis un tampon storage d'instances (`particle_buf`, groupe 1) —
+    // aucun vertex buffer, comme `sky_pipeline` (groupe 0 = `camera_layout`
+    // réutilisé tel quel, le shader n'en déclare qu'un préfixe). Mélange alpha,
+    // profondeur lue mais jamais écrite, dessinées en tout dernier de la passe
+    // principale (après les objets transparents) — cf. `draw_particles`.
+    let particle_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+        label: Some("particle_layout"),
+        entries: &[wgpu::BindGroupLayoutEntry {
+            binding: 0,
+            visibility: wgpu::ShaderStages::VERTEX,
+            ty: wgpu::BindingType::Buffer {
+                ty: wgpu::BufferBindingType::Storage { read_only: true },
+                has_dynamic_offset: false,
+                min_binding_size: None,
+            },
+            count: None,
+        }],
+    });
+    let particle_capacity = 256usize;
+    let (particle_buf, particle_bind_group) =
+        create_particle_buffer(device, &particle_layout, particle_capacity);
+    let particle_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+        label: Some("particle_shader"),
+        source: wgpu::ShaderSource::Wgsl(include_str!("shaders/particles.wgsl").into()),
+    });
+    let particle_pipeline_layout =
+        device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("particle_pipeline_layout"),
+            bind_group_layouts: &[Some(&camera_layout), Some(&particle_layout)],
+            immediate_size: 0,
+        });
+    let particle_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        label: Some("particle_pipeline"),
+        layout: Some(&particle_pipeline_layout),
+        vertex: wgpu::VertexState {
+            module: &particle_shader,
+            entry_point: Some("vs_main"),
+            buffers: &[],
+            compilation_options: Default::default(),
+        },
+        fragment: Some(wgpu::FragmentState {
+            module: &particle_shader,
+            entry_point: Some("fs_main"),
+            targets: &[Some(wgpu::ColorTargetState {
+                format: HDR_FORMAT,
+                blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                write_mask: wgpu::ColorWrites::ALL,
+            })],
+            compilation_options: Default::default(),
+        }),
+        primitive: wgpu::PrimitiveState {
+            topology: wgpu::PrimitiveTopology::TriangleList,
+            strip_index_format: None,
+            front_face: wgpu::FrontFace::Ccw,
+            cull_mode: None,
+            polygon_mode: wgpu::PolygonMode::Fill,
+            unclipped_depth: false,
+            conservative: false,
+        },
+        depth_stencil: Some(wgpu::DepthStencilState {
+            format: DEPTH_FORMAT,
+            depth_write_enabled: Some(false),
+            depth_compare: Some(wgpu::CompareFunction::Less),
             stencil: wgpu::StencilState::default(),
             bias: wgpu::DepthBiasState::default(),
         }),
@@ -1453,6 +1556,11 @@ pub(super) fn build(
         cascade_bind_groups,
         cascade_bufs,
         transparent_pipeline,
+        particle_pipeline,
+        particle_layout,
+        particle_buf,
+        particle_bind_group,
+        particle_capacity,
         tex_layout,
         tex_sampler,
         textures,

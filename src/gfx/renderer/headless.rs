@@ -189,6 +189,8 @@ impl Renderer {
             );
             // Translucides en dernier, comme dans `render()`.
             scene_draw_calls += self.draw_transparent_objects(&mut pass, app);
+            // Particules tout en dernier, comme dans `render()`.
+            scene_draw_calls += self.draw_particles(&mut pass);
         }
 
         // Cf. `render()` : `last_frame_draw_calls` sert de source unique à

@@ -199,6 +199,11 @@ impl Renderer {
             cascade_bind_groups,
             cascade_bufs,
             transparent_pipeline,
+            particle_pipeline,
+            particle_layout,
+            particle_buf,
+            particle_bind_group,
+            particle_capacity,
             tex_layout,
             tex_sampler,
             textures,
@@ -274,6 +279,12 @@ impl Renderer {
             shadow_size,
             transparent_pipeline,
             draw_plan_transparent: Vec::new(),
+            particle_pipeline,
+            particle_layout,
+            particle_buf,
+            particle_bind_group,
+            particle_capacity,
+            particle_scratch: Vec::new(),
             tex_layout,
             tex_sampler,
             textures,
@@ -367,5 +378,19 @@ impl Renderer {
             mapped_at_creation: false,
         });
         self.debug_capacity = cap;
+    }
+
+    /// Recrée `particle_buf`/`particle_bind_group` en doublant la capacité tant
+    /// qu'elle ne peut pas contenir `n` particules — même politique de
+    /// croissance que `ensure_debug_capacity`/`create_models_buffer`.
+    pub(super) fn ensure_particle_capacity(&mut self, n: usize) {
+        if n <= self.particle_capacity {
+            return;
+        }
+        let cap = n.next_power_of_two().max(64);
+        let (buf, bg) = pipelines::create_particle_buffer(&self.device, &self.particle_layout, cap);
+        self.particle_buf = buf;
+        self.particle_bind_group = bg;
+        self.particle_capacity = cap;
     }
 }

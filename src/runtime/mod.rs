@@ -1,4 +1,5 @@
 pub mod audio;
+pub mod particles;
 pub mod physics;
 pub mod rng;
 pub mod savegame;

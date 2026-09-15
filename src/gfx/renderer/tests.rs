@@ -392,3 +392,66 @@ fn the_embedded_mmorpg_scene_gives_the_player_its_own_joint_offset() {
         renderer.draw_plan_skinned.len()
     );
 }
+
+/// Sprint 132 : une particule vivante, brillante, plantée pile devant la
+/// caméra sur un fond sombre, doit apparaître à l'écran — preuve que le
+/// pipeline dédié (`particles.wgsl`, `particle_buf`) dessine réellement
+/// quelque chose plutôt que de compiler à vide. Passe par
+/// `render_scene_headless`, le même chemin que les golden tests.
+#[test]
+fn a_live_particle_lights_up_the_pixel_in_front_of_the_camera() {
+    let (width, height) = (64u32, 64u32);
+    let mut renderer = match pollster::block_on(Renderer::new_headless(width, height)) {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!(
+                "a_live_particle_lights_up_the_pixel_in_front_of_the_camera : \
+                 pas de GPU headless ({e}) — test sauté."
+            );
+            return;
+        }
+    };
+
+    let mut app = AppState::new();
+    // Scène vide (pas d'objet) : seul le fond (ciel sombre par défaut) doit
+    // se voir sans particule.
+    app.scene = crate::scene::Scene::default();
+    app.camera.target = glam::Vec3::ZERO;
+    app.camera.distance = 5.0;
+    app.camera.pitch = 0.0;
+    app.camera.yaw = 0.0;
+
+    let pixels_without = renderer.render_scene_headless(&mut app, width, height);
+    let center = (((height / 2) * width + width / 2) * 4) as usize;
+    let lum_without = pixels_without[center] as f32
+        + pixels_without[center + 1] as f32
+        + pixels_without[center + 2] as f32;
+
+    // Une particule blanche, large, juste devant la cible caméra (donc au
+    // centre de l'image, la caméra la regarde de face).
+    app.particles.spawn_burst(
+        glam::Vec3::ZERO,
+        1,
+        &crate::runtime::particles::ParticleEmitter {
+            speed_min: 0.0,
+            speed_max: 0.0,
+            size_min: 2.0,
+            size_max: 2.0,
+            color: [1.0, 1.0, 1.0],
+            start_alpha: 1.0,
+            lifetime_min: 10.0,
+            lifetime_max: 10.0,
+            ..Default::default()
+        },
+    );
+    let pixels_with = renderer.render_scene_headless(&mut app, width, height);
+    let lum_with = pixels_with[center] as f32
+        + pixels_with[center + 1] as f32
+        + pixels_with[center + 2] as f32;
+
+    assert!(
+        lum_with > lum_without + 100.0,
+        "le pixel central devrait s'éclaircir nettement avec une particule blanche \
+         juste devant la caméra (sans : {lum_without}, avec : {lum_with})"
+    );
+}

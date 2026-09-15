@@ -145,6 +145,7 @@ fn ensure_host_functions(lua: &mut Lua) -> LuaResult<()> {
         ("shake", host_shake),
         ("set_sky", host_set_sky),
         ("bone", host_bone),
+        ("particles", host_particles),
         ("spawn", host_spawn),
         ("add_item", host_add_item),
         ("find_tag", host_find_tag),
@@ -423,6 +424,30 @@ fn host_bone(state: &mut LuaState) -> LuaResult<u32> {
     let y = arg_f32(state, 2)?;
     let z = arg_f32(state, 3)?;
     crate::app::script_ctx::push_bone(name, Vec3::new(x, y, z));
+    Ok(0)
+}
+
+/// `particles(rate, dx, dy, dz, spread, speed, size, r, g, b)` — cf. la doc du
+/// pendant natif (`scripting::run_script`, Sprint 132).
+fn host_particles(state: &mut LuaState) -> LuaResult<u32> {
+    let rate = arg_f32(state, 0)?;
+    let dx = arg_f32(state, 1)?;
+    let dy = arg_f32(state, 2)?;
+    let dz = arg_f32(state, 3)?;
+    let spread = arg_f32(state, 4)?;
+    let speed = arg_f32(state, 5)?;
+    let size = arg_f32(state, 6)?;
+    let r = arg_f32(state, 7)?;
+    let g = arg_f32(state, 8)?;
+    let b = arg_f32(state, 9)?;
+    crate::app::script_ctx::push_particles(
+        rate,
+        Vec3::new(dx, dy, dz),
+        spread,
+        speed,
+        size,
+        [r, g, b],
+    );
     Ok(0)
 }
 
@@ -1868,6 +1893,24 @@ mod tests {
             assert_eq!(native, web);
             assert_eq!(native[0].0, "UpperArm.L");
             assert!((native[0].1 - Vec3::new(0.6, 0.8, 0.0)).length() < 1e-6);
+        }
+
+        #[test]
+        fn particles_pushes_the_same_emitter_on_both_backends() {
+            let src = "particles(30, 0, 1, 0, 0.4, 2.5, 0.1, 1, 0.8, 0.2)";
+            let mut t = Transform::from_pos(Vec3::ZERO);
+            let mut col = [1.0; 3];
+            crate::app::script_ctx::take_particle_request();
+            run_native(src, &mut t, &mut col);
+            let native = crate::app::script_ctx::take_particle_request().unwrap();
+            run_web(src, &mut t, &mut col);
+            let web = crate::app::script_ctx::take_particle_request().unwrap();
+            assert!(native.enabled);
+            assert_eq!(native.rate, web.rate);
+            assert_eq!(native.direction, web.direction);
+            assert_eq!(native.color, web.color);
+            assert!((native.rate - 30.0).abs() < 1e-6);
+            assert!((native.direction[1] - 1.0).abs() < 1e-6);
         }
 
         #[test]

@@ -1730,6 +1730,12 @@ impl AppState {
         self.perf.sim_scripts_ms = scripts_started.elapsed().as_secs_f32() * 1000.0;
         self.apply_script_outcomes(outcome);
 
+        // Particules (Sprint 132) : émetteurs posés sur des objets + rafales
+        // ponctuelles (couplage `wind()` ci-dessus, ou script `particles(...)`) —
+        // avancé en temps de simulation comme le reste de ce pas fixe, jamais en
+        // temps de rendu (cf. doc du sprint).
+        self.particles.update(dt, &self.scene);
+
         // Attaques à distance des créatures (cf. `creature_attack.rs`) : gèle
         // position/animation de celles en train de viser (annule le déplacement
         // que leur script de patrouille vient de calculer ci-dessus), et fait
@@ -2416,6 +2422,14 @@ impl AppState {
                 // Directions d'os poussées par `bone()` : remplacent le jeu précédent
                 // (vides si le script n'en a pas poussé ce pas — jamais d'override fantôme).
                 obj.bone_dirs = super::script_ctx::take_bones().into_iter().collect();
+                // Émetteur de particules posé par `particles(...)` (Sprint 132) :
+                // contrairement à `bone_dirs`, seulement remplacé si le script l'a
+                // appelé ce tick — un émetteur réglé dans l'inspecteur sur un objet
+                // par ailleurs scripté n'est jamais écrasé par un script muet sur
+                // les particules.
+                if let Some(em) = super::script_ctx::take_particle_request() {
+                    obj.particle_emitter = Some(em);
+                }
                 if destroy_requested {
                     obj.visible = false;
                     solid_changes.push((idx, false));
@@ -2514,6 +2528,14 @@ impl AppState {
                 // Directions d'os poussées par `bone()` : remplacent le jeu précédent
                 // (vides si le script n'en a pas poussé ce pas — jamais d'override fantôme).
                 obj.bone_dirs = super::script_ctx::take_bones().into_iter().collect();
+                // Émetteur de particules posé par `particles(...)` (Sprint 132) :
+                // contrairement à `bone_dirs`, seulement remplacé si le script l'a
+                // appelé ce tick — un émetteur réglé dans l'inspecteur sur un objet
+                // par ailleurs scripté n'est jamais écrasé par un script muet sur
+                // les particules.
+                if let Some(em) = super::script_ctx::take_particle_request() {
+                    obj.particle_emitter = Some(em);
+                }
                 // `obj:destroy()` : suppression douce, cf. sa doc dans
                 // `run_script` — jamais un retrait de `scene.objects`.
                 if destroy_requested {
@@ -2872,13 +2894,23 @@ impl AppState {
         // Zones de jeu (plateformer 2D) : `gravity(s)`, `wind(x)`, `slow(f, s)`,
         // `set_camera(h)`, `shake(f)`.
         let run_time = self.run_time;
+        // Couplage automatique vent → particules (Sprint 132) : `wind(x)` est un
+        // scalaire global (mode plateformer 2D, pas d'objet-zone), donc capturé ici
+        // puis consommé **après** la libération de `phys` ci-dessous (une rafale a
+        // besoin de `self.player_position()`, incompatible avec l'emprunt mutable de
+        // `self.physics` actif pendant la boucle `retain`). Zéro changement de script
+        // requis : tout appelant existant/futur de `wind(...)` (RageQuit, Méca) hérite
+        // de la traînée visuelle gratuitement — cf. rapport du sprint.
+        let mut wind_force: Option<f32> = None;
         if let Some(phys) = self.physics.as_mut() {
             events_out.retain(|e| {
                 if let Some(v) = super::script_ctx::parse_scalar_list(e, "gravity", 1) {
                     phys.gravity_scale = v[0].clamp(0.15, 3.0);
                     false
                 } else if let Some(v) = super::script_ctx::parse_scalar_list(e, "wind", 1) {
-                    phys.wind_x = v[0].clamp(-12.0, 12.0);
+                    let f = v[0].clamp(-12.0, 12.0);
+                    phys.wind_x = f;
+                    wind_force = Some(f);
                     false
                 } else if let Some(v) = super::script_ctx::parse_scalar_list(e, "slow", 2) {
                     phys.speed_scale = v[0].clamp(0.2, 2.0);
@@ -2892,6 +2924,36 @@ impl AppState {
                 phys.speed_scale = 1.0;
                 self.zone_slow_until = 0.0;
             }
+        }
+        // Rafale de traînées de vent (cf. commentaire ci-dessus) : rien tant que
+        // `wind()` n'a pas été rappelé ce tick, ou l'a été avec une force nulle
+        // (bannière éteinte entre deux rafales) — pas de joueur solo/local trouvé
+        // (mode headless sans joueur) ⇒ pas de position où faire naître les
+        // particules, silencieusement ignoré.
+        if let Some(force) = wind_force
+            && force.abs() > 0.01
+            && let Some(player_pos) = self.player_position()
+        {
+            let mag = force.abs();
+            let cfg = crate::runtime::particles::ParticleEmitter {
+                enabled: true,
+                rate: 0.0, // non utilisé par `spawn_burst`
+                lifetime_min: 0.25,
+                lifetime_max: 0.6,
+                speed_min: mag * 0.6,
+                speed_max: mag * 1.3,
+                direction: [force.signum(), 0.3, 0.0],
+                spread: 0.5,
+                size_min: 0.03,
+                size_max: 0.09,
+                color: [0.85, 0.92, 1.0],
+                start_alpha: 0.55,
+                gravity: 0.0,
+                drag: 0.5,
+            };
+            let count = (mag * 1.5).round().max(1.0) as u32;
+            self.particles
+                .spawn_burst(player_pos + Vec3::new(0.0, 0.4, 0.0), count, &cfg);
         }
         events_out.retain(|e| {
             if let Some(v) = super::script_ctx::parse_scalar_list(e, "camera", 1) {

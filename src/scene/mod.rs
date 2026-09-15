@@ -981,6 +981,14 @@ pub struct SceneObject {
     /// `Joint` ; construite à l'entrée en Play par `runtime::physics::Physics::build`.
     #[serde(default)]
     pub joint: Option<Joint>,
+    /// Émetteur de particules CPU (Sprint 132, billboards alpha-blend triés
+    /// par distance) : `None` pour la grande majorité des objets — même
+    /// logique que `water`/`audio`, rien ne change tant qu'il n'est pas posé
+    /// (inspecteur, section « Particules ») ou écrit par un script
+    /// (`particles(...)`, cf. `app::scripting`). Consommé chaque pas fixe par
+    /// `AppState::particles` (`runtime::particles::ParticlePool::update`).
+    #[serde(default)]
+    pub particle_emitter: Option<crate::runtime::particles::ParticleEmitter>,
 }
 
 /// Type d'articulation rapier reliant un objet à un autre (ou au monde).
@@ -1452,6 +1460,7 @@ impl Default for SceneObject {
             tag: String::new(),
             convoy: None,
             joint: None,
+            particle_emitter: None,
         }
     }
 }

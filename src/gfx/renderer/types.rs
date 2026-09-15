@@ -42,6 +42,16 @@ pub(crate) struct CameraUniform {
     /// caméra pivote). Inutilisé par les autres shaders (`main.wgsl`/`skinned.wgsl`/
     /// `gizmo.wgsl` ne déclarent qu'un préfixe de cet uniform, WGSL l'autorise).
     pub(super) inv_view_proj: [[f32; 4]; 4],
+    /// Vecteur « droite » de la caméra (monde), w libre — pour billboarder les
+    /// particules (`particles.wgsl`) sans reconstruire une base depuis
+    /// `inv_view_proj` dans le shader : `write_uniforms` le calcule une fois
+    /// par frame, exactement comme `OrbitCamera::pan`. Ajouté en fin de struct
+    /// (comme `eye`/`inv_view_proj` avant lui) : les shaders qui ne
+    /// déclarent qu'un préfixe de cet uniform (main/skinned/gizmo) ne sont
+    /// pas affectés, WGSL l'autorise.
+    pub(super) cam_right: [f32; 4],
+    /// Vecteur « haut » de la caméra (monde), w libre — cf. `cam_right`.
+    pub(super) cam_up: [f32; 4],
 }
 
 #[repr(C)]
@@ -55,6 +65,19 @@ pub(crate) struct ModelUniform {
     /// d'eau), y = vitesse, z = échelle, w = écume. Déclaré dans les trois
     /// shaders qui lisent `Model` (main/shadow/skinned) : même layout partout.
     pub(super) water: [f32; 4],
+}
+
+/// Une particule côté GPU (Sprint 132, `particles.wgsl`) : le quad est
+/// entièrement déplié dans le vertex shader depuis `center`/`size` et
+/// `CameraUniform::cam_right`/`cam_up` — aucune géométrie CPU par particule,
+/// juste ce petit enregistrement par instance dans `particle_buf`.
+#[repr(C)]
+#[derive(Copy, Clone, Pod, Zeroable)]
+pub(crate) struct ParticleInstance {
+    pub(super) center: [f32; 3],
+    pub(super) size: f32,
+    /// rgba, `a` déjà l'estompage par âge (`Particle::current_alpha`).
+    pub(super) color: [f32; 4],
 }
 
 /// Une lumière ponctuelle côté GPU (std140 : deux vec4).
@@ -427,6 +450,19 @@ pub struct Renderer {
     pub(super) transparent_pipeline: wgpu::RenderPipeline,
     /// Objets translucides de la frame, déjà triés du plus loin au plus près.
     pub(super) draw_plan_transparent: Vec<TransparentDraw>,
+
+    // --- particules (Sprint 132) : billboards toujours face caméra, dépliés
+    //     dans le vertex shader depuis `particle_buf` (aucune géométrie CPU),
+    //     mélange alpha, pas d'écriture de profondeur, triés du plus loin au
+    //     plus près comme `draw_plan_transparent` — cf. `draw_particles`. ---
+    pub(super) particle_pipeline: wgpu::RenderPipeline,
+    pub(super) particle_layout: wgpu::BindGroupLayout,
+    pub(super) particle_buf: wgpu::Buffer,
+    pub(super) particle_bind_group: wgpu::BindGroup,
+    pub(super) particle_capacity: usize,
+    /// Instances triées de la frame, prêtes à uploader (`sync.rs`) — tampon
+    /// réutilisé pour éviter une allocation par frame, comme `models_scratch`.
+    pub(super) particle_scratch: Vec<ParticleInstance>,
 
     // --- textures (groupe 3) ---
     pub(super) tex_layout: wgpu::BindGroupLayout,
