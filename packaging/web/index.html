@@ -54,12 +54,24 @@
         background: rgba(18, 20, 26, .55); color: #e6e8e3; font-size: 16px; cursor: pointer; display: none; }
       #fs:hover, #fs:focus-visible { background: rgba(232, 118, 59, .8); outline: none; }
       body.running #fs { display: block; }
-      @media (prefers-reduced-motion: reduce) { #boot, #fill { transition: none; } }
+      /* Bandeau discret "onglet inactif" PENDANT UNE PARTIE DÉJÀ LANCÉE — le
+         chargement initial reste géré par #boot seul (visibilitychange plus bas
+         ne l'affiche que si body.running). Pas de blocage : pointer-events:none
+         comme #boot.hidden, le jeu reste visible et jouable au retour. */
+      #bg-pause { position: fixed; top: max(10px, env(safe-area-inset-top)); left: 50%;
+        transform: translateX(-50%); z-index: 10; display: flex; align-items: center;
+        gap: 8px; padding: 8px 16px; max-width: min(420px, 86vw); text-align: center;
+        background: rgba(18, 20, 26, .9); border-left: 4px solid #e8763b; border-radius: 6px;
+        color: #e6e8e3; font-size: 13.5px; opacity: 0; pointer-events: none;
+        transition: opacity .35s ease; }
+      #bg-pause.shown { opacity: 1; }
+      @media (prefers-reduced-motion: reduce) { #boot, #fill, #bg-pause { transition: none; } }
     </style>
   </head>
   <body>
     <canvas id="rustee-canvas" tabindex="0" aria-label="Zone de jeu RusteeGear"></canvas>
     <button id="fs" type="button" title="Plein écran">⛶</button>
+    <div id="bg-pause" role="status" aria-live="polite">⏸ Jeu en pause — onglet inactif</div>
     <div id="boot" role="status" aria-live="polite">
       <div class="logo">🦀 Rustee<span>Gear</span></div>
       <p class="sub">Démo multijoueur, directement dans le navigateur</p>
@@ -107,6 +119,7 @@
       const boot = $("boot");
       const statusEl = $("status");
       const fill = $("fill");
+      const bgPause = $("bg-pause");
       let failed = false;
 
       function setStatus(text) { statusEl.textContent = text; }
@@ -122,6 +135,7 @@
         if (failed) return;
         failed = true;
         showBoot();
+        bgPauseHide();
         boot.classList.add("failed");
         if (retryable) boot.classList.add("stalled");
         $("err-title").textContent = title;
@@ -235,8 +249,42 @@
           if ("wakeLock" in navigator) wakeLock = await navigator.wakeLock.request("screen");
         } catch (_) { /* refusé ou non supporté : sans conséquence */ }
       }
+      // Bandeau "en pause" (#bg-pause) : deux délais pour rester lisible sans
+      // clignoter sur un aller-retour d'onglet insignifiant (mesuré : sans
+      // eux, un survol de 120ms flashe le bandeau, et il retombe à opacité 0
+      // ~350ms après le retour — quasi illisible au moment où il sert le plus).
+      const BG_PAUSE_SHOW_DELAY_MS = 500; // onglet caché depuis au moins ça avant d'afficher
+      const BG_PAUSE_MIN_HOLD_MS = 1200; // durée minimale affichée une fois montré
+      let bgPauseShowTimer = null;
+      let bgPauseShownAt = 0;
+      function bgPauseHide() {
+        clearTimeout(bgPauseShowTimer);
+        bgPauseShowTimer = null;
+        bgPause.classList.remove("shown");
+      }
       document.addEventListener("visibilitychange", () => {
-        if (document.visibilityState === "visible" && wakeLock === null) keepScreenOn();
+        if (document.visibilityState === "visible") {
+          if (wakeLock === null) keepScreenOn();
+          clearTimeout(bgPauseShowTimer);
+          bgPauseShowTimer = null;
+          if (bgPause.classList.contains("shown")) {
+            // Déjà affiché : garde-le au moins BG_PAUSE_MIN_HOLD_MS depuis son
+            // apparition, pour laisser au joueur le temps de le lire au retour.
+            const remaining = BG_PAUSE_MIN_HOLD_MS - (performance.now() - bgPauseShownAt);
+            if (remaining > 0) setTimeout(bgPauseHide, remaining);
+            else bgPauseHide();
+          }
+        } else if (!failed && document.body.classList.contains("running")) {
+          // Uniquement pendant une partie déjà lancée (classe posée par reveal()) :
+          // au chargement initial #boot suffit, pas de doublon de message.
+          // Débounce : un aller-retour d'onglet plus bref que le délai ne doit
+          // jamais afficher le bandeau (annulé si visible revient avant).
+          bgPauseShowTimer = setTimeout(() => {
+            bgPauseShowTimer = null;
+            bgPauseShownAt = performance.now();
+            bgPause.classList.add("shown");
+          }, BG_PAUSE_SHOW_DELAY_MS);
+        }
       });
 
       async function main() {
