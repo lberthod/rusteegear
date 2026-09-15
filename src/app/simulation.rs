@@ -1590,6 +1590,7 @@ impl AppState {
                         && c.max_hp > 0
                     {
                         c.hp = c.max_hp;
+                        c.ranged_dmg_carry = 0.0;
                     }
                 }
                 false

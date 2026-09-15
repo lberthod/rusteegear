@@ -66,6 +66,14 @@ pub type PlayerId = u32;
 /// serveur plus récent. `0`/`1`/`2` restent Assaut/Éclaireur/Soutien —
 /// jamais renumérotés (référencés en dur dans `Settings::player_class` local
 /// et `Lobby::classes` côté serveur).
+/// Toujours v9 (15 septembre 2026, GDD §8.1, **sans nouveau bump**) :
+/// `PlayerClass` gagne `Sniper` (Givre, `class: u8` = 5) — même principe
+/// purement additif que Tank/Berserker ci-dessus, sur les mêmes champs
+/// `u8`/`Option<u8>` bruts : aucun nouveau champ, aucun variant réordonné.
+/// `0`/`1`/`2`/`3`/`4` restent Assaut/Éclaireur/Soutien/Cendre/Brasier —
+/// jamais renumérotés. Le fallback de `PlayerClass::from_u8` vers Assaut pour
+/// toute valeur ≥ 6 (déjà en place) protège la compatibilité descendante d'un
+/// ancien client face à un serveur plus récent.
 pub const PROTOCOL_VERSION: u32 = 9;
 
 /// Code de salon utilisé quand `ClientMsg::Join::lobby` est vide — tous les

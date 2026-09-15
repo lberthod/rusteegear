@@ -513,6 +513,17 @@ pub struct Combat {
     /// source d'authoring des PV.
     #[serde(skip)]
     pub max_hp: u32,
+    /// Report de dégât fractionnaire (PvE, `resolve_fireball_hit`) pour un
+    /// `ranged_damage_mult` > 1,0 (Givre, GDD §8.1, 15 septembre 2026) : la
+    /// fraction de dégât qu'un coup n'a pas pu appliquer (dégât entier) est
+    /// reportée sur le coup suivant plutôt que perdue par un simple
+    /// arrondi/troncature — sans quoi arrondir chaque coup individuellement
+    /// amplifierait le multiplicateur (`round(1 × 1,5)` vaudrait 2 à CHAQUE
+    /// coup, un doublement, pas les +50 % prévus). Champ d'exécution, comme
+    /// `max_hp` : jamais sérialisé, remis à 0 au respawn (cf.
+    /// `AppState::process_respawns`).
+    #[serde(skip)]
+    pub ranged_dmg_carry: f32,
 }
 
 // Manuel comme `Controller`/`AiChaser` : `derive(Default)` donnerait hp=0 (cible déjà
@@ -526,6 +537,7 @@ impl Default for Combat {
             wave: 0,
             hp: default_combat_hp(),
             max_hp: 0,
+            ranged_dmg_carry: 0.0,
         }
     }
 }

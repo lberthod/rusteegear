@@ -386,6 +386,7 @@ pub fn class_description(
         (Locale::Fr, C::Berserker) => {
             "Brasier : dégâts de contact ×1,4, attaque plus rapide, bouclier inutilisable"
         }
+        (Locale::Fr, C::Sniper) => "Givre : dégâts à distance +50 %, portée +25 %, PV max −35 %",
         (Locale::En, C::Assault) => "Assault: balanced — three ranged weapons, normal melee",
         (Locale::En, C::Scout) => "Scout: speed +25%, jump +30%, max HP −30%",
         (Locale::En, C::Support) => {
@@ -397,6 +398,7 @@ pub fn class_description(
         (Locale::En, C::Berserker) => {
             "Berserker: melee damage ×1.4, faster attacks, shield unusable"
         }
+        (Locale::En, C::Sniper) => "Frost: ranged damage +50%, +25% range, max HP −35%",
     }
 }
 

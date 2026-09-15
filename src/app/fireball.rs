@@ -17,6 +17,7 @@
 use glam::Vec3;
 
 use super::AppState;
+use super::multiplayer::PlayerClass;
 use crate::net::protocol::{DeathCauseKind, GameEvent, PlayerId};
 use crate::runtime::physics::PhysicsKind;
 
@@ -253,11 +254,21 @@ impl AppState {
         // `(-sin yaw, 0, -cos yaw)`) — le projectile part là où le joueur regarde.
         let dir = Vec3::new(-yaw.sin(), 0.0, -yaw.cos());
         let pos = o.transform.position + dir * SPAWN_AHEAD + Vec3::Y * SPAWN_UP;
+        // Portée de précision de Givre (GDD §8.1, `PlayerClass::
+        // ranged_lifetime_mult`) : +25 % de durée de vie, donc de portée
+        // effective — appliquée ici, au seul point de départ d'un projectile,
+        // jamais côté client. Un tireur non réseau (joueur local solo) n'a
+        // pas de classe connue, reste à ×1,0 (même garde que
+        // `resolve_fireball_hit` pour `ranged_damage_mult`).
+        let lifetime_mult = self
+            .network_player_id_at(owner)
+            .and_then(|id| self.network_player_class(id))
+            .map_or(1.0, |class| class.ranged_lifetime_mult());
         self.projectiles.fireballs.push(Fireball {
             owner,
             pos,
             dir,
-            remaining: w.lifetime,
+            remaining: w.lifetime * lifetime_mult,
             weapon,
         });
         self.projectiles
@@ -353,6 +364,55 @@ impl AppState {
         None
     }
 
+    /// Applique `ranged_damage_mult` au dégât PvE d'un tir sur la cible
+    /// `target` (GDD §8.1). Pour un multiplicateur ≤ 1,0 (Soutien ×0,70,
+    /// Cendre ×0,80, Brasier ×0,60), comportement historique inchangé :
+    /// `round().max(1.0)` — le minimum de 1 évite qu'un arrondi vers le bas
+    /// ne rende un tir totalement inoffensif contre une cible à 1 PV, et cet
+    /// équilibrage (DPS/TTK PvP) a déjà été validé sur ce calcul.
+    ///
+    /// Pour un multiplicateur > 1,0 (seul Givre aujourd'hui, ×1,50, ajouté le
+    /// 15 septembre 2026), `round()` par coup AMPLIFIE le multiplicateur sur
+    /// un petit dégât entier : Boule de feu/Éclair (`RANGED_WEAPONS`,
+    /// dégât de base 1) donnent `round(1,0 × 1,5) = 2` à CHAQUE coup — un
+    /// doublement, pas les +50 % prévus (Boulet, dégât de base 3, donne
+    /// `round(4,5) = 5`, soit +67 %, même symptôme). Le calcul de
+    /// design (DPS/TTK) a été validé sur `resolve_pvp_ranged_hit`, qui
+    /// applique le multiplicateur à une vie **flottante** continue — jamais
+    /// vérifié contre le chemin PvE, en dégât **entier**.
+    ///
+    /// On reporte donc la fraction non appliquée d'un coup sur le suivant,
+    /// via `Combat::ranged_dmg_carry` (porté par la cible, comme `max_hp`) :
+    /// sur une série de coups, le total appliqué converge vers
+    /// `base × mult` plutôt que vers `round(base × mult)` répété. Exemple
+    /// (Boule de feu, mult 1,50) : coups 1,2,3,4 → 1,2,1,2 dégâts (moyenne
+    /// 1,5, exact) au lieu de 2,2,2,2 (moyenne 2,0, le bug). Cf.
+    /// `sniper_pve_dps_matches_one_point_five_not_two_ratio` pour la
+    /// non-régression contre le bestiaire réel de `riviere_demo`.
+    fn apply_ranged_damage_mult_pve(&mut self, target: usize, damage: u32, class: PlayerClass) -> u32 {
+        let mult = class.ranged_damage_mult();
+        if mult <= 1.0 {
+            return ((damage as f32) * mult).round().max(1.0) as u32;
+        }
+        let carry = self
+            .scene
+            .objects
+            .get(target)
+            .and_then(|o| o.combat.as_ref())
+            .map_or(0.0, |c| c.ranged_dmg_carry);
+        let total = (damage as f32) * mult + carry;
+        let applied = total.floor().max(1.0);
+        if let Some(c) = self
+            .scene
+            .objects
+            .get_mut(target)
+            .and_then(|o| o.combat.as_mut())
+        {
+            c.ranged_dmg_carry = total - applied;
+        }
+        applied as u32
+    }
+
     /// Résout l'impact sur le monstre `i` : dégâts de l'arme, score, frag
     /// individualisé si le tireur est un joueur réseau (`owner`, brique de
     /// progression pour un futur MMORPG), son, flash, respawn, et évènement
@@ -360,19 +420,19 @@ impl AppState {
     /// cf. `take_net_events` — les clients y réagissent une fois, son + flash,
     /// sans attendre le prochain `Snapshot`).
     fn resolve_fireball_hit(&mut self, i: usize, at: Vec3, damage: u32, owner: usize) {
-        // Dégâts infligés −30 % pour le Soutien (GDD §8.1) : appliqué ici,
+        // Dégâts infligés modulés par la classe (GDD §8.1) : appliqué ici,
         // au point de résolution unique des tirs, jamais côté client — un
         // tireur non réseau (joueur local solo) n'a pas de classe connue,
         // `ranged_damage_mult` ne s'applique donc qu'aux joueurs réseau.
-        // Le minimum de 1 évite qu'un arrondi vers le bas ne rende un tir
-        // Soutien totalement inoffensif contre une cible à 1 PV.
+        // Cf. `apply_ranged_damage_mult_pve` pour pourquoi un multiplicateur
+        // > 1,0 (Givre) ne peut pas réutiliser le simple `round().max(1.0)`
+        // historique (Soutien/Cendre/Brasier, tous ≤ 1,0) sans amplifier le
+        // dégât au-delà du ratio de design prévu.
         let shooter_id = self.network_player_id_at(owner);
         let damage = shooter_id
             .and_then(|id| self.network_player_class(id))
             .map_or(damage, |class| {
-                ((damage as f32) * class.ranged_damage_mult())
-                    .round()
-                    .max(1.0) as u32
+                self.apply_ranged_damage_mult_pve(i, damage, class)
             });
         // Contribution de dégâts (GDD §8.3, assists) : enregistrée avant de
         // savoir si ce coup achève la cible — un tir qui blesse sans tuer est
@@ -416,16 +476,29 @@ impl AppState {
     /// damage`) : converti en fraction de `health::MAX_HEALTH` via
     /// `PVP_RANGED_DAMAGE_PER_HP` pour rester sur la même échelle que
     /// `network_health`, sans dupliquer une table par arme.
+    ///
+    /// `ranged_damage_mult` du tireur appliqué ici (15 septembre 2026, GDD
+    /// §8.1, ajout de Givre) — jusqu'ici seul `resolve_fireball_hit` (PvE)
+    /// l'appliquait : un bonus/malus de dégâts à distance restait invisible
+    /// en PvP, asymétrie comparable à `melee_damage_mult`/`attack_cooldown_mult`
+    /// dans `update_network_attacks`, dont ce correctif reprend exactement le
+    /// pattern (multiplicateur appliqué directement au flottant, pas de
+    /// passage par un `u32` arrondi côté PvP — pas d'arrondi parasite à
+    /// introduire sur cette échelle déjà fractionnaire).
     fn resolve_pvp_ranged_hit(&mut self, id: PlayerId, damage: u32, owner: usize) {
         const PVP_RANGED_DAMAGE_PER_HP: f32 = 0.06;
         self.fx.attack_flash = 1.0;
+        let shooter_id = self.network_player_id_at(owner);
+        let ranged_mult = shooter_id
+            .and_then(|sid| self.network_player_class(sid))
+            .map_or(1.0, |class| class.ranged_damage_mult());
         let died = self.apply_network_damage(
             id,
-            damage as f32 * PVP_RANGED_DAMAGE_PER_HP,
+            damage as f32 * PVP_RANGED_DAMAGE_PER_HP * ranged_mult,
             DeathCauseKind::Player,
             owner,
         );
-        if died && let Some(shooter) = self.network_player_id_at(owner) {
+        if died && let Some(shooter) = shooter_id {
             self.credit_kill(shooter);
         }
     }
@@ -915,6 +988,266 @@ mod tests {
             support_hp > assault_hp,
             "un Boulet de Soutien doit laisser plus de PV à la cible qu'un Boulet d'Assaut : \
              {support_hp} <= {assault_hp}"
+        );
+    }
+
+    /// GDD_MMORPG.md §8.1 (15 septembre 2026) : Givre, seule classe à
+    /// dépasser ×1,0 en `ranged_damage_mult` (×1,50) — un Boulet tiré par
+    /// Givre doit infliger strictement plus qu'un Boulet tiré par un Assaut
+    /// sur la même cible à PV multiples. Même structure que
+    /// `support_class_deals_less_ranged_damage_than_assault`.
+    #[test]
+    fn sniper_class_deals_more_ranged_damage_than_assault() {
+        let boulet: NetworkInput = NetworkInput {
+            fire: true,
+            weapon: 2, // « Boulet », 3 dégâts de base (cf. RANGED_WEAPONS)
+            ..net_input()
+        };
+
+        let mut assault_app = app_with(scene_with_monster_ahead(false));
+        assault_app.hide_local_player_template();
+        assault_app.scene.objects[MONSTER]
+            .combat
+            .as_mut()
+            .unwrap()
+            .hp = 10;
+        let index = assault_app
+            .spawn_network_player(1, PlayerClass::Assault)
+            .unwrap();
+        let shooter_pos = assault_app.scene.objects[index].transform.position;
+        assault_app.scene.objects[MONSTER].transform.position =
+            Vec3::new(shooter_pos.x, shooter_pos.y, shooter_pos.z - 6.0);
+        assault_app.set_network_input(1, boulet);
+        advance(&mut assault_app, 40, 0.05);
+        let assault_hp = assault_app.scene.objects[MONSTER]
+            .combat
+            .as_ref()
+            .unwrap()
+            .hp;
+
+        let mut sniper_app = app_with(scene_with_monster_ahead(false));
+        sniper_app.hide_local_player_template();
+        sniper_app.scene.objects[MONSTER].combat.as_mut().unwrap().hp = 10;
+        let index = sniper_app
+            .spawn_network_player(1, PlayerClass::Sniper)
+            .unwrap();
+        let shooter_pos = sniper_app.scene.objects[index].transform.position;
+        sniper_app.scene.objects[MONSTER].transform.position =
+            Vec3::new(shooter_pos.x, shooter_pos.y, shooter_pos.z - 6.0);
+        sniper_app.set_network_input(1, boulet);
+        advance(&mut sniper_app, 40, 0.05);
+        let sniper_hp = sniper_app.scene.objects[MONSTER]
+            .combat
+            .as_ref()
+            .unwrap()
+            .hp;
+
+        assert!(
+            sniper_hp < assault_hp,
+            "un Boulet de Givre doit laisser moins de PV à la cible qu'un Boulet d'Assaut : \
+             {sniper_hp} >= {assault_hp}"
+        );
+    }
+
+    /// Non-régression (15 septembre 2026) : bug d'arrondi corrigé dans
+    /// `apply_ranged_damage_mult_pve` — un `round()` par coup sur le dégât
+    /// PvE entier amplifiait le ×1,50 de Givre en ×2,0 pour une arme à 1
+    /// dégât de base (Boule de feu/Éclair, `RANGED_WEAPONS`), car
+    /// `round(1,0 × 1,5)` vaut 2 à CHAQUE coup, pas seulement en moyenne.
+    /// Ce test tire la même arme (Boule de feu) le même nombre de fois avec
+    /// un Assaut (mult ×1,0) et un Givre (mult ×1,50) sur un monstre à PV
+    /// multiples (jamais achevé, `hp` volontairement très élevé) et vérifie
+    /// que le ratio de dégât total réel reste proche de ×1,5 — pas ×2,0, le
+    /// bug (cf. bestiaire réel de `riviere_demo::monster_roster`, PV 2 à 6 et
+    /// boss à 60, tous à mêlée seule : rien n'y punit la fragilité de Givre,
+    /// donc ce ratio de DPS doit rester fidèle au ×1,5 validé par le calcul
+    /// de design, pas dériver vers ×2,0).
+    #[test]
+    fn sniper_pve_dps_matches_one_point_five_not_two_ratio() {
+        let boule_de_feu: NetworkInput = NetworkInput {
+            fire: true,
+            weapon: 0, // « Boule de feu », 1 dégât de base (cf. RANGED_WEAPONS)
+            ..net_input()
+        };
+        const HIGH_HP: u32 = 1_000_000;
+
+        let mut assault_app = app_with(scene_with_monster_ahead(false));
+        assault_app.hide_local_player_template();
+        assault_app.scene.objects[MONSTER]
+            .combat
+            .as_mut()
+            .unwrap()
+            .hp = HIGH_HP;
+        let index = assault_app
+            .spawn_network_player(1, PlayerClass::Assault)
+            .unwrap();
+        let shooter_pos = assault_app.scene.objects[index].transform.position;
+        assault_app.scene.objects[MONSTER].transform.position =
+            Vec3::new(shooter_pos.x, shooter_pos.y, shooter_pos.z - 6.0);
+        assault_app.set_network_input(1, boule_de_feu);
+        advance(&mut assault_app, 300, 0.05);
+        let assault_damage = HIGH_HP
+            - assault_app.scene.objects[MONSTER]
+                .combat
+                .as_ref()
+                .unwrap()
+                .hp;
+
+        let mut sniper_app = app_with(scene_with_monster_ahead(false));
+        sniper_app.hide_local_player_template();
+        sniper_app.scene.objects[MONSTER].combat.as_mut().unwrap().hp = HIGH_HP;
+        let index = sniper_app
+            .spawn_network_player(1, PlayerClass::Sniper)
+            .unwrap();
+        let shooter_pos = sniper_app.scene.objects[index].transform.position;
+        sniper_app.scene.objects[MONSTER].transform.position =
+            Vec3::new(shooter_pos.x, shooter_pos.y, shooter_pos.z - 6.0);
+        sniper_app.set_network_input(1, boule_de_feu);
+        advance(&mut sniper_app, 300, 0.05);
+        let sniper_damage = HIGH_HP
+            - sniper_app.scene.objects[MONSTER]
+                .combat
+                .as_ref()
+                .unwrap()
+                .hp;
+
+        assert!(
+            assault_damage >= 5,
+            "l'Assaut doit avoir tiré plusieurs fois pour que le ratio soit mesurable : \
+             {assault_damage} dégât(s) total(-aux)"
+        );
+        let ratio = sniper_damage as f32 / assault_damage as f32;
+        assert!(
+            (1.4..=1.6).contains(&ratio),
+            "le ratio de dégât PvE réel de Givre doit rester proche de ×1,5 (pas ×2,0, le bug \
+             d'arrondi corrigé) : {sniper_damage}/{assault_damage} = {ratio}"
+        );
+    }
+
+    /// Non-régression (15 septembre 2026, ajout de Givre) : `resolve_pvp_ranged_hit`
+    /// n'appliquait jusqu'ici aucun `ranged_damage_mult` — un projectile tiré
+    /// par Givre contre un autre joueur doit désormais infliger plus de
+    /// dégâts qu'un même projectile tiré par un Assaut, exactement comme en
+    /// PvE (`sniper_class_deals_more_ranged_damage_than_assault` ci-dessus).
+    #[test]
+    fn ranged_damage_mult_applies_to_pvp_hits_too() {
+        let mut scene = crate::scene::Scene {
+            ability_bar: true,
+            ..Default::default()
+        };
+        scene.objects.push(crate::scene::SceneObject {
+            name: "Sol".into(),
+            mesh: crate::scene::MeshKind::Plane,
+            transform: crate::scene::Transform::from_pos(Vec3::ZERO)
+                .with_scale(Vec3::new(40.0, 1.0, 40.0)),
+            physics: PhysicsKind::Static,
+            ..Default::default()
+        });
+        scene.objects.push(crate::scene::SceneObject {
+            name: "Joueur".into(),
+            mesh: crate::scene::MeshKind::Capsule,
+            transform: Transform::from_pos(Vec3::new(0.0, 1.0, 0.0)),
+            controller: Some(Controller {
+                input: true,
+                ..Default::default()
+            }),
+            ..Default::default()
+        });
+
+        let fire_east: NetworkInput = NetworkInput {
+            fire: true,
+            aim_yaw: -std::f32::consts::FRAC_PI_2,
+            ..net_input()
+        };
+
+        let mut assault_app = AppState::new();
+        assault_app.scene = scene.clone();
+        assault_app.playing = true;
+        let attacker = assault_app
+            .spawn_network_player(1, PlayerClass::Assault)
+            .unwrap();
+        let target = assault_app
+            .spawn_network_player(2, PlayerClass::Assault)
+            .unwrap();
+        assault_app.scene.objects[target].transform.position =
+            assault_app.scene.objects[attacker].transform.position + Vec3::new(6.0, 0.0, 0.0);
+        assault_app.network.network_spawn_grace.insert(2, 0.0);
+        assault_app.set_network_input(1, fire_east);
+        advance(&mut assault_app, 40, 0.05);
+        let assault_lost =
+            crate::app::health::MAX_HEALTH - assault_app.network_player_health(2).unwrap();
+
+        let mut sniper_app = AppState::new();
+        sniper_app.scene = scene;
+        sniper_app.playing = true;
+        let attacker = sniper_app
+            .spawn_network_player(1, PlayerClass::Sniper)
+            .unwrap();
+        let target = sniper_app
+            .spawn_network_player(2, PlayerClass::Assault)
+            .unwrap();
+        sniper_app.scene.objects[target].transform.position =
+            sniper_app.scene.objects[attacker].transform.position + Vec3::new(6.0, 0.0, 0.0);
+        sniper_app.network.network_spawn_grace.insert(2, 0.0);
+        sniper_app.set_network_input(1, fire_east);
+        advance(&mut sniper_app, 40, 0.05);
+        let sniper_lost =
+            crate::app::health::MAX_HEALTH - sniper_app.network_player_health(2).unwrap();
+
+        assert!(
+            sniper_lost > assault_lost,
+            "un tir PvP de Givre doit infliger plus de dégâts qu'un tir d'Assaut : \
+             {sniper_lost} <= {assault_lost} — ranged_damage_mult doit s'appliquer en PvP"
+        );
+    }
+
+    /// GDD §8.1 : « portée de précision » de Givre (+25 % de durée de vie,
+    /// donc de portée) — un projectile tiré par Givre doit rester en vol plus
+    /// de ticks qu'un même projectile tiré par un Assaut, la cible étant
+    /// rendue inoffensive (`combat = None`) pour ne mesurer que la durée de
+    /// vie naturelle, jamais un impact.
+    #[test]
+    fn sniper_class_fireballs_fly_further() {
+        fn ticks_alive(class: PlayerClass) -> usize {
+            let mut app = app_with(scene_with_monster_ahead(false));
+            app.hide_local_player_template();
+            // Neutralise le monstre : ni `attackable` ni solide, il ne peut
+            // plus intercepter le projectile (cf. `fireball_impact`) — seule
+            // la durée de vie doit décider de la fin du vol.
+            app.scene.objects[MONSTER].combat = None;
+            app.spawn_network_player(1, class).unwrap();
+            app.set_network_input(
+                1,
+                NetworkInput {
+                    fire: true,
+                    ..net_input()
+                },
+            );
+            // Une seule frame de tir : le reste du temps, la recharge (0,9 s)
+            // dépasse largement la durée de vie du projectile (≤ 1,875 s),
+            // aucun second tir ne part avant que le premier ne s'éteigne.
+            advance(&mut app, 1, 0.02);
+            app.set_network_input(
+                1,
+                NetworkInput {
+                    fire: false,
+                    ..net_input()
+                },
+            );
+            let mut ticks = 0;
+            while !app.projectiles.fireballs.is_empty() && ticks < 200 {
+                advance(&mut app, 1, 0.05);
+                ticks += 1;
+            }
+            ticks
+        }
+
+        let assault_ticks = ticks_alive(PlayerClass::Assault);
+        let sniper_ticks = ticks_alive(PlayerClass::Sniper);
+        assert!(
+            sniper_ticks > assault_ticks,
+            "le projectile de Givre doit voler plus longtemps que celui d'un Assaut : \
+             {sniper_ticks} <= {assault_ticks}"
         );
     }
 

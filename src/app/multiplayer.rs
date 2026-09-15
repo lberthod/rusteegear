@@ -95,6 +95,16 @@ pub enum PlayerClass {
     /// (`block_damage_mult` 1.0, tenir la capacité 2 ne réduit aucun dégât) :
     /// le duelliste au contact, fragile mais dévastateur.
     Berserker,
+    /// Givre (15 septembre 2026, GDD §8.1) : le troisième état du feu, celui
+    /// qui attend — à l'opposé exact de Brasier. Première et seule classe à
+    /// dépasser ×1,0 en `ranged_damage_mult` (×1,50), payé par les PV max les
+    /// plus bas du roster (−35 %, en dessous même de l'Éclaireur) et une
+    /// mêlée quasi inutilisable (`melee_damage_mult` 0,50) — ni la vitesse
+    /// pour fuir ni la force pour se défendre au contact. Règle spéciale :
+    /// portée de tir étendue (`ranged_lifetime_mult` ×1,25), pour engager en
+    /// premier et kiter plutôt qu'un second multiplicateur de dégâts — cf.
+    /// le calcul DPS/TTK détaillé sur `ranged_damage_mult` ci-dessous.
+    Sniper,
 }
 
 /// Teinte déterministe par joueur (kit multi-couleur, roadmap 14 septembre
@@ -146,6 +156,7 @@ impl PlayerClass {
             2 => PlayerClass::Support,
             3 => PlayerClass::Tank,
             4 => PlayerClass::Berserker,
+            5 => PlayerClass::Sniper,
             _ => PlayerClass::Assault,
         }
     }
@@ -164,6 +175,8 @@ impl PlayerClass {
             PlayerClass::Tank => [0.70, 0.76, 0.90],
             // Brasier : rouge-orangé profond, le feu qui s'emballe.
             PlayerClass::Berserker => [1.0, 0.42, 0.22],
+            // Givre : bleu-blanc givré, le feu qui attend.
+            PlayerClass::Sniper => [0.75, 0.90, 1.0],
         }
     }
 
@@ -180,6 +193,8 @@ impl PlayerClass {
             PlayerClass::Tank => 1.15,
             // Brasier : plus fin, tout en vitesse.
             PlayerClass::Berserker => 0.95,
+            // Givre : élancé, précis.
+            PlayerClass::Sniper => 0.92,
         }
     }
 
@@ -191,6 +206,7 @@ impl PlayerClass {
             PlayerClass::Support => 0.85,
             PlayerClass::Tank => 0.75,
             PlayerClass::Berserker => 1.10,
+            PlayerClass::Sniper => 1.0,
         }
     }
 
@@ -199,7 +215,10 @@ impl PlayerClass {
     /// déplacement, +25 %).
     fn jump_height_mult(self) -> f32 {
         match self {
-            PlayerClass::Assault | PlayerClass::Support | PlayerClass::Berserker => 1.0,
+            PlayerClass::Assault
+            | PlayerClass::Support
+            | PlayerClass::Berserker
+            | PlayerClass::Sniper => 1.0,
             PlayerClass::Scout => 1.30,
             PlayerClass::Tank => 0.85,
         }
@@ -213,21 +232,67 @@ impl PlayerClass {
             PlayerClass::Support => 1.0,
             PlayerClass::Tank => 1.60,
             PlayerClass::Berserker => 0.75,
+            // Givre : les PV les plus bas du roster (glass cannon), aucune
+            // compensation de vitesse contrairement à l'Éclaireur (0,70).
+            PlayerClass::Sniper => 0.65,
         }
     }
 
     /// Multiplicateur des dégâts infligés (armes à distance, cf.
-    /// `fireball::resolve_fireball_hit`) — le Soutien tape moins fort, en
-    /// échange de son soin renforcé et de sa réanimation exclusive ; Cendre et
-    /// Brasier sont tous deux pénalisés à distance (14 septembre 2026 au
-    /// soir, GDD §8.1) pour forcer l'engagement au contact, où leur identité
-    /// respective (encaisser / cogner) se joue vraiment.
+    /// `fireball::resolve_fireball_hit` **et** `fireball::resolve_pvp_ranged_hit`
+    /// — appliqué aux deux depuis le 15 septembre 2026, cf. la doc de ce
+    /// dernier pour l'asymétrie PvE/PvP que cet ajout a corrigée) — le
+    /// Soutien tape moins fort, en échange de son soin renforcé et de sa
+    /// réanimation exclusive ; Cendre et Brasier sont tous deux pénalisés à
+    /// distance (14 septembre 2026 au soir, GDD §8.1) pour forcer
+    /// l'engagement au contact, où leur identité respective (encaisser /
+    /// cogner) se joue vraiment.
+    ///
+    /// Givre (15 septembre 2026, GDD §8.1) est la première et seule classe à
+    /// dépasser ×1,0 : ×1,50, un axe unique (dégât seul, cadence inchangée)
+    /// plus facile à raisonner que le double axe dégât+cadence de Brasier
+    /// (×1,4/0,85 ≈ ×1,647 de DPS composé) — Givre reste strictement en
+    /// dessous de ce ratio déjà validé. Calcul de référence (même méthode que
+    /// `melee_damage_mult` ci-dessous, Éclair : dégât 1, recharge 0,45 s,
+    /// `PVP_RANGED_DAMAGE_PER_HP` = 0,06, `n` = coups pour vider la cible,
+    /// TTK = (n−1) × cadence) :
+    /// - Givre vs Assaut (1,0 PV) : Givre tue en n=12 (TTK 4,95 s), Assaut tue
+    ///   Givre (0,65 PV) en n=11 (TTK 4,50 s) — Assaut gagne légèrement
+    ///   l'échange debout : le bonus de Givre est compensé par sa fragilité,
+    ///   pas un matchup écrasant. Givre doit gagner via sa portée +25 %
+    ///   (`ranged_lifetime_mult`), pas via le DPS brut seul.
+    /// - Givre vs Cendre (1,60 PV, ×0,80) : Cendre tue en n=14 (TTK 5,85 s),
+    ///   Givre tue Cendre en n=18 (TTK 7,65 s) — Cendre gagne l'échange debout
+    ///   (~24 % plus vite), cohérent avec son rôle de mur.
+    /// - Givre vs Brasier à distance (0,75 PV, ×0,60) : Givre tue en n=9
+    ///   (TTK 3,6 s) contre n=19 (TTK 8,1 s) pour Brasier — Givre écrase
+    ///   Brasier à distance, mais l'inverse est vrai au contact (cf.
+    ///   `melee_damage_mult`) : contre-jeu structurel voulu, pas un
+    ///   déséquilibre.
     pub(super) fn ranged_damage_mult(self) -> f32 {
         match self {
             PlayerClass::Support => 0.70,
             PlayerClass::Assault | PlayerClass::Scout => 1.0,
             PlayerClass::Tank => 0.80,
             PlayerClass::Berserker => 0.60,
+            PlayerClass::Sniper => 1.50,
+        }
+    }
+
+    /// Multiplicateur de la durée de vie d'un projectile (`RangedWeapon::
+    /// lifetime`, cf. `fireball::spawn_fireball`) — donc de sa portée
+    /// effective (`portée ≈ speed × lifetime × ce multiplicateur`). Règle
+    /// spéciale de Givre (15 septembre 2026, GDD §8.1, « portée de
+    /// précision ») : +25 %, orthogonale au tableau de dégâts/cadence
+    /// ci-dessus — elle ne complique donc pas le calcul de DPS/TTK (aucun
+    /// duelliste ne voit sa cadence ou ses dégâts changer), mais donne à un
+    /// glass cannon sans compensation de vitesse un vrai moyen de dicter la
+    /// distance d'engagement plutôt qu'un second bonus de dégâts. Toutes les
+    /// autres classes gardent la portée universelle des armes.
+    pub(super) fn ranged_lifetime_mult(self) -> f32 {
+        match self {
+            PlayerClass::Sniper => 1.25,
+            _ => 1.0,
         }
     }
 
@@ -256,9 +321,21 @@ impl PlayerClass {
     ///   vrai contre structurel au corps-à-corps, sans qu'un échange direct
     ///   soit pour autant un massacre garanti (Brasier place plusieurs coups
     ///   avant de tomber).
+    ///
+    /// Givre (15 septembre 2026, GDD §8.1) : ×0,50, la pénalité de mêlée la
+    /// plus sévère du roster (dans ce sens) — la contrepartie de son bonus
+    /// `ranged_damage_mult` unique. Calcul (`PVP_MELEE_DAMAGE` = 0,15,
+    /// `NETWORK_ATTACK_COOLDOWN` = 0,4 s) : Brasier (×1,4/0,85, cadence
+    /// 0,34 s) tue Givre (0,65 PV) en n=4 (TTK 1,02 s) ; Givre (×0,50, cadence
+    /// 0,4 s) tue Brasier (0,75 PV) en n=10 (TTK 3,6 s) — Brasier écrase Givre
+    /// au contact 3,5× plus vite, le contre-jeu structurel voulu (Givre gagne
+    /// à distance, Brasier gagne au contact, cf. `ranged_damage_mult`) : la
+    /// sanction d'un glass cannon qui se laisse toucher, pas un simple malus
+    /// de PV isolé.
     pub(super) fn melee_damage_mult(self) -> f32 {
         match self {
             PlayerClass::Berserker => 1.4,
+            PlayerClass::Sniper => 0.5,
             _ => 1.0,
         }
     }
@@ -310,6 +387,7 @@ impl PlayerClass {
             PlayerClass::Support => 2,
             PlayerClass::Tank => 3,
             PlayerClass::Berserker => 4,
+            PlayerClass::Sniper => 5,
         }
     }
 
@@ -322,16 +400,18 @@ impl PlayerClass {
             PlayerClass::Support => "Soutien",
             PlayerClass::Tank => "Cendre",
             PlayerClass::Berserker => "Brasier",
+            PlayerClass::Sniper => "Givre",
         }
     }
 
-    /// Les cinq classes existantes, dans l'ordre affiché au sélecteur.
-    pub const ALL: [PlayerClass; 5] = [
+    /// Les six classes existantes, dans l'ordre affiché au sélecteur.
+    pub const ALL: [PlayerClass; 6] = [
         PlayerClass::Assault,
         PlayerClass::Scout,
         PlayerClass::Support,
         PlayerClass::Tank,
         PlayerClass::Berserker,
+        PlayerClass::Sniper,
     ];
 }
 
@@ -1859,6 +1939,122 @@ mod tests {
         );
     }
 
+    /// GDD §8.1 (15 septembre 2026) : Givre = PV max −35 %, vitesse
+    /// inchangée — la classe la plus fragile du roster, sans la compensation
+    /// de mobilité de l'Éclaireur (0,70).
+    #[test]
+    fn sniper_class_has_the_lowest_max_health_and_unchanged_speed() {
+        let mut assault_app = app_with_zombies_demo();
+        let assault_idx = assault_app
+            .spawn_network_player(1, PlayerClass::Assault)
+            .unwrap();
+        let assault_speed = assault_app.scene.objects[assault_idx]
+            .controller
+            .as_ref()
+            .unwrap()
+            .move_speed;
+
+        let mut sniper_app = app_with_zombies_demo();
+        let sniper_idx = sniper_app
+            .spawn_network_player(1, PlayerClass::Sniper)
+            .unwrap();
+        let sniper_speed = sniper_app.scene.objects[sniper_idx]
+            .controller
+            .as_ref()
+            .unwrap()
+            .move_speed;
+
+        assert_eq!(
+            sniper_speed, assault_speed,
+            "Givre ne modifie pas la vitesse de déplacement"
+        );
+        assert_eq!(
+            sniper_app.network_player_health(1),
+            Some(crate::app::health::MAX_HEALTH * 0.65),
+            "Givre doit démarrer à 65 % des PV max de base"
+        );
+    }
+
+    /// GDD §8.1 : `ranged_damage_mult`/`melee_damage_mult`/
+    /// `ranged_lifetime_mult` de Givre, vérifiés directement — Givre est la
+    /// seule classe à dépasser ×1,0 à distance, payé par la pénalité de
+    /// mêlée la plus sévère du roster (dans ce sens) et compensé par une
+    /// portée de tir étendue.
+    #[test]
+    fn sniper_class_multipliers_match_the_glass_cannon_design() {
+        assert_eq!(PlayerClass::Sniper.ranged_damage_mult(), 1.50);
+        assert_eq!(PlayerClass::Sniper.melee_damage_mult(), 0.5);
+        assert_eq!(PlayerClass::Sniper.ranged_lifetime_mult(), 1.25);
+        assert_eq!(PlayerClass::Sniper.attack_cooldown_mult(), 1.0);
+        assert_eq!(
+            PlayerClass::Sniper.block_damage_mult(),
+            crate::app::health::BLOCK_DAMAGE_MULT
+        );
+        assert!(!PlayerClass::Sniper.can_revive());
+        // Aucune autre classe ne dépasse ×1,0 à distance (niche unique de
+        // Givre, cf. recon).
+        for class in PlayerClass::ALL {
+            if class != PlayerClass::Sniper {
+                assert!(
+                    class.ranged_damage_mult() <= 1.0,
+                    "{class:?} ne devrait pas dépasser ×1,0 à distance"
+                );
+            }
+        }
+    }
+
+    /// GDD §8.1 : dégâts de contact PvP réduits de moitié pour Givre — même
+    /// structure que `berserker_class_hits_harder_and_recharges_faster_in_pvp`
+    /// (bout en bout via `update_network_attacks`), cadence inchangée.
+    #[test]
+    fn sniper_class_hits_softer_in_melee_pvp() {
+        let mut scene = crate::scene::Scene {
+            ability_bar: true,
+            ..Default::default()
+        };
+        scene.objects.push(crate::scene::SceneObject {
+            name: "Sol".into(),
+            mesh: crate::scene::MeshKind::Plane,
+            transform: crate::scene::Transform::from_pos(glam::Vec3::ZERO)
+                .with_scale(glam::Vec3::new(40.0, 1.0, 40.0)),
+            physics: crate::runtime::physics::PhysicsKind::Static,
+            ..Default::default()
+        });
+        scene.objects.push(crate::scene::SceneObject {
+            name: "Joueur".into(),
+            mesh: crate::scene::MeshKind::Capsule,
+            transform: crate::scene::Transform::from_pos(glam::Vec3::new(0.0, 1.0, 0.0)),
+            controller: Some(crate::scene::Controller {
+                input: true,
+                ..Default::default()
+            }),
+            ..Default::default()
+        });
+        let mut app = AppState::new();
+        app.scene = scene;
+        app.playing = true;
+        let attacker = app.spawn_network_player(1, PlayerClass::Sniper).unwrap();
+        let target = app.spawn_network_player(2, PlayerClass::Assault).unwrap();
+        app.scene.objects[target].transform.position =
+            app.scene.objects[attacker].transform.position;
+        app.network.network_spawn_grace.insert(2, 0.0);
+        app.network.network_inputs.get_mut(&1).unwrap().attack = true;
+        let before = app.network_player_health(2).unwrap();
+        app.update_network_attacks(1.0 / 60.0);
+        let lost = before - app.network_player_health(2).unwrap();
+        assert!(
+            (lost - super::PVP_MELEE_DAMAGE * 0.5).abs() < 1e-5,
+            "Givre doit infliger ×0,5 les dégâts de contact PvP, {lost} au lieu de {}",
+            super::PVP_MELEE_DAMAGE * 0.5
+        );
+        let cooldown = app.network.network_attack_cooldowns[&1];
+        assert!(
+            (cooldown - super::NETWORK_ATTACK_COOLDOWN).abs() < 1e-5,
+            "Givre garde la cadence universelle, {cooldown} au lieu de {}",
+            super::NETWORK_ATTACK_COOLDOWN
+        );
+    }
+
     /// `PlayerClass::from_u8` (décodage du réseau) : une valeur hors table ne
     /// doit jamais faire paniquer le serveur, elle retombe sur Assaut — même
     /// principe que `fireball::clamp_weapon` pour un indice d'arme invalide.
@@ -1869,6 +2065,7 @@ mod tests {
         assert_eq!(PlayerClass::from_u8(2), PlayerClass::Support);
         assert_eq!(PlayerClass::from_u8(3), PlayerClass::Tank);
         assert_eq!(PlayerClass::from_u8(4), PlayerClass::Berserker);
+        assert_eq!(PlayerClass::from_u8(5), PlayerClass::Sniper);
         assert_eq!(PlayerClass::from_u8(250), PlayerClass::Assault);
     }
 
@@ -1880,11 +2077,11 @@ mod tests {
     /// Cendre/Brasier).
     #[test]
     fn player_class_all_lists_every_known_class() {
-        assert_eq!(PlayerClass::ALL.len(), 5);
+        assert_eq!(PlayerClass::ALL.len(), 6);
     }
 
     /// Sprint 3 (`sprint10audit.md`) : `to_u8` doit être l'inverse exact de
-    /// `from_u8` pour les cinq classes — c'est ce qui garantit que la classe
+    /// `from_u8` pour toutes les classes — c'est ce qui garantit que la classe
     /// choisie dans le sélecteur (fenêtre Multijoueur) arrive intacte côté
     /// serveur via `ClientMsg::Join::class`.
     #[test]

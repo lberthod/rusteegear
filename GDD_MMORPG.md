@@ -571,7 +571,7 @@ habité » entre deux vagues :
 
 ## 8. Personnage et progression
 
-### 8.1 Les cinq classes (choisies avant connexion, rappelées au roster)
+### 8.1 Les six classes (choisies avant connexion, rappelées au roster)
 
 | Classe | Fiction | Modificateurs (serveur) | Rôle de groupe |
 |---|---|---|---|
@@ -579,7 +579,8 @@ habité » entre deux vagues :
 | **Éclaireur** | *Feu follet* | Vitesse +25 %, saut +30 %, PV max −30 % | Attirer, détourner, activer — kiting rendu viable par le plafond de 2 chasseresses et la géométrie du hameau (§7) |
 | **Soutien** | *Foyer* | Vitesse −15 %, dégâts −30 % ; soin ×2,5 (0,5 PV/s, 4 m) ; **seul à réanimer** (10 s de canal, retour à 30 % PV) | Maintenir le groupe debout, effacer les morts |
 | **Cendre** (14 sept. 2026 au soir) | *Braise couvée* | Vitesse −25 %, saut −15 %, PV max +60 %, dégâts à distance −20 %, aucun bonus de mêlée ; bouclier renforcé (dégâts −90 % en tenant la capacité 2, contre −75 % pour les autres classes) | Encaisser en tête de groupe — il prolonge le combat, il ne le gagne pas seul |
-| **Brasier** (14 sept. 2026 au soir) | *Feu qui s'emballe* | Vitesse +10 %, PV max −25 %, dégâts à distance −40 % ; dégâts de contact PvP ×1,8, cadence d'attaque +54 % ; bouclier inutilisable (dégâts −0 %) | Duelliste au contact — imbattable au corps-à-corps contre qui ne bloque pas assez, contré structurellement par Cendre |
+| **Brasier** (14 sept. 2026 au soir, rééquilibré le 15 sept. 2026) | *Feu qui s'emballe* | Vitesse +10 %, PV max −25 %, dégâts à distance −40 % ; dégâts de contact PvP ×1,4, cadence d'attaque +18 % ; bouclier inutilisable (dégâts −0 %) | Duelliste au contact — favorable contre qui ne bloque pas assez, contré structurellement par Cendre |
+| **Givre** (15 sept. 2026) | *Le coup qui n'attend pas* | PV max −35 %, mêlée −50 % ; dégâts à distance ×1,50 (seule classe au-dessus de ×1,0), portée de tir +25 % (`ranged_lifetime_mult`) | Frappe fort et loin avant que l'ennemi n'arrive — mais ne survit pas au contact ; contre naturel de Brasier à distance, contré par lui au corps-à-corps |
 
 Principes :
 

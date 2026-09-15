@@ -393,6 +393,7 @@ fn dispatch(
                     "soutien" | "support" => crate::app::multiplayer::PlayerClass::Support,
                     "cendre" | "tank" => crate::app::multiplayer::PlayerClass::Tank,
                     "brasier" | "berserker" => crate::app::multiplayer::PlayerClass::Berserker,
+                    "givre" | "sniper" | "frost" => crate::app::multiplayer::PlayerClass::Sniper,
                     other => return Err(format!("net : classe inconnue « {other} »")),
                 };
                 let objective = match req
