@@ -310,16 +310,27 @@ fn default_hud_scale() -> f32 {
 /// Qualité de rendu par défaut d'un premier lancement, avant tout choix
 /// joueur : `Low` sur Android/iOS natifs (même signal que
 /// `cfg!(target_os = "android"/"ios")` dans `AppState::touch_ui_active`), où
-/// le matériel visé est en moyenne plus contraint qu'un desktop ; `Medium`
-/// partout ailleurs (desktop et web — aucun signal fiable de détection
-/// tactile n'est câblé côté web avant le premier `touch`, cf.
-/// `AppState::touch_ui_active`).
+/// le matériel visé est en moyenne plus contraint qu'un desktop. Sur web
+/// (wasm32), `Low` si `navigator.maxTouchPoints > 0` (roadmap 2026-09-15,
+/// quick win §4.3) : un signal disponible dès le tout premier rendu, avant
+/// tout `touch` réel — contrairement à `AppState::touch_ui_active`, qui ne
+/// bascule qu'après une première interaction tactile effective. `Medium`
+/// partout ailleurs (desktop natif, ou web sans signal tactile détecté).
 fn default_render_quality() -> crate::app::build_config::RenderQuality {
+    use crate::app::build_config::RenderQuality;
     if cfg!(any(target_os = "android", target_os = "ios")) {
-        crate::app::build_config::RenderQuality::Low
-    } else {
-        crate::app::build_config::RenderQuality::Medium
+        return RenderQuality::Low;
     }
+    #[cfg(target_arch = "wasm32")]
+    {
+        let is_touch_device = web_sys::window()
+            .map(|w| w.navigator().max_touch_points() > 0)
+            .unwrap_or(false);
+        if is_touch_device {
+            return RenderQuality::Low;
+        }
+    }
+    RenderQuality::Medium
 }
 
 impl Default for Settings {

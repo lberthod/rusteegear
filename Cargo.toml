@@ -282,6 +282,11 @@ web-sys = { version = "0.3", features = [
     "HtmlElement",
     "Node",
     "CssStyleDeclaration",
+    # Roadmap 2026-09-15 (audit perf, quick win §4.3) : `navigator.maxTouchPoints`
+    # pour choisir `RenderQuality::Low` par défaut sur un appareil tactile web
+    # (mobile/tablette) dès le premier lancement, sans attendre un premier
+    # `touch` réel — cf. `default_render_quality` dans `app/settings.rs`.
+    "Navigator",
 ] }
 js-sys = "0.3"
 console_error_panic_hook = "0.1"
