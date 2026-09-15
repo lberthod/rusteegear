@@ -44,6 +44,23 @@ pub enum ColliderShape {
     /// le bon choix par défaut pour un décor importé non convexe qu'on veut quand
     /// même pouvoir faire bouger.
     ConvexHull,
+    /// Cylindre droit ajusté à l'empreinte au sol du mesh importé (rayon =
+    /// demi-étendue AABB locale la plus large en X/Z, hauteur = demi-étendue
+    /// en Y), centré comme les autres primitives. Contrairement à
+    /// `ConvexHull`/`TriMesh` (qui suivent la silhouette réelle, arrondie au
+    /// sommet), un cylindre a des flancs **verticaux** sur toute sa hauteur :
+    /// `max_slope_climb_angle` (cf. `PLAYER_MAX_SLOPE_CLIMB_DEG`) n'y trouve
+    /// jamais de zone franchissable tant que l'obstacle dépasse
+    /// `PLAYER_AUTOSTEP_HEIGHT`. Diagnostiqué le 15 septembre 2026 (démo
+    /// Rivière) : un galet arrondi convexe (`ConvexHull` quasi identique au
+    /// `TriMesh` sur ce genre de forme) laisse le joueur grimper jusqu'à son
+    /// sommet en suivant sa pente locale ≤50°, sur plus d'1 m de hauteur —
+    /// bien au-delà de tout plafond d'autostep. Réservé au décor dont on veut
+    /// un obstacle bas franc (pas de sommet accessible), pas à un décor dont
+    /// la silhouette réelle doit rester lisible en jeu (arbres, etc., qui
+    /// gardent `ConvexHull`). Primitive analytique rapier : moins coûteuse par
+    /// requête de collision qu'un `ConvexHull` (quickhull + GJK).
+    Cylinder,
 }
 
 /// Multiplicateur d'accélération quand l'entrée **freine** (cible plus lente que la

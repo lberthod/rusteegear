@@ -126,6 +126,13 @@ impl Physics {
                 let half = (he.y.abs() - r).max(0.01);
                 ColliderBuilder::capsule_y(half, r).translation(center)
             };
+            // Rayon = plus grande demi-étendue X/Z (empreinte au sol, pas
+            // seulement X — une empreinte non carrée serait tronquée sinon),
+            // même convention que `ball()`/`capsule()` ci-dessus.
+            let cylinder = || {
+                ColliderBuilder::cylinder(he.y.abs().max(0.01), he.x.abs().max(he.z.abs()).max(0.01))
+                    .translation(center)
+            };
             // Vertices bruts du mesh importé, mis à l'échelle de l'objet — même
             // principe que `he` ci-dessus pour les primitives : le collider rapier
             // n'a pas de transform d'échelle séparée, l'échelle doit être bakée dans la
@@ -213,13 +220,11 @@ impl Physics {
                     }
                 }
                 ColliderShape::ConvexHull => convex_hull().unwrap_or_else(cuboid),
+                ColliderShape::Cylinder => cylinder(),
                 ColliderShape::Auto => match obj.mesh {
                     MeshKind::Sphere => ball(),
                     MeshKind::Capsule => capsule(),
-                    MeshKind::Cylinder => {
-                        ColliderBuilder::cylinder(he.y.abs().max(0.01), he.x.abs().max(0.01))
-                            .translation(center)
-                    }
+                    MeshKind::Cylinder => cylinder(),
                     // Dalle plate fine (demi-hauteur 0.02 × échelle Y), PAS `cuboid()` :
                     // `he`/`center` viennent de `scene.local_aabb(MeshKind::Terrain)`,
                     // volontairement élargi à ±2.2 en Y (`scene::queries::local_aabb`)

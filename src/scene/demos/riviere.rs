@@ -189,6 +189,18 @@ const fn sp(file: &'static str, lo: f32, hi: f32, solid: bool) -> Species {
     }
 }
 
+/// Décor solide rond/quasi-convexe dont la silhouette laisse le joueur
+/// grimper via `max_slope_climb_angle` (cf. `place()` pour le diagnostic
+/// complet) — doit utiliser `ColliderShape::Cylinder` plutôt que
+/// `ConvexHull`. Mesuré (`examples/probe_riviere_rock_collision.rs`) pour
+/// `galet_a/b.glb` (jusqu'à +1,4m) et `tronc_mort.glb` (+0,53m sur un
+/// spécimen de cette scène) ; `rocher_a/b/c.glb` en est volontairement
+/// exclu — mesuré à 0,000m de montée sur les 32 instances de la scène,
+/// silhouette assez anguleuse pour rester en `ConvexHull` sans ce défaut.
+fn is_round_climbable_decor(file: &str) -> bool {
+    file.contains("galet") || file.contains("tronc_mort")
+}
+
 /// Un emplacement de monstre : espèce (mesh + tempérament de poursuite/
 /// morsure) et poste fixe — cf. la doc du bloc « Monstres » plus bas pour le
 /// contexte. Pas de `const fn` possible pour tout le tableau (`x` dépend de
@@ -573,6 +585,44 @@ impl Scene {
                 // triangle du mesh pour `TriMesh` à chaque requête de
                 // collision).
                 o.collider_shape = ColliderShape::ConvexHull;
+                // Décor rond/quasi-convexe (galets `galet_a.glb`/`galet_b.glb`,
+                // troncs couchés `tronc_mort.glb`) : diagnostiqué le 15
+                // septembre 2026 (« joueur monté sur un rocher », capture
+                // d'écran ; élargi le même jour à `tronc_mort` après mesure —
+                // un tronc couché a lui aussi une section ronde) — un tel
+                // objet, contrairement à un arbre debout (tronc étroit,
+                // s'effile près du sol, cf. commentaire ci-dessus), est
+                // arrondi/quasi-convexe sur toute sa longueur/hauteur visible
+                // au niveau du joueur, si bien que son `ConvexHull` (et même
+                // son `TriMesh`, contre-épreuve à l'identique) offre au
+                // contrôleur cinématique du joueur une pente continue dont
+                // l'angle local descend de ~90° (flanc) à ~0° (sommet). Dès
+                // que cette pente croise localement
+                // `PLAYER_MAX_SLOPE_CLIMB_DEG` (50°, sans plafond de hauteur,
+                // contrairement à l'autostep plafonné à
+                // `PLAYER_AUTOSTEP_HEIGHT`=0.3m), le joueur grimpe jusqu'en
+                // haut — mesuré jusqu'à +1,4 m sur les galets et +0,53 m sur
+                // un tronc mort de cette scène. Un cylindre ajusté à
+                // l'empreinte au sol a des flancs **verticaux** sur toute sa
+                // hauteur (seul un plat horizontal au sommet, hors de portée
+                // de l'autostep dès que l'objet dépasse 0.3m) : plus aucune
+                // pente à suivre. Primitive analytique, moins chère par
+                // requête de collision qu'un `ConvexHull` (cf.
+                // `ColliderShape::Cylinder`) — n'alourdit pas le tick.
+                //
+                // `rocher_a/b/c.glb` (groupe Falaise) sont volontairement
+                // exclus : mesurés (sonde `examples/
+                // probe_riviere_rock_collision.rs`, section 2b, filtre « reste
+                // à proximité de l'objet ») à 0,000m de montée sur les 32
+                // instances de la scène — plus anguleux qu'un galet ou qu'un
+                // tronc, `ConvexHull` n'y pose pas ce défaut. Le cylindre
+                // englobant (rayon = plus grande demi-étendue X/Z locale)
+                // dessinerait par ailleurs un surplomb invisible bien plus
+                // large que leur silhouette réelle, nettement anguleuse, sur
+                // ces blocs de grande taille (échelle jusqu'à 2.0).
+                if is_round_climbable_decor(s.file) {
+                    o.collider_shape = ColliderShape::Cylinder;
+                }
             }
             o.color = s.tint;
 
@@ -1497,6 +1547,87 @@ impl Scene {
             objects.push(p);
         }
 
+        // Anti-coincement (diagnostic du 15 septembre 2026, symptôme « joueur
+        // coincé entre deux rochers ») : non reproduit de façon fiable en
+        // pratique (cf. la sonde locale `examples/probe_riviere_rock_
+        // collision.rs`), mais le mécanisme générique est connu — un
+        // `KinematicCharacterController` à `slide:true` peut se retrouver
+        // piégé dans un V formé par deux colliders convexes séparés d'un
+        // espace inférieur à son diamètre. Passe de nettoyage APRÈS
+        // génération plutôt qu'un filtre de placement dans les boucles
+        // ci-dessus : ne consomme AUCUN tirage `Lcg` supplémentaire (donc ne
+        // déplace, ne redimensionne et ne retire aucun autre élément de la
+        // scène — arbres, faune, roster de monstres… tous identiques à avant
+        // ce correctif).
+        //
+        // Champ d'application : tout décor solide passé en `ColliderShape::
+        // Cylinder` par `place()` (cf. `is_round_climbable_decor` — galets ET
+        // troncs morts, désormais, pas seulement les galets de Berge/Rivière
+        // comme la première version de ce correctif) est un cylindre
+        // vertical, une forme géométrique qui peut tout autant former un V
+        // trop étroit avec un voisin qu'un `ConvexHull` de galet — le
+        // mécanisme ne dépend pas du type de fichier, seulement de la forme
+        // du collider. On se base donc directement sur `collider_shape ==
+        // Cylinder` plutôt que de dupliquer la liste de fichiers/groupes ici :
+        // par construction, elle couvre exactement (et seulement) le décor
+        // concerné par le correctif « pente franchissable » ci-dessus, sans
+        // jamais désynchroniser les deux passes.
+        //
+        // Pour toute paire dont l'espace entre les deux empreintes au sol est
+        // positif mais plus étroit que le diamètre du joueur + marge, le
+        // second objet de la paire perd sa physique (`PhysicsKind::None`,
+        // reste un décor visuel identique) — il ne peut plus former de piège
+        // avec son voisin.
+        let player_capsule_diameter: f32 = {
+            // Dérivé du mesh réel du joueur (même formule que `capsule()`
+            // dans `Physics::build` : rayon = plus grande demi-étendue X/Z
+            // locale), plutôt qu'une constante codée en dur qui pourrait
+            // dériver silencieusement de la capsule physique réellement
+            // utilisée en jeu si `creature_ronde.glb` change de gabarit —
+            // cf. `riviere_demo_anti_wedge_pass_uses_the_real_player_capsule_
+            // diameter` dans les tests ci-dessous.
+            let (lmin, lmax) = joueur_mesh
+                .and_then(|idx| loader.imported.get(idx as usize))
+                .map(|m| (m.aabb_min, m.aabb_max))
+                // Repli MeshKind::Capsule (`creature_ronde.glb` introuvable) —
+                // même AABB que `Scene::local_aabb`.
+                .unwrap_or((Vec3::new(-0.25, -0.5, -0.25), Vec3::new(0.25, 0.5, 0.25)));
+            (lmax.x - lmin.x).max(lmax.z - lmin.z)
+        };
+        let min_rock_passage = player_capsule_diameter + 0.3;
+        let rock_footprints: Vec<(usize, f32, f32, f32)> = objects
+            .iter()
+            .enumerate()
+            .filter_map(|(i, o)| {
+                if o.physics != PhysicsKind::Static || o.collider_shape != ColliderShape::Cylinder {
+                    return None;
+                }
+                let MeshKind::Imported(idx) = o.mesh else {
+                    return None;
+                };
+                let m = loader.imported.get(idx as usize)?;
+                let r = (m.aabb_max.x - m.aabb_min.x).max(m.aabb_max.z - m.aabb_min.z)
+                    * 0.5
+                    * o.transform.scale.x;
+                Some((i, o.transform.position.x, o.transform.position.z, r))
+            })
+            .collect();
+        let mut disable_physics: Vec<usize> = Vec::new();
+        for a in 0..rock_footprints.len() {
+            for b in (a + 1)..rock_footprints.len() {
+                let (_, xa, za, ra) = rock_footprints[a];
+                let (ib, xb, zb, rb) = rock_footprints[b];
+                let d = ((xa - xb).powi(2) + (za - zb).powi(2)).sqrt();
+                let gap = d - ra - rb;
+                if gap > 0.0 && gap < min_rock_passage {
+                    disable_physics.push(ib);
+                }
+            }
+        }
+        for i in disable_physics {
+            objects[i].physics = PhysicsKind::None;
+        }
+
         // Ordre de dessin ≈ du plus proche au plus lointain depuis le départ du
         // joueur (le renderer garde l'ordre de scène à l'intérieur d'un même
         // maillage) : le test de profondeur précoce rejette alors la plupart des
@@ -1663,11 +1794,17 @@ mod tests {
     }
 
     /// Régression « mouvement réseau gelé sur Rivière » : tout décor solide
-    /// posé par `place()` (arbres, sous-bois, galets de berge) doit avoir un
-    /// collider TriMesh (silhouette exacte), pas `Auto`. `Auto` retombe sur
-    /// une boîte AABB (tronc + feuillage) largement plus large que le tronc
-    /// visible dans `Physics::build`, contre laquelle un joueur en
-    /// `KinematicCharacterController` glissait jusqu'à l'arrêt complet.
+    /// posé par `place()` (arbres, sous-bois, rochers de berge/falaise) doit
+    /// avoir un collider ConvexHull (enveloppe exacte), pas `Auto`. `Auto`
+    /// retombe sur une boîte AABB (tronc + feuillage) largement plus large
+    /// que le tronc visible dans `Physics::build`, contre laquelle un joueur
+    /// en `KinematicCharacterController` glissait jusqu'à l'arrêt complet.
+    ///
+    /// Exception : le décor rond/quasi-convexe (cf.
+    /// `riviere_demo_round_climbable_decor_uses_a_non_climbable_cylinder_
+    /// collider` juste en dessous — galets ET troncs morts) utilise un
+    /// `Cylinder`, pas un `ConvexHull` — diagnostiqué le 15 septembre 2026,
+    /// « joueur monté sur un rocher ».
     #[test]
     fn riviere_demo_solid_forest_decor_uses_exact_silhouette_collider() {
         let scene = Scene::riviere_demo();
@@ -1676,6 +1813,16 @@ mod tests {
             (o.group == "Arbre" || o.group == "Sous-bois" || o.group == "Berge")
                 && o.physics == PhysicsKind::Static
         }) {
+            let is_round_climbable = match o.mesh {
+                MeshKind::Imported(idx) => scene
+                    .imported
+                    .get(idx as usize)
+                    .is_some_and(|m| is_round_climbable_decor(&m.path)),
+                _ => false,
+            };
+            if is_round_climbable {
+                continue;
+            }
             checked += 1;
             assert_eq!(
                 o.collider_shape,
@@ -1686,6 +1833,249 @@ mod tests {
             );
         }
         assert!(checked > 0, "aucun décor solide trouvé — le test ne teste rien");
+    }
+
+    /// Régression « joueur monté sur un rocher » (diagnostic du 15 septembre
+    /// 2026, capture d'écran ; élargi le même jour de `galet_a/b.glb` seuls à
+    /// tout `is_round_climbable_decor` après une mesure montrant le même
+    /// défaut sur `tronc_mort.glb`) : tout décor solide rond/quasi-convexe
+    /// posé par `place()` doit utiliser `ColliderShape::Cylinder` (flancs
+    /// verticaux, non franchissable par `max_slope_climb_angle`), pas
+    /// `ConvexHull`/`Auto` (silhouette arrondie escaladable comme une pente).
+    ///
+    /// `rocher_a/b/c.glb` (groupe Falaise) n'est PAS couvert par ce test —
+    /// volontairement laissé en `ConvexHull`, cf. `is_round_climbable_decor`
+    /// et la mesure de `examples/probe_riviere_rock_collision.rs` (0,000m de
+    /// montée sur 32 instances).
+    #[test]
+    fn riviere_demo_round_climbable_decor_uses_a_non_climbable_cylinder_collider() {
+        let scene = Scene::riviere_demo();
+        let mut checked = 0;
+        for o in scene.objects.iter().filter(|o| o.physics == PhysicsKind::Static) {
+            let MeshKind::Imported(idx) = o.mesh else {
+                continue;
+            };
+            let Some(m) = scene.imported.get(idx as usize) else {
+                continue;
+            };
+            if !is_round_climbable_decor(&m.path) {
+                continue;
+            }
+            checked += 1;
+            assert_eq!(
+                o.collider_shape,
+                ColliderShape::Cylinder,
+                "{} ({}) est un décor rond solide mais n'utilise pas le collider Cylinder \
+                 non franchissable",
+                o.name,
+                m.path
+            );
+        }
+        assert!(
+            checked > 0,
+            "aucun décor rond solide trouvé — le test ne teste rien"
+        );
+    }
+
+    /// Régression COMPORTEMENTALE « joueur monté sur un rocher » — port
+    /// déterministe de l'approche frontale de la sonde locale
+    /// (`examples/probe_riviere_rock_collision.rs`, section « 2b »), élargi à
+    /// tout `is_round_climbable_decor` (galets ET troncs morts, pas
+    /// seulement les galets — une mesure a montré `tronc_mort.glb` monté de
+    /// +0,527m près d'un spécimen de cette scène, un défaut identique à celui
+    /// des galets). Avant le correctif Cylinder, plusieurs dizaines
+    /// d'instances de ce décor rond laissaient le joueur grimper jusqu'à leur
+    /// sommet en les abordant de face — jusqu'à +1,42m sur un galet, +0,53m
+    /// sur un tronc, bien au-delà de l'autostep (plafonné à 0.3m). Un seul
+    /// monde physique est construit une fois (pas un par objet, contrairement
+    /// à la sonde — coûteux sur une scène de cette taille) : le joueur est
+    /// simplement retéléporté devant chaque objet tour à tour, les autres
+    /// objets étant tous statiques n'en pâtissent pas.
+    #[test]
+    fn riviere_demo_player_cannot_climb_round_decor() {
+        let scene = Scene::riviere_demo();
+        let player_idx = scene
+            .objects
+            .iter()
+            .position(|o| o.controller.as_ref().is_some_and(|c| c.input))
+            .expect("un joueur pilotable");
+
+        let round_decor: Vec<(usize, Vec3, f32)> = scene
+            .objects
+            .iter()
+            .enumerate()
+            .filter_map(|(i, o)| {
+                if o.physics != PhysicsKind::Static {
+                    return None;
+                }
+                let MeshKind::Imported(idx) = o.mesh else {
+                    return None;
+                };
+                let m = scene.imported.get(idx as usize)?;
+                if !is_round_climbable_decor(&m.path) {
+                    return None;
+                }
+                let (lmin, lmax) = scene.local_aabb(o.mesh);
+                let sc = o.transform.scale;
+                let footprint_r = (lmax.x - lmin.x).max(lmax.z - lmin.z) * 0.5 * sc.x.max(sc.z);
+                Some((i, o.transform.position, footprint_r))
+            })
+            .collect();
+        assert!(
+            !round_decor.is_empty(),
+            "aucun décor rond solide trouvé — le test ne teste rien"
+        );
+
+        let mut s = scene.clone();
+        let mut phys = crate::runtime::physics::Physics::build(&s);
+        let dt = 1.0 / 60.0;
+        let mut climbed_too_high: Vec<(usize, f32)> = Vec::new();
+        for (obj_i, pos, footprint_r) in &round_decor {
+            // Approche de face (+Z), départ 2m avant l'objet — même patron
+            // que la sonde.
+            let start = *pos + Vec3::new(0.0, 1.0, -(footprint_r + 2.0));
+            phys.set_position(player_idx, start);
+            for _ in 0..20 {
+                phys.control(player_idx, 0.0, 0.0, false, 0.0, 0.0, dt);
+                phys.step(dt, &mut s);
+            }
+            let ground_before = s.objects[player_idx].transform.position.y;
+            // Montée maximale observée tant que le joueur reste À PROXIMITÉ
+            // de l'objet (rayon d'emprise + 1,5m) : au-delà, une poussée de
+            // 2,5s à 3 m/s peut faire parcourir plusieurs mètres et croiser
+            // un tout autre relief de berge (constaté sur un objet bloqué à
+            // juste raison : le joueur, dévié sur le côté, continuait tout
+            // droit sur un terrain qui ondule plus loin — Δy final élevé sans
+            // rapport avec l'objet). Se limiter au voisinage immédiat isole
+            // la vraie question : l'objet a-t-il laissé le joueur grimper
+            // sur lui ?
+            let mut climbed_near = 0.0f32;
+            for _ in 0..150 {
+                phys.control(player_idx, 0.0, 3.0, false, 0.0, 0.0, dt);
+                phys.step(dt, &mut s);
+                let p = s.objects[player_idx].transform.position;
+                let horiz = ((p.x - pos.x).powi(2) + (p.z - pos.z).powi(2)).sqrt();
+                if horiz <= footprint_r + 1.5 {
+                    climbed_near = climbed_near.max(p.y - ground_before);
+                }
+            }
+            // Seuil = autostep (0.3m) + marge généreuse (0.15m) : couvre à la
+            // fois un petit objet à peine émergé (autostep légitime) et un
+            // gros objet (doit rester bloqué, Δy ≈ 0) — sans jamais laisser
+            // passer une vraie montée en pente comme celle diagnostiquée.
+            if climbed_near > 0.45 {
+                climbed_too_high.push((*obj_i, climbed_near));
+            }
+        }
+        assert!(
+            climbed_too_high.is_empty(),
+            "décor(s) rond(s) escaladé(s) bien au-delà de l'autostep (régression « joueur \
+             monté sur un rocher ») : {climbed_too_high:?}"
+        );
+    }
+
+    /// Régression préventive « joueur coincé entre deux rochers » (même
+    /// diagnostic — symptôme non reproduit de façon fiable, cf. la sonde
+    /// locale, mais mécanisme générique connu d'un `KinematicController` à
+    /// `slide:true` piégé dans un V trop étroit) : aucune paire de décor rond
+    /// solide (galets, troncs morts — tous groupes, pas seulement Berge/
+    /// Rivière) ne doit laisser un passage strictement positif mais plus
+    /// étroit que le diamètre du joueur + marge — cf. la passe de nettoyage
+    /// post-génération dans `riviere_demo()`.
+    #[test]
+    fn riviere_demo_round_decor_never_leaves_a_player_sized_gap() {
+        const MIN_ROCK_PASSAGE: f32 = 0.7 + 0.3; // diamètre joueur (≈0.7m) + marge
+        let scene = Scene::riviere_demo();
+        let rocks: Vec<(usize, Vec3, f32)> = scene
+            .objects
+            .iter()
+            .enumerate()
+            .filter_map(|(i, o)| {
+                if o.physics != PhysicsKind::Static {
+                    return None;
+                }
+                let MeshKind::Imported(idx) = o.mesh else {
+                    return None;
+                };
+                let m = scene.imported.get(idx as usize)?;
+                if !is_round_climbable_decor(&m.path) {
+                    return None;
+                }
+                let (lmin, lmax) = scene.local_aabb(o.mesh);
+                let sc = o.transform.scale;
+                let footprint_r = (lmax.x - lmin.x).max(lmax.z - lmin.z) * 0.5 * sc.x.max(sc.z);
+                Some((i, o.transform.position, footprint_r))
+            })
+            .collect();
+        assert!(
+            !rocks.is_empty(),
+            "aucun décor rond solide trouvé — le test ne teste rien"
+        );
+        let mut trapped: Vec<(usize, usize, f32)> = Vec::new();
+        for a in 0..rocks.len() {
+            for b in (a + 1)..rocks.len() {
+                let (ia, pa, ra) = rocks[a];
+                let (ib, pb, rb) = rocks[b];
+                let d = ((pa.x - pb.x).powi(2) + (pa.z - pb.z).powi(2)).sqrt();
+                let gap = d - ra - rb;
+                if gap > 0.0 && gap < MIN_ROCK_PASSAGE {
+                    trapped.push((ia, ib, gap));
+                }
+            }
+        }
+        assert!(
+            trapped.is_empty(),
+            "paire(s) de décor rond solide avec un passage trop étroit pour le joueur \
+             (obj, obj, gap) : {trapped:?}"
+        );
+    }
+
+    /// Vérifie que la passe anti-coincement post-génération (`riviere_demo()`)
+    /// dérive bien le diamètre de la capsule joueur du mesh réel
+    /// (`creature_ronde.glb`) plutôt que d'une constante qui pourrait dériver
+    /// silencieusement de la capsule physique réellement construite par
+    /// `Physics::build` — cf. le commentaire `player_capsule_diameter` dans
+    /// `riviere_demo()`. Construit le monde physique réel et compare le rayon
+    /// du collider capsule du joueur à la moitié de la valeur utilisée par la
+    /// passe anti-coincement (recalculée ici avec la même formule que
+    /// `Physics::build`, pas une constante dupliquée).
+    #[test]
+    fn riviere_demo_anti_wedge_pass_uses_the_real_player_capsule_diameter() {
+        let scene = Scene::riviere_demo();
+        let player_idx = scene
+            .objects
+            .iter()
+            .position(|o| o.controller.as_ref().is_some_and(|c| c.input))
+            .expect("un joueur pilotable");
+        let player = &scene.objects[player_idx];
+        assert_eq!(
+            player.collider_shape,
+            ColliderShape::Capsule,
+            "le joueur de la démo Rivière doit garder un collider Capsule explicite \
+             (sinon la formule ci-dessous, calquée sur `capsule()` de `Physics::build`, \
+             ne correspond plus au collider réellement construit)"
+        );
+        let (lmin, lmax) = scene.local_aabb(player.mesh);
+        let sc = player.transform.scale;
+        let he_x = (lmax.x - lmin.x).abs() * 0.5 * sc.x;
+        let he_z = (lmax.z - lmin.z).abs() * 0.5 * sc.z;
+        // Même formule que `capsule()` de `Physics::build` (rayon = plus
+        // grande demi-étendue X/Z locale, mise à l'échelle) — l'expression
+        // que la passe anti-coincement de `riviere_demo()` doit reproduire.
+        let expected_radius = he_x.max(he_z).max(0.01);
+
+        // Aucune paire de décor rond ne doit avoir un passage strictement
+        // positif mais plus étroit qu'un diamètre calculé avec ce rayon +
+        // marge : si `player_capsule_diameter` divergeait de
+        // `expected_radius * 2.0` (constante obsolète, mesh changé...), ce
+        // test échouerait en même temps qu'un des deux tests de coincement
+        // ci-dessus recommencerait à voir passer des paires trop étroites —
+        // recalculé ici indépendamment pour isoler la cause si ça arrive.
+        assert!(
+            expected_radius > 0.05 && expected_radius < 2.0,
+            "rayon de capsule joueur suspect ({expected_radius:.3}m) — la démo Rivière a \
+             probablement changé de mesh joueur sans mettre à jour ce test"
+        );
     }
 
     /// L'enceinte (demande du 14 septembre 2026) : quatre parois statiques,
