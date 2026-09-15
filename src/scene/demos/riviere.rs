@@ -504,6 +504,10 @@ impl Scene {
             move_speed: 4.5,
             jump_button: "Saut".into(),
             jump_height: 1.4,
+            attack_button: "Mêlée".into(),
+            heal_button: "Soin".into(),
+            block_button: "Bouclier".into(),
+            dash_button: "Ruée".into(),
             ..Default::default()
         });
         if joueur_mesh.is_some() {
@@ -1362,7 +1366,33 @@ impl Scene {
             point_lights: Vec::new(),
             mobile: MobileControls {
                 joystick: true,
-                buttons: vec!["Saut".into()],
+                // Ordre = grille d'action 2 colonnes bas-droite (cf. `TouchZones::layout`,
+                // remplissage ligne par ligne, `col = i % 2`/`row = i / 2`). Avec 5
+                // boutons (nombre impair), la dernière rangée n'a qu'une case — colonne
+                // 0, PAS colonne 1 (la plus proche du bord droit) — donc le bouton mis en
+                // dernier n'atterrit PAS près du pouce, contrairement à une intuition
+                // "dernier = plus proche". Calcul exact (`ACTION_BUTTON`/`ACTION_SPACING`
+                // = 64/8pt, pas de 72pt par case) : la case colonne 1/rangée 1 (indice
+                // impair 1 ou 3) tombe exactement sur le bord droit historique du bouton
+                // Saut solo (avant l'ajout des 4 autres boutons), et la case colonne
+                // 1/rangée 1 (indice 3) est en plus la rangée pleine la plus basse — la
+                // meilleure approximation disponible de la position historique. Saut est
+                // donc placé en indice 3 (colonne 1, rangée 1, ~72pt au-dessus de sa
+                // position solo d'origine mais alignée avec son bord droit), entre Mêlée
+                // (indice 1, colonne 1, même bord droit mais une rangée plus haut) et
+                // Bouclier (indice 4, seul sur la dernière rangée, colonne 0, aligné avec
+                // le bas historique mais décalé de 72pt vers la gauche) — les trois
+                // boutons les plus utilisés en combat rapproché occupent ainsi les trois
+                // cases les plus proches du pouce. Ruée (indice 2) et Soin (indice 0,
+                // situationnel, le moins fréquent) héritent des deux cases restantes,
+                // les plus éloignées du pouce au repos.
+                buttons: vec![
+                    "Soin".into(),
+                    "Mêlée".into(),
+                    "Ruée".into(),
+                    "Saut".into(),
+                    "Bouclier".into(),
+                ],
                 ..Default::default()
             },
             camera_follow: true,

@@ -394,6 +394,18 @@ pub struct Controller {
     /// continue (pas d'appui unique), résolue et validée côté serveur.
     #[serde(default)]
     pub heal_button: String,
+    /// Nom du bouton tactile qui bloque (vide = pas de blocage tactile). Combiné à la
+    /// touche clavier Bouclier (2, desktop) — cf. `PlayerInput::block`. État « tenu »
+    /// simple (pas de front montant à gérer), résolu et validé côté serveur.
+    #[serde(default)]
+    pub block_button: String,
+    /// Nom du bouton tactile qui déclenche la ruée (vide = pas de ruée tactile).
+    /// Combiné à la touche clavier Ruée (4, desktop) — cf. `PlayerInput::dash`. Pas de
+    /// distinction tap/maintenu à gérer : `dash_cooldown_remaining` et
+    /// `roll_anim_remaining` protègent déjà contre les appuis répétés/maintenus, comme
+    /// au clavier.
+    #[serde(default)]
+    pub dash_button: String,
     /// Portée (mètres) de l'attaque, centrée sur la position de l'objet.
     #[serde(default = "default_attack_range")]
     pub attack_range: f32,
@@ -438,6 +450,8 @@ impl Default for Controller {
             fire_button: String::new(),
             weapon_button: String::new(),
             heal_button: String::new(),
+            block_button: String::new(),
+            dash_button: String::new(),
             attack_range: default_attack_range(),
             attack_cooldown: default_attack_cooldown(),
             attack_windup: default_attack_windup(),

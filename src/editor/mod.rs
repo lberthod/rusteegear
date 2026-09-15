@@ -1557,10 +1557,19 @@ impl Editor {
                 wave_hud(ctx, area, scene, wave, locale, hud_scale);
                 boss_health_bar(ctx, area, scene, hud_scale, settings.colorblind, top.rect.left());
                 // Kit de capacités : la barre 1-2-3-4 remplace l'arme équipée
-                // (cf. `hud::ability_bar`).
-                if let Some(hud) = ability.filter(|_| scene.ability_bar) {
+                // (cf. `hud::ability_bar`). Ni l'une ni l'autre sur tactile
+                // (15 septembre 2026) : ability_bar est un pur painter sans
+                // hit-test qui se superposait déjà visuellement à la vraie
+                // grille d'action tactile (`mobile_overlay`, boutons Mêlée/
+                // Bouclier/Ruée/Soin désormais tous câblés — cf.
+                // `Controller::block_button`/`dash_button`) ; deux
+                // représentations concurrentes de la même action (une
+                // cliquable, une non) seraient une source de confusion, pas
+                // une aide.
+                let hide_for_touch = touch_ui && mobile.any();
+                if let Some(hud) = ability.filter(|_| scene.ability_bar && !hide_for_touch) {
                     ability_bar(ctx, area, &hud, locale, hud_scale);
-                } else {
+                } else if !hide_for_touch {
                     weapon_hud(
                         ctx,
                         area,

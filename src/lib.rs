@@ -556,7 +556,16 @@ impl App {
         inp.heal = keys.contains(&kb.heal) || gp.heal;
         // Bouclier/ruée (14 septembre 2026, `Scene::ability_bar`) : pas de
         // pendant manette pour l'instant (`gp.block`/`gp.dash` n'existent pas),
-        // clavier seulement — cf. la limite documentée dans docs/RIVIERE_CASCADE.md.
+        // clavier seulement ici — cf. la limite documentée dans
+        // docs/RIVIERE_CASCADE.md. Le tactile (`Controller::block_button`/
+        // `dash_button`, ajouté le 15 septembre 2026) n'est PAS fusionné ici :
+        // cette fonction ne tourne pas à chaque frame (seulement sur événement
+        // clavier/manette), donc un joueur pur tactile ne la déclencherait
+        // quasiment jamais. Le OR touche+tactile est plutôt refait à chaque
+        // point de lecture, par-frame (`combat::update_dash`,
+        // `simulation::apply_ability_animations`,
+        // `network_client::network_input_msg`) — même motif que
+        // `attack_button`/`fire_button`/`heal_button`.
         inp.block = keys.contains(&kb.block);
         inp.dash = keys.contains(&kb.dash);
         // Kit de capacités 1-2-3-4 (14 septembre 2026, `Scene::ability_bar` —

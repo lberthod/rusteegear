@@ -1228,6 +1228,10 @@ fn network_input_msg(
         ctrl.is_some_and(|c| !c.fire_button.is_empty() && inp.buttons.contains(&c.fire_button));
     let touch_heal =
         ctrl.is_some_and(|c| !c.heal_button.is_empty() && inp.buttons.contains(&c.heal_button));
+    let touch_block =
+        ctrl.is_some_and(|c| !c.block_button.is_empty() && inp.buttons.contains(&c.block_button));
+    let touch_dash =
+        ctrl.is_some_and(|c| !c.dash_button.is_empty() && inp.buttons.contains(&c.dash_button));
     crate::net::protocol::ClientMsg::Input {
         move_x: mx,
         move_y: my,
@@ -1246,12 +1250,13 @@ fn network_input_msg(
         // Soin coopératif (cf. `app::health`) : touche clavier (H) ou bouton
         // tactile nommé (`Controller::heal_button`) — résolu côté serveur.
         heal: inp.heal || touch_heal,
-        // Bouclier/ruée (14 septembre 2026, `Scene::ability_bar`) : clavier
-        // seulement pour l'instant, pas de bouton tactile nommé dédié (cf. la
-        // limite documentée dans docs/RIVIERE_CASCADE.md, section Multijoueur —
-        // capacités).
-        block: inp.block,
-        dash: inp.dash,
+        // Bouclier/ruée (14 septembre 2026, `Scene::ability_bar` ; tactile ajouté le
+        // 15 septembre 2026) : touche clavier ou bouton tactile nommé
+        // (`Controller::block_button`/`dash_button`), même motif que attack/fire/heal
+        // ci-dessus — cf. la limite qui subsiste côté manette, documentée dans
+        // docs/RIVIERE_CASCADE.md, section Multijoueur — capacités.
+        block: inp.block || touch_block,
+        dash: inp.dash || touch_dash,
     }
 }
 

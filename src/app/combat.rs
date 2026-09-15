@@ -510,7 +510,16 @@ impl AppState {
         if self.attack.dash_cooldown_remaining > 0.0 {
             self.attack.dash_cooldown_remaining -= dt;
         }
-        if !self.input_state.dash || self.attack.dash_cooldown_remaining > 0.0 {
+        // Même motif que `update_attack` : bouton tactile nommé (controller.dash_button)
+        // OU touche clavier Ruée — les deux déclenchent la même ruée, aucune nouvelle
+        // logique de gameplay.
+        let touch_dash = self
+            .player_object()
+            .and_then(|p| p.controller.as_ref())
+            .is_some_and(|ctrl| {
+                !ctrl.dash_button.is_empty() && self.input_state.buttons.contains(&ctrl.dash_button)
+            });
+        if !(touch_dash || self.input_state.dash) || self.attack.dash_cooldown_remaining > 0.0 {
             return;
         }
         let Some(index) = self.player_index() else {
@@ -794,6 +803,50 @@ mod tests {
              mesuré : {still_moved:.2} m (le contrôleur cinématique a-t-il \
              ramené le joueur à sa position d'avant, faute de \
              Physics::set_position ?)"
+        );
+    }
+
+    /// Parité tactile (15 septembre 2026, `Controller::dash_button`) : tenir le
+    /// bouton tactile nommé doit produire exactement le même effet que tenir la
+    /// touche clavier Ruée (`holding_dash_moves_the_player_forward` ci-dessus) —
+    /// `input_state.dash` reste `false` tout du long, seul `input_state.buttons`
+    /// porte le nom du bouton, comme `mobile_overlay`/`lib.rs::handle_player_touch`
+    /// le peuplent réellement au doigt.
+    #[test]
+    fn holding_the_touch_dash_button_moves_the_player_forward() {
+        let mut joueur = SceneObject {
+            name: "Joueur".into(),
+            mesh: MeshKind::Capsule,
+            controller: Some(Controller {
+                input: true,
+                dash_button: "Ruée".into(),
+                ..Default::default()
+            }),
+            physics: crate::runtime::physics::PhysicsKind::Kinematic,
+            collider_shape: crate::runtime::physics::ColliderShape::Capsule,
+            ..Default::default()
+        };
+        joueur.color = [1.0; 3];
+        let mut app = AppState::new();
+        app.scene = Scene {
+            objects: vec![joueur],
+            ability_bar: true,
+            ..Default::default()
+        };
+        app.physics = Some(crate::runtime::physics::Physics::build(&app.scene));
+        app.playing = true;
+        let start = app.scene.objects[0].transform.position;
+        app.input_state.buttons.insert("Ruée".into());
+
+        for _ in 0..40 {
+            app.update_dash(1.0 / 60.0);
+        }
+        let moved = app.scene.objects[0].transform.position.distance(start);
+        assert!(
+            moved > crate::app::multiplayer::DASH_DISTANCE - 0.5,
+            "le bouton tactile Ruée devrait déplacer le joueur d'environ {} m, \
+             mesuré : {moved:.2} m",
+            crate::app::multiplayer::DASH_DISTANCE
         );
     }
 }

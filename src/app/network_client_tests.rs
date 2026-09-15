@@ -1551,6 +1551,36 @@ fn network_input_msg_sends_touch_jump_attack_and_gyro_like_local_prediction() {
 }
 
 #[test]
+fn network_input_msg_sends_touch_block_and_dash_like_local_prediction() {
+    // Parité tactile (15 septembre 2026, `Controller::block_button`/
+    // `dash_button`) : mêmes garanties que `..._sends_touch_jump_attack_and_gyro`
+    // ci-dessus, pour Bouclier/Ruée — sans ce message, la ruée tactile se
+    // prédirait localement puis serait annulée par la réconciliation serveur
+    // (cf. le commentaire de `network_input_msg`).
+    let obj = crate::scene::SceneObject {
+        controller: Some(crate::scene::Controller {
+            input: true,
+            block_button: "Bouclier".into(),
+            dash_button: "Ruée".into(),
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
+    let mut inp = super::super::PlayerInput::default();
+    inp.buttons.insert("Bouclier".into());
+    inp.buttons.insert("Ruée".into());
+    let msg = network_input_msg(&inp, 0.0, Some(&obj), 0);
+    let crate::net::protocol::ClientMsg::Input { block, dash, .. } = msg else {
+        panic!("network_input_msg doit produire un ClientMsg::Input");
+    };
+    assert!(
+        block,
+        "le bouton tactile Bouclier doit être transmis au serveur"
+    );
+    assert!(dash, "le bouton tactile Ruée doit être transmis au serveur");
+}
+
+#[test]
 fn network_input_msg_ignores_gyro_and_buttons_the_controller_does_not_use() {
     // Un objet joueur sans `gyro` et sans boutons nommés : l'inclinaison
     // résiduelle du capteur et des boutons pressés par hasard ne doivent pas

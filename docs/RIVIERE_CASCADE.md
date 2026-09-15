@@ -126,6 +126,45 @@ Vérifié en production (sonde à deux clients + navigateur) : B tué en mêlée
 en ~8 s, réapparu 6 s plus tard, jauges « Joueur 6 · 30 » et « 3/3 » visibles
 au-dessus des personnages, vie des monstres présente dans chaque snapshot.
 
+### Parité tactile Bouclier/Ruée (15 septembre 2026)
+
+Le tactile de cette démo n'exposait jusqu'ici qu'un seul bouton (Saut) : ni
+Mêlée, Bouclier, Sort, Ruée ni Soin n'avaient de bouton tactile câblé, malgré
+la barre de capacités 1/2/3/4/H déjà visible sur mobile (peintre pur sans
+hit-test, cf. `editor::hud::ability_bar`) — un joueur tactile la voyait sans
+jamais pouvoir y toucher. Corrigé :
+
+- **Mêlée et Soin** : purement des données (`Controller::attack_button`/
+  `heal_button` existaient déjà et étaient déjà câblés de bout en bout,
+  comme `jump_button`) — juste renseignés sur le `Controller` de la scène.
+- **Bouclier et Ruée** : aucun mécanisme équivalent n'existait. Deux nouveaux
+  champs `Controller::block_button`/`dash_button` (même motif que les
+  précédents), et le OR touche+clavier répliqué à chaque point de lecture
+  local — `combat::update_dash`, `simulation::apply_ability_animations` (anim
+  « Block »), `network_client::network_input_msg` (message serveur) — plutôt
+  que dans `lib.rs::recompute_action_buttons`, qui ne tourne pas à chaque
+  frame (seulement sur événement clavier/manette, cf. son commentaire) et
+  raterait donc un joueur pur tactile.
+- **Découverte en testant** (absente de la reconnaissance initiale) : le
+  bouclier solo/hôte passe aussi par un troisième chemin, indépendant du
+  réseau — le global Lua `blocking` (`scripting::run_script`/`run_script_web`,
+  lu par `creature_bite_script` pour réduire directement les dégâts d'une
+  morsure) lisait `input.block` brut, sans le OR tactile. Corrigé dans
+  `simulation.rs` en construisant, une fois par frame et seulement quand
+  nécessaire, une **copie** de `PlayerInput` avec `block` fusionné (jamais en
+  place sur `input_state.block` : ça le rendrait « collant » après un
+  relâchement du doigt, cf. le commentaire dans le code).
+- **Grille d'action** : `TouchZones::layout` (`app/touch.rs`) bascule déjà en
+  grille 2 colonnes dès qu'il y a plus d'un bouton — passer `MobileControls::
+  buttons` de 1 à 5 noms suffit, aucun nouveau code de layout. La barre de
+  capacités cosmétique, elle, se masque désormais sur tactile
+  (`touch_ui_active() && mobile.any()`) : les boutons réels la remplacent au
+  lieu de se superposer à elle sans être cliquables.
+
+Tests : `combat::tests::holding_the_touch_dash_button_moves_the_player_forward`,
+`simulation::tests::holding_the_touch_block_button_reduces_solo_bite_damage_from_creature_1`,
+`network_client::tests::network_input_msg_sends_touch_block_and_dash_like_local_prediction`.
+
 ## Ce qui a été ajouté au moteur
 
 ### Composant « Surface d'eau » (`SceneObject::water`)

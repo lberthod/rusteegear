@@ -90,7 +90,7 @@ contrôle même en sortant du cercle.
 | --- | --- |
 | Poser le pouce à gauche | Stick flottant : se déplacer (deux axes, relatif à la caméra) |
 | Glisser sur la moitié droite de l'écran | Tourner la caméra (en même temps que le stick) |
-| Boutons bas-droite | Saut / Feu / Arme / Soin (définis par la scène), tenables avec le stick |
+| Boutons bas-droite | Jusqu'à 5 boutons nommés par la scène (`MobileControls::buttons`, en grille 2 colonnes), tenables avec le stick — ex. Saut/Feu/Arme/Soin pour hameau_gdd, Saut/Mêlée/Bouclier/Ruée/Soin pour la démo Rivière (15 septembre 2026) |
 | Pincer sur la carte | Zoomer la carte plein écran |
 | Saut (vaincu) | Allié spectateur suivant |
 | ⏸ (haut-droite) | Pause |

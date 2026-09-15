@@ -1990,12 +1990,37 @@ impl AppState {
         // une pression brève et sans cible à portée — avant ce correctif
         // (14 septembre 2026 au soir), J/K/1/3 semblaient morts sur le site
         // déployé : quelques images de clip puis retour à `Idle`.
-        let attack_down = self.input_state.attack;
+        // Bouton tactile nommé OU touche clavier, même motif que `touch_block`
+        // ci-dessous et que `network_client::network_input_msg` : sans ce OR,
+        // tenir le bouton tactile Mêlée/Soin sans cible à portée ne déclenchait
+        // pas l'anim locale « Attack »/« Cast » (contrairement à la touche
+        // clavier équivalente, qui la déclenche toujours) — décalage de parité
+        // corrigé le 15 septembre 2026.
+        let ctrl = self.player_object().and_then(|p| p.controller.as_ref());
+        let touch_attack = ctrl.is_some_and(|c| {
+            !c.attack_button.is_empty() && self.input_state.buttons.contains(&c.attack_button)
+        });
+        let touch_fire = ctrl.is_some_and(|c| {
+            !c.fire_button.is_empty() && self.input_state.buttons.contains(&c.fire_button)
+        });
+        let touch_heal = ctrl.is_some_and(|c| {
+            !c.heal_button.is_empty() && self.input_state.buttons.contains(&c.heal_button)
+        });
+        // Même motif pour le Bouclier (14/15 septembre 2026) : sans ce OR, tenir le
+        // bouton tactile Bouclier réduirait déjà les dégâts côté serveur
+        // (`network_client::network_input_msg`) sans que l'anim locale « Block » ne
+        // se déclenche jamais — décalage visuel trompeur. Calculé ici, avant toute
+        // mutation de `self.attack`, pour ne pas prolonger l'emprunt de `ctrl` au-delà
+        // de sa dernière lecture (sinon conflit d'emprunt avec les écritures ci-dessous).
+        let touch_block = ctrl.is_some_and(|c| {
+            !c.block_button.is_empty() && self.input_state.buttons.contains(&c.block_button)
+        });
+        let attack_down = self.input_state.attack || touch_attack;
         if attack_down && !self.attack.attack_was_down {
             self.attack.swing_anim_remaining = Self::ABILITY_ANIM_SECONDS;
         }
         self.attack.attack_was_down = attack_down;
-        let cast_down = self.input_state.fire || self.input_state.heal;
+        let cast_down = self.input_state.fire || self.input_state.heal || touch_fire || touch_heal;
         if cast_down && !self.attack.cast_was_down {
             self.attack.cast_anim_remaining = Self::ABILITY_ANIM_SECONDS;
         }
@@ -2006,7 +2031,7 @@ impl AppState {
         // touche — décompté par `combat::update_dash` (qui avance aussi la
         // position pendant le glissement, une seule source de vérité pour ce
         // minuteur), lu ici tel quel.
-        let blocking = self.input_state.block;
+        let blocking = self.input_state.block || touch_block;
         let attacking = attack_down
             || self.attack.swing_anim_remaining > 0.0
             || self.attack.attack_charge.is_some()
@@ -2161,6 +2186,29 @@ impl AppState {
         // n'y serait pas appelable.
         let online_client = self.is_online_client();
         let net_check_now = Instant::now();
+        // Bouclier tactile (15 septembre 2026) : le global Lua `blocking`
+        // (`scripting::run_script`/`run_script_web`, lu par `creature_bite_script`
+        // pour réduire les dégâts en solo/côté hôte) lit `input.block` — un booléen
+        // clavier/manette brut (cf. `lib.rs::recompute_action_buttons`), sans le OR
+        // tactile que `combat`/`simulation::apply_ability_animations` refont chacun
+        // eux-mêmes à leur point de lecture. Même motif ici, mais sur une COPIE de
+        // `input_state` (calculée une fois, avant l'itération mutable ci-dessous) :
+        // écraser `input_state.block` en place romprait l'idiome (il redeviendrait
+        // "collant" après un relâchement du doigt tant qu'aucun événement clavier
+        // ne le retouche, cf. la doc de `PlayerInput::block`).
+        let touch_block = self
+            .player_object()
+            .and_then(|p| p.controller.as_ref())
+            .is_some_and(|ctrl| {
+                !ctrl.block_button.is_empty()
+                    && self.input_state.buttons.contains(&ctrl.block_button)
+            });
+        let script_input_owned = (touch_block && !self.input_state.block).then(|| {
+            let mut i = self.input_state.clone();
+            i.block = true;
+            i
+        });
+        let script_input = script_input_owned.as_ref().unwrap_or(&self.input_state);
         // Plateformer 2D : les scripts des pièges loin du joueur ne tournent pas
         // (rien à y voir ni à y déclencher) — sur le web, l'interpréteur Lua pur
         // Rust coûtait ~12 ms par frame avec les 35 pièges du jeu, d'où des
@@ -2288,7 +2336,7 @@ impl AppState {
                     &mut obj.animation,
                     dt,
                     time,
-                    &self.input_state,
+                    script_input,
                     tapped,
                     touch_started,
                     touching,
@@ -2384,7 +2432,7 @@ impl AppState {
                     &mut obj.animation,
                     dt,
                     time,
-                    &self.input_state,
+                    script_input,
                     tapped,
                     touch_started,
                     touching,

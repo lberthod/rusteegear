@@ -1395,6 +1395,88 @@ fn total_bite_damage_over_20s_of_creature_1_contact(blocking: bool) -> f32 {
     total_damage
 }
 
+/// Variante tactile de `total_bite_damage_over_20s_of_creature_1_contact` (15
+/// septembre 2026, `Controller::block_button`) : `input_state.block` (clavier)
+/// reste `false` tout du long — seul `input_state.buttons` porte le nom du
+/// bouton tactile, comme `mobile_overlay`/`lib.rs::handle_player_touch` le
+/// peuplent réellement au doigt — et le joueur reçoit un `block_button` nommé.
+/// Preuve que la réduction de dégâts passe bien par le même chemin que le
+/// clavier (`scripting::run_script`/`run_script_web`, global Lua `blocking`),
+/// pas seulement par la prédiction/le message réseau.
+fn total_bite_damage_over_20s_of_creature_1_contact_with_touch_block(touch_blocking: bool) -> f32 {
+    let mut app = AppState::new();
+    app.scene = crate::scene::Scene::mmorpg_demo();
+    let creature_idx = app
+        .scene
+        .objects
+        .iter()
+        .position(|o| o.name == "Créature")
+        .expect("la démo MMORPG doit contenir une « Créature »");
+    let player_idx = app
+        .scene
+        .objects
+        .iter()
+        .position(|o| o.name == "Joueur")
+        .expect("la démo MMORPG doit contenir un « Joueur »");
+    for obj in app.scene.objects.iter_mut() {
+        if obj.name.starts_with("Créature ") {
+            obj.visible = false;
+        }
+    }
+    if let Some(ctrl) = app.scene.objects[player_idx].controller.as_mut() {
+        ctrl.block_button = "Bouclier".into();
+    }
+    let start = app.scene.objects[creature_idx].transform.position;
+    app.scene.objects[player_idx].transform.position = start;
+    app.hud_health = Some(1.0);
+    app.physics = Some(crate::runtime::physics::Physics::build(&app.scene));
+    app.physics
+        .as_mut()
+        .unwrap()
+        .set_position(player_idx, start);
+    if touch_blocking {
+        app.input_state.buttons.insert("Bouclier".into());
+    }
+
+    let dt = 1.0 / 60.0;
+    let mut total_damage = 0.0f32;
+    let mut prev_health = app.hud_health.unwrap();
+    for _ in 0..(20 * 60) {
+        app.sim_step(dt);
+        let health = app
+            .hud_health
+            .expect("damage() doit faire apparaître la vie du HUD");
+        if health < prev_health - 1e-4 {
+            total_damage += prev_health - health;
+        }
+        prev_health = health;
+        let pos = app.scene.objects[creature_idx].transform.position;
+        app.physics.as_mut().unwrap().set_position(player_idx, pos);
+        app.scene.objects[player_idx].transform.position = pos;
+    }
+    total_damage
+}
+
+/// Parité tactile de `holding_block_reduces_solo_bite_damage_from_creature_1` :
+/// tenir le bouton tactile nommé Bouclier doit réduire les dégâts cumulés
+/// aussi nettement que tenir la touche 2 au clavier.
+#[test]
+fn holding_the_touch_block_button_reduces_solo_bite_damage_from_creature_1() {
+    let blocking_damage = total_bite_damage_over_20s_of_creature_1_contact_with_touch_block(true);
+    let unblocked_damage = total_bite_damage_over_20s_of_creature_1_contact_with_touch_block(false);
+    assert!(
+        blocking_damage > 0.0,
+        "aucune morsure détectée bouton tactile Bouclier tenu — le contact/la \
+         boucle de test a un problème"
+    );
+    assert!(
+        unblocked_damage > blocking_damage * 3.0,
+        "dégâts cumulés bouton tactile Bouclier tenu : {blocking_damage:.3} ; \
+         sans bouclier : {unblocked_damage:.3} — le bouton tactile devrait \
+         réduire les dégâts aussi nettement que la touche clavier"
+    );
+}
+
 /// Preuve du correctif du 14 septembre 2026 (bouclier exposé côté Lua
 /// — `blocking`, `app::scripting::run_script` — mais jamais réellement lu par
 /// `creature_bite_script`, resté silencieux tant qu'on ne le vérifiait pas
@@ -3633,6 +3715,96 @@ fn a_brief_attack_tap_keeps_the_attack_clip_playing_for_a_while() {
         app.apply_ability_animations(1.0 / 60.0);
         assert_eq!(clip(&app), "Cast", "le soin se lit comme une incantation");
     }
+}
+
+/// Correctif du 15 septembre 2026 : `apply_ability_animations` ne lisait que
+/// `input_state.attack`/`fire`/`heal` (brut, clavier/manette), sans le OR
+/// tactile que `combat::update_attack`/`network_client::network_input_msg`
+/// font déjà pour le bouton nommé (`Controller::attack_button`/`fire_button`/
+/// `heal_button`) — un commentaire prétendait à tort suivre "le même motif".
+/// Conséquence réelle : tenir le bouton tactile Mêlée sans cible à portée ne
+/// déclenchait pas le clip `Attack` localement, contrairement à la touche
+/// clavier équivalente. Même preuve que
+/// `a_brief_attack_tap_keeps_the_attack_clip_playing_for_a_while` mais via
+/// `input_state.buttons` (tactile) plutôt que `input_state.attack` (clavier).
+#[test]
+fn holding_the_touch_attack_button_plays_the_attack_clip_even_without_a_target_in_range() {
+    use crate::scene::{AnimationState, Controller, Scene, SceneObject};
+
+    let mut app = AppState::new();
+    let mut scene = Scene {
+        ability_bar: true,
+        ..Default::default()
+    };
+    let mut player = SceneObject {
+        name: "Joueur".into(),
+        ..Default::default()
+    };
+    player.controller = Some(Controller {
+        input: true,
+        attack_button: "Mêlée".into(),
+        fire_button: "Feu".into(),
+        heal_button: "Soin".into(),
+        ..Default::default()
+    });
+    player.animation = Some(AnimationState {
+        clip: "Idle".into(),
+        ..Default::default()
+    });
+    scene.objects.push(player);
+    app.scene = scene;
+    let clip = |app: &AppState| {
+        app.scene.objects[0]
+            .animation
+            .as_ref()
+            .map(|a| a.clip.clone())
+            .unwrap_or_default()
+    };
+
+    // Bouton tactile Mêlée tenu, sans jamais toucher `input_state.attack` (le
+    // clavier) : sans le OR, `attack_down` resterait faux et l'anim `Attack`
+    // ne se déclencherait jamais.
+    app.input_state.buttons.insert("Mêlée".into());
+    app.apply_ability_animations(1.0 / 60.0);
+    assert_eq!(
+        clip(&app),
+        "Attack",
+        "le bouton tactile Mêlée doit déclencher l'anim au même titre que la touche clavier"
+    );
+    app.input_state.buttons.clear();
+    for _ in 0..12 {
+        app.apply_ability_animations(1.0 / 60.0);
+        assert_eq!(
+            clip(&app),
+            "Attack",
+            "le coup doit rester visible après le relâchement"
+        );
+    }
+
+    // Même chose pour le sort tactile (Feu) et le soin tactile (Soin).
+    for _ in 0..40 {
+        app.apply_ability_animations(1.0 / 60.0);
+    }
+    app.input_state.buttons.insert("Feu".into());
+    app.apply_ability_animations(1.0 / 60.0);
+    app.input_state.buttons.clear();
+    assert_eq!(
+        clip(&app),
+        "Cast",
+        "le bouton tactile Feu doit déclencher le sort"
+    );
+
+    for _ in 0..40 {
+        app.apply_ability_animations(1.0 / 60.0);
+    }
+    app.input_state.buttons.insert("Soin".into());
+    app.apply_ability_animations(1.0 / 60.0);
+    app.input_state.buttons.clear();
+    assert_eq!(
+        clip(&app),
+        "Cast",
+        "le bouton tactile Soin doit déclencher l'incantation"
+    );
 }
 
 /// « H : se soigner » (14 septembre 2026 au soir) : en solo, dans une scène

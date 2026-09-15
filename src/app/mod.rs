@@ -236,7 +236,7 @@ pub struct GamepadHudInfo {
 }
 
 /// État des contrôles tactiles produit par l'overlay UI et lu par les scripts Lua.
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct PlayerInput {
     /// Axe du joystick virtuel, chaque composante dans [-1, 1].
     pub joy: (f32, f32),

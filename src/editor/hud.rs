@@ -845,6 +845,14 @@ pub(super) fn wave_hud(
 /// et le `weapon_hud` de ces scènes, dont l'aide « 1/2/3 : changer d'arme »
 /// était fausse ici — les deux se superposaient au même endroit. Non
 /// déplaçable (`Scene::hud_layout` n'a pas d'entrée dédiée).
+///
+/// Réservée au clavier/desktop depuis le 15 septembre 2026 : l'appelant (Play
+/// HUD, `editor/mod.rs`) ne la dessine plus quand `touch_ui_active() &&
+/// mobile.any()`, car c'est un pur painter sans hit-test — sur tactile, les
+/// mêmes cinq actions sont désormais portées par de vrais boutons tactiles
+/// cliquables (`mobile_overlay`, `Controller::attack_button`/`block_button`/
+/// `fire_button`/`dash_button`/`heal_button`), qui remplacent ce retour visuel
+/// plutôt que de le dupliquer sans le rendre actionnable.
 pub(super) fn ability_bar(
     ctx: &egui::Context,
     area: egui::Rect,
