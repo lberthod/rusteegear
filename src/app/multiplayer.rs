@@ -2415,6 +2415,179 @@ mod tests {
         );
     }
 
+    /// Reproduction locale (diagnostic 15 septembre 2026, sonde
+    /// `examples/probe_combat_riviere.rs` contre le vrai serveur) : rejoue
+    /// LOCALEMENT le scénario incriminé (joueur réseau spawné sur
+    /// `Scene::riviere_demo()`, donc recalé en hauteur par double raycast,
+    /// cf. `spawn_network_player`, puis `NetworkInput` continu en +X — même
+    /// entrée constante que `examples/probe_riviere_walk_only.rs`).
+    ///
+    /// Verdict de ce test : l'hypothèse initiale (le recalage de hauteur au
+    /// spawn laisse le joueur pénétré dans le terrain et neutralise tout
+    /// mouvement horizontal dès le premier pas) est INFIRMÉE — `grounded`
+    /// est déjà `true` juste après le spawn et le joueur avance normalement
+    /// dès le tick 0 (cf. les assertions ci-dessous).
+    ///
+    /// AVANT le correctif du 15 septembre 2026 (`place()` dans
+    /// `src/scene/demos/riviere.rs` posait les arbres solides avec un
+    /// collider `Auto`), le déplacement s'arrêtait net à `horiz≈2,729 m`
+    /// (`(9.135, 24.687)` — position stable au mm près, reproduite à
+    /// l'identique par la sonde live `examples/probe_riviere_walk_only.rs`
+    /// contre `wss://ws.loicberthod.ch`) : un rayon horizontal depuis ce
+    /// point touchait le collider `Auto` (`cuboid()` déduit de l'AABB du
+    /// mesh importé — tronc ET houppier, cf. `Physics::build`) de l'« Arbre
+    /// 638 » voisin (`riviere_demo`, RNG déterministe) à `horiz≈2,995 m` de
+    /// son centre. `KinematicCharacterController` (`slide: true`) immobilise
+    /// alors le joueur, sans aucune reprise malgré 170 pas simulés
+    /// supplémentaires (~8,5 s) sous entrée continue — le "gel réseau"
+    /// observé en production.
+    ///
+    /// APRÈS le correctif (`place()` pose désormais les arbres solides avec
+    /// un collider `TriMesh`, silhouette exacte), le même « Arbre 638 »
+    /// bloque le joueur plus loin (`horiz≈2,933 m` du spawn, soit
+    /// `horiz≈2,704 m` de son centre au lieu de `2,995 m` avec `Auto`) :
+    /// confirmé, mesuré directement (bascule locale et re-run du test), que
+    /// `TriMesh` colle bien plus près à la géométrie visible que le
+    /// `cuboid()` qu'il remplace. Un seuil bas (`> 2.8`, entre les deux
+    /// valeurs mesurées) détecte toute régression qui repasserait ce même
+    /// arbre en `Auto`.
+    ///
+    /// Ce test ne prétend PAS que le joueur traverse toute la ceinture
+    /// d'arbres proches du spawn en ligne droite sans jamais s'arrêter : la
+    /// forêt y est délibérément dense (cf. la doc du module) et un bot qui
+    /// n'entre JAMAIS de composante latérale finit toujours par heurter un
+    /// tronc réel, `TriMesh` ou pas — ce n'est pas un bug (`slide: true`
+    /// annule alors bien la composante de vitesse qui entre dans l'obstacle,
+    /// comportement attendu d'un `KinematicCharacterController`). La preuve
+    /// robuste, indépendante de la trajectoire choisie, que plus AUCUN arbre
+    /// solide n'utilise le collider `Auto` oversized est
+    /// `riviere_demo_solid_forest_decor_uses_exact_silhouette_collider`
+    /// (`src/scene/demos/riviere.rs`).
+    #[test]
+    fn network_input_moves_the_player_on_riviere_demo() {
+        let mut app = AppState::new();
+        app.load_riviere_demo();
+        let a = app.spawn_network_player(1, PlayerClass::Assault).unwrap();
+        let start_a = app.scene.objects[a].transform.position;
+        assert_eq!(
+            app.physics.as_ref().map(|p| p.is_grounded(a)),
+            Some(true),
+            "au spawn (recalé en hauteur), le joueur doit déjà être détecté au sol"
+        );
+
+        app.set_network_input(
+            1,
+            NetworkInput {
+                move_x: 1.0,
+                move_y: 0.0,
+                aim_yaw: 0.0,
+                attack: false,
+                jump: false,
+                fire: false,
+                weapon: 0,
+                heal: false,
+                block: false,
+                dash: false,
+            },
+        );
+        app.playing = true;
+
+        // Un seul pas suffit à infirmer « aucun mouvement dès le premier
+        // tick » : si le recalage de spawn neutralisait bien tout
+        // déplacement horizontal comme l'hypothèse le prévoyait, ce premier
+        // pas serait ~0.
+        app.perf.last_frame = std::time::Instant::now() - std::time::Duration::from_secs_f32(0.05);
+        app.advance_play();
+        let after_one_tick = app.scene.objects[a].transform.position;
+        assert!(
+            (after_one_tick.x - start_a.x).abs() > 1e-3,
+            "le joueur doit déjà avoir bougé après UN seul pas simulé : {start_a:?} -> {after_one_tick:?}"
+        );
+
+        // ~9 s au total (180 pas x 0.05 s) : largement au-delà des ~4 s qui
+        // menaient au blocage contre l'Arbre 638, avec ou sans le correctif —
+        // confirme qu'il n'y a pas de reprise tardive (ni avant ni après le
+        // correctif) une fois le contact établi, cohérent avec un `slide`
+        // normal contre un obstacle réel plutôt qu'un gel intrinsèque au
+        // contrôleur.
+        for _ in 0..179 {
+            app.perf.last_frame =
+                std::time::Instant::now() - std::time::Duration::from_secs_f32(0.05);
+            app.advance_play();
+        }
+
+        let end_a = app.scene.objects[a].transform.position;
+        let horiz = ((end_a.x - start_a.x).powi(2) + (end_a.z - start_a.z).powi(2)).sqrt();
+        assert!(
+            horiz > 2.8,
+            "avec le correctif TriMesh, le joueur doit franchir la distance à laquelle le \
+             collider Auto (avant correctif) l'arrêtait (horiz≈2,729 m contre l'Arbre 638) : \
+             {start_a:?} -> {end_a:?} (horiz={horiz:.4})"
+        );
+    }
+
+    /// Sweep (angles 0..7 du cercle de spawn réseau, cf. `spawn_network_player`)
+    /// reproduisant `Room::for_world(Riviere)` du binaire serveur
+    /// (`clear_spawn_area` + `hide_local_player_template` + `playing=true`
+    /// avant le premier spawn, cf. `src/bin/server.rs`) : chaque joueur
+    /// réseau doit progresser sur les tout premiers ticks, quel que soit
+    /// l'angle de spawn — ce que l'hypothèse « recalage de hauteur = gel
+    /// systématique » prédirait faux pour TOUS les angles. Ne vérifie que
+    /// les 6 premiers ticks (~0,3 s) : au-delà, certains angles mènent tout
+    /// droit dans la forêt dense et butent légitimement sur un arbre (cf.
+    /// la doc de `network_input_moves_the_player_on_riviere_demo`) — ce
+    /// test ne porte donc que sur l'amorce du mouvement, pas sur sa durée.
+    #[test]
+    fn network_movement_starts_immediately_at_every_riviere_spawn_angle() {
+        let mut app = AppState::new();
+        app.load_riviere_demo();
+        app.clear_spawn_area();
+        app.hide_local_player_template();
+        app.playing = true;
+
+        let mut indices = Vec::new();
+        for id in 1..=8u32 {
+            let idx = app.spawn_network_player(id, PlayerClass::Assault).unwrap();
+            assert_eq!(
+                app.physics.as_ref().map(|p| p.is_grounded(idx)),
+                Some(true),
+                "joueur {id} (idx {idx}) : pas au sol juste après le recalage de spawn"
+            );
+            indices.push((id, idx, app.scene.objects[idx].transform.position));
+        }
+        for (id, ..) in &indices {
+            app.set_network_input(
+                *id,
+                NetworkInput {
+                    move_x: 1.0,
+                    move_y: 0.3,
+                    aim_yaw: 0.0,
+                    attack: false,
+                    jump: false,
+                    fire: false,
+                    weapon: 0,
+                    heal: false,
+                    block: false,
+                    dash: false,
+                },
+            );
+        }
+        for _ in 0..6 {
+            app.perf.last_frame =
+                std::time::Instant::now() - std::time::Duration::from_secs_f32(0.05);
+            app.advance_play();
+        }
+        for (id, idx, start) in indices {
+            let end = app.scene.objects[idx].transform.position;
+            let horiz = ((end.x - start.x).powi(2) + (end.z - start.z).powi(2)).sqrt();
+            assert!(
+                horiz > 0.02,
+                "joueur {id} (idx {idx}) : aucun mouvement horizontal amorcé en 6 pas \
+                 ({start:?} -> {end:?}, horiz={horiz:.4})"
+            );
+        }
+    }
+
     #[test]
     fn network_snapshot_reports_every_connected_player() {
         let mut app = app_with_zombies_demo();

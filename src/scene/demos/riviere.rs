@@ -548,6 +548,31 @@ impl Scene {
             o.transform.rotation = Quat::from_rotation_y(rng.range(0.0, std::f32::consts::TAU));
             if s.solid {
                 o.physics = PhysicsKind::Static;
+                // ConvexHull, pas Auto : le collider Auto d'un maillage importé
+                // retombe sur une boîte AABB (`Physics::build`, branche
+                // `_ => cuboid()`) calculée sur le tronc ET le feuillage —
+                // largement plus large que le tronc visible. Un joueur en
+                // KinematicCharacterController glissait alors contre cette
+                // face plate invisible bien avant d'atteindre l'arbre et
+                // restait bloqué (mouvement réseau gelé sur Rivière).
+                //
+                // Pas `TriMesh` non plus : mesuré ~4x plus coûteux par tick de
+                // simulation que `Auto` sur ce même test (~93ms/tick contre
+                // ~22ms/tick), un coût qui dérive le tick de TOUS les salons
+                // actifs du process serveur (`tick_room` dans `src/bin/
+                // server.rs`, qui tick chaque salon en série dans la même
+                // boucle, y compris le Hameau qui partage le process). Un
+                // arbre a un tronc étroit à la base et un feuillage large en
+                // hauteur : l'enveloppe convexe de tous les vertices du
+                // maillage s'effile naturellement près du sol (seuls les
+                // vertices du tronc y sont proches), donc résout le blocage
+                // réseau tout en restant bien moins cher qu'un `TriMesh` par
+                // triangle — cf. `Physics::build` (`src/runtime/physics/
+                // build.rs`) pour la construction (`SharedShape::convex_hull`,
+                // une seule passe quickhull sur les points, contre un test par
+                // triangle du mesh pour `TriMesh` à chaque requête de
+                // collision).
+                o.collider_shape = ColliderShape::ConvexHull;
             }
             o.color = s.tint;
 
@@ -1635,6 +1660,32 @@ mod tests {
             scene.objects.iter().any(|o| !o.texture.is_empty()),
             "terrain texturé"
         );
+    }
+
+    /// Régression « mouvement réseau gelé sur Rivière » : tout décor solide
+    /// posé par `place()` (arbres, sous-bois, galets de berge) doit avoir un
+    /// collider TriMesh (silhouette exacte), pas `Auto`. `Auto` retombe sur
+    /// une boîte AABB (tronc + feuillage) largement plus large que le tronc
+    /// visible dans `Physics::build`, contre laquelle un joueur en
+    /// `KinematicCharacterController` glissait jusqu'à l'arrêt complet.
+    #[test]
+    fn riviere_demo_solid_forest_decor_uses_exact_silhouette_collider() {
+        let scene = Scene::riviere_demo();
+        let mut checked = 0;
+        for o in scene.objects.iter().filter(|o| {
+            (o.group == "Arbre" || o.group == "Sous-bois" || o.group == "Berge")
+                && o.physics == PhysicsKind::Static
+        }) {
+            checked += 1;
+            assert_eq!(
+                o.collider_shape,
+                ColliderShape::ConvexHull,
+                "{} est solide mais utilise un collider Auto (boîte AABB potentiellement \
+                 surdimensionnée) au lieu de son enveloppe convexe",
+                o.name
+            );
+        }
+        assert!(checked > 0, "aucun décor solide trouvé — le test ne teste rien");
     }
 
     /// L'enceinte (demande du 14 septembre 2026) : quatre parois statiques,
