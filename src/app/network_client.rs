@@ -262,6 +262,10 @@ impl AppState {
                 }
                 o.visible = false;
             }
+            // Recyclé par `ensure_remote_player` à la prochaine session réseau —
+            // sans ça, `scene.objects` grossit d'un fantôme par reconnexion sur
+            // toute la durée de vie du client (cf. doc de `ghost_free_list`).
+            self.net_conn.ghost_free_list.push(rp.scene_index);
         }
         self.net_conn.remote_players.clear();
         self.net_conn.net_local_interp = crate::net::interpolation::RemoteEntity::default();
@@ -863,13 +867,18 @@ impl AppState {
             }
             ServerMsg::PlayerLeft { player_id } => {
                 log::info!("Multijoueur : joueur {player_id} est parti");
-                if let Some(rp) = self.net_conn.remote_players.remove(&player_id)
-                    && let Some(o) = self.scene.objects.get_mut(rp.scene_index)
-                {
-                    if o.visible {
-                        self.net_conn.net_visibility_dirty = true;
+                if let Some(rp) = self.net_conn.remote_players.remove(&player_id) {
+                    if let Some(o) = self.scene.objects.get_mut(rp.scene_index) {
+                        if o.visible {
+                            self.net_conn.net_visibility_dirty = true;
+                        }
+                        o.visible = false;
                     }
-                    o.visible = false;
+                    // Recyclé au prochain `PlayerJoined` (cf. `ensure_remote_player`)
+                    // plutôt que de laisser `scene.objects` grossir d'un fantôme par
+                    // départ, sans limite sur un salon qui encaisse des va-et-vient
+                    // de joueurs pendant des heures.
+                    self.net_conn.ghost_free_list.push(rp.scene_index);
                 }
                 self.refresh_connected_status();
             }
@@ -1141,8 +1150,22 @@ impl AppState {
                 visible: false,
                 ..template
             };
-            let scene_index = self.scene.objects.len();
-            self.scene.objects.push(ghost);
+            // Recycle l'emplacement d'un fantôme abandonné (joueur parti/session
+            // réinitialisée, cf. `ghost_free_list`) plutôt que de pousser un nouvel
+            // objet à chaque reconnexion — sinon `scene.objects` grossit sans
+            // limite sur un salon partagé qui tourne pendant des heures (coût de
+            // simulation/rendu proportionnel à `scene.objects.len()`).
+            let scene_index = match self.net_conn.ghost_free_list.pop() {
+                Some(i) if i < self.scene.objects.len() => {
+                    self.scene.objects[i] = ghost;
+                    i
+                }
+                _ => {
+                    let i = self.scene.objects.len();
+                    self.scene.objects.push(ghost);
+                    i
+                }
+            };
             self.net_conn.remote_players.insert(
                 id,
                 RemotePlayer {

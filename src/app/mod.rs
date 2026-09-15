@@ -675,6 +675,15 @@ pub struct NetConnectionState {
     /// reçu, interpolée — cf. `net::interpolation::RemoteEntity`), pas simulés
     /// localement (le serveur est autoritaire sur eux).
     remote_players: HashMap<crate::net::protocol::PlayerId, network_client::RemotePlayer>,
+    /// Indices dans `scene.objects` de fantômes de joueurs réseau abandonnés
+    /// (joueur parti — `PlayerLeft` — ou session réinitialisée) : recyclés par
+    /// `ensure_remote_player` pour le prochain joueur plutôt que de laisser
+    /// `scene.objects` grossir sans limite à chaque va-et-vient de connexion
+    /// sur un salon partagé qui tourne pendant des heures (chaque reconnexion
+    /// obtient un nouveau `PlayerId`, donc sans recyclage l'ancien fantôme
+    /// restait à jamais dans `scene.objects`, invisible mais toujours présent
+    /// — coût de simulation/rendu proportionnel à `scene.objects.len()`).
+    ghost_free_list: Vec<usize>,
     /// `true` si un fantôme réseau (joueur distant ou créature diffusée par le
     /// serveur) a changé de visibilité depuis le dernier appel à
     /// `network_client::poll_network` — un fantôme masqué n'a pas de corps
@@ -1764,6 +1773,7 @@ impl AppState {
                 net_player_id: None,
                 net_status: String::new(),
                 remote_players: HashMap::new(),
+                ghost_free_list: Vec::new(),
                 net_visibility_dirty: false,
                 net_creature_last_snapshot: HashMap::new(),
                 #[cfg(not(target_os = "ios"))]

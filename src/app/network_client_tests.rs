@@ -2082,6 +2082,38 @@ fn connected_status_counts_everyone_in_the_room() {
     assert_eq!(app.net_conn.net_status, connected_status(1));
 }
 
+/// Recyclage des fantômes de joueurs réseau (`ghost_free_list`) : sur un
+/// salon qui encaisse des reconnexions pendant des heures, chaque joueur qui
+/// revient obtient un nouveau `PlayerId` (cf. `ServerMsg::Welcome`) — sans
+/// recyclage de l'emplacement laissé par son départ, `scene.objects`
+/// grossirait d'un fantôme par cycle joindre/partir, sans limite, pour un
+/// coût de simulation/rendu proportionnel à sa taille. `ensure_remote_player`
+/// doit réutiliser l'emplacement libéré plutôt qu'en pousser un nouveau.
+#[test]
+fn a_departed_players_ghost_slot_is_recycled_by_the_next_arrival() {
+    let mut app = AppState::new();
+    app.handle_server_msg(crate::net::protocol::ServerMsg::Welcome { player_id: 1 });
+    let before = app.scene.objects.len();
+
+    for (id, name) in [(2u32, "A"), (3, "B"), (4, "C"), (5, "D"), (6, "E")] {
+        app.handle_server_msg(crate::net::protocol::ServerMsg::PlayerJoined {
+            player_id: id,
+            name: name.to_string(),
+        });
+        assert_eq!(
+            app.scene.objects.len(),
+            before + 1,
+            "un seul fantôme en vol à la fois : l'emplacement du précédent, parti, doit être réutilisé"
+        );
+        app.handle_server_msg(crate::net::protocol::ServerMsg::PlayerLeft { player_id: id });
+    }
+    assert_eq!(
+        app.scene.objects.len(),
+        before + 1,
+        "cinq cycles joindre/partir ne doivent laisser qu'un fantôme recyclé, pas cinq objets orphelins"
+    );
+}
+
 /// `JoinRejected` (2.3/2.4) : quel que soit le motif, l'écran d'accueil
 /// revient avec la raison, et aucune reconnexion automatique n'est armée —
 /// le serveur nous refuserait en boucle.
