@@ -1312,300 +1312,321 @@ pub(super) fn multiplayer_window(
     local_server_addr: Option<&str>,
 ) {
     let mut open = panels.multiplayer;
+    // La fenêtre n'était pas redimensionnable et n'avait aucun plafond de
+    // hauteur ni ScrollArea englobant : avec Firebase configuré (Chat +
+    // Classement + Présence, en plus des sections Serveur local/Compte
+    // toujours visibles), le contenu total pouvait dépasser la hauteur de
+    // l'écran sans aucun moyen d'atteindre le bas du formulaire (bouton
+    // « Rafraîchir la présence », etc.) — même correctif que
+    // `player_settings_window` ci-dessus et `asset_browser_window` plus bas.
+    let max_height = (ctx.content_rect().height() * 0.8 - 40.0).max(240.0);
     egui::Window::new("🌐  Multijoueur")
         .open(&mut open)
         .resizable(false)
         .default_width(320.0)
         .show(ctx, |ui| {
-            ui.label("Adresse du serveur");
-            ui.add_enabled(
-                !net_connected,
-                egui::TextEdit::singleline(server_url).hint_text("ws://127.0.0.1:7777"),
-            );
-            ui.label("Pseudo");
-            ui.add_enabled(
-                !net_connected,
-                egui::TextEdit::singleline(name).hint_text("Joueur"),
-            );
-            ui.label("Classe");
-            // Sprint 3 (`sprint10audit.md`) : la classe est fixée au `Join`
-            // (côté serveur, `spawn_network_player`) — désactivé une fois
-            // connecté, comme l'adresse et le pseudo juste au-dessus.
-            ui.add_enabled_ui(!net_connected, |ui| {
-                egui::ComboBox::from_id_salt("mp_class_select")
-                    .selected_text(class.label())
-                    .show_ui(ui, |ui| {
-                        for c in crate::app::multiplayer::PlayerClass::ALL {
-                            ui.selectable_value(class, c, c.label());
-                        }
-                    });
-            });
-            ui.label("Code de partie");
-            // Sprint 20 (`sprintreflecion.md`) : **distinct** du « Salon » du
-            // chat plus bas — isole une partie réseau sur le serveur (rejoint
-            // `ClientMsg::Join::lobby`), vide = salon par défaut inchangé.
-            // Désactivé une fois connecté, comme l'adresse/le pseudo/la classe.
-            ui.add_enabled_ui(!net_connected, |ui| {
-                ui.add(
-                    egui::TextEdit::singleline(room_code).hint_text("(salon par défaut si vide)"),
-                );
-            });
-            ui.label("Mode");
-            // Sprint 21 (`sprintreflecion.md`) : le mode choisi par le
-            // **premier** joueur à rejoindre un salon vide fait foi côté
-            // serveur (`Lobby::objective`) — désactivé une fois connecté pour
-            // ne pas laisser croire qu'un second arrivant peut encore choisir.
-            ui.add_enabled_ui(!net_connected, |ui| {
-                egui::ComboBox::from_id_salt("mp_objective_select")
-                    .selected_text(objective.label())
-                    .show_ui(ui, |ui| {
-                        for o in crate::app::multiplayer::RoundObjective::ALL {
-                            ui.selectable_value(objective, o, o.label());
-                        }
-                    });
-            });
-            ui.add_space(6.0);
-            if net_connected {
-                if ui.button("🔌  Se déconnecter").clicked() {
-                    actions.disconnect_from_server = true;
-                }
-            } else {
-                let can_connect = !server_url.trim().is_empty() && !name.trim().is_empty();
-                if ui
-                    .add_enabled(can_connect, egui::Button::new("▶  Se connecter"))
-                    .clicked()
-                {
-                    actions.connect_to_server = Some((
-                        server_url.clone(),
-                        name.clone(),
-                        *class,
-                        room_code.clone(),
-                        *objective,
-                    ));
-                }
-                if !can_connect {
-                    ui.small("Adresse et pseudo requis.");
-                }
-            }
-            ui.add_space(6.0);
-            ui.label(if net_status.is_empty() {
-                "Non connecté"
-            } else {
-                net_status
-            });
-            ui.add_space(12.0);
-            ui.separator();
-            ui.heading("Serveur local");
-            if local_server_running {
-                ui.label(format!(
-                    "🟢  En cours (PID {}) — {}",
-                    local_server_pid
-                        .map(|p| p.to_string())
-                        .unwrap_or_else(|| "?".to_string()),
-                    local_server_addr.unwrap_or("?")
-                ));
-                ui.horizontal(|ui| {
-                    if ui.button("⏹  Arrêter le serveur").clicked() {
-                        actions.stop_local_server = true;
-                    }
-                    if ui.button("📋  Copier l'adresse").clicked()
-                        && let Some(addr) = local_server_addr
-                    {
-                        let room = room_code.trim();
-                        let text = if room.is_empty() {
-                            format!("ws://{addr}")
-                        } else {
-                            format!("ws://{addr}\nCode de partie : {room}")
-                        };
-                        ui.ctx().copy_text(text);
-                    }
-                });
-                ui.small(
-                    "Le nombre de joueurs connectés apparaît dans le tableau des joueurs \
-                     une fois toi-même connecté (bouton ▶ Se connecter ci-dessus, avec \
-                     l'adresse copiée).",
-                );
-            } else {
-                if ui.button("▶  Démarrer un serveur local").clicked() {
-                    actions.start_local_server = true;
-                }
-                ui.small(
-                    "Lance un serveur sur cette machine (127.0.0.1:7777, accessible \
-                     uniquement depuis cette machine) — pratique pour tester le \
-                     multijoueur avec plusieurs instances de l'éditeur/du player en local, \
-                     sans ouvrir de terminal.",
-                );
-            }
-
-            ui.add_space(12.0);
-            ui.separator();
-            ui.heading("Compte (optionnel)");
-            let firebase_configured = !settings.firebase_api_key.trim().is_empty()
-                && !settings.firebase_database_url.trim().is_empty();
-            if !firebase_configured {
-                ui.small(
-                    "Configure d'abord une clé API et une URL Database dans \
-                     ⚙ Paramètres pour activer les comptes (progression persistante).",
-                );
-            } else {
-                ui.label("Email");
-                ui.add(egui::TextEdit::singleline(email).hint_text("toi@example.com"));
-                ui.label("Mot de passe");
-                ui.add(egui::TextEdit::singleline(password).password(true));
-                let can_auth = !email.trim().is_empty() && !password.trim().is_empty();
-                ui.horizontal(|ui| {
-                    if ui
-                        .add_enabled(can_auth, egui::Button::new("Se connecter (compte)"))
-                        .clicked()
-                    {
-                        actions.firebase_sign_in = Some((email.clone(), password.clone()));
-                    }
-                    if ui
-                        .add_enabled(can_auth, egui::Button::new("Créer un compte"))
-                        .clicked()
-                    {
-                        actions.firebase_sign_up = Some((email.clone(), password.clone()));
-                    }
-                });
-                ui.small(
-                    "Se connecter avant de rejoindre un salon relie ta progression \
-                     (XP, classement) à ce compte, cf. SPRINT_MMORPG.md.",
-                );
-            }
-
-            if firebase_configured {
-                ui.add_space(12.0);
-                ui.separator();
-                ui.heading("Chat");
-                ui.label("Salon");
-                ui.add(egui::TextEdit::singleline(lobby_code).hint_text("default"));
-                ui.add_space(4.0);
-                egui::ScrollArea::vertical()
-                    .max_height(140.0)
-                    .show(ui, |ui| {
-                        let visible: Vec<_> = chat_messages
-                            .iter()
-                            .filter(|line| !settings.is_muted(&line.sender))
-                            .collect();
-                        if visible.is_empty() {
-                            ui.small("Aucun message pour l'instant.");
-                        }
-                        for line in visible {
-                            ui.horizontal(|ui| {
-                                ui.label(format!("{} : {}", line.sender, line.text));
-                                // Un joueur ne peut pas se muter lui-même.
-                                if line.sender != *name
-                                    // Texte statique plutôt que `format!` par ligne : le
-                                    // pseudo est déjà affiché juste à côté, pas besoin de
-                                    // le répéter dans l'infobulle — évite une allocation
-                                    // par ligne visible à chaque frame.
-                                    && ui
-                                        .small_button("🔇")
-                                        .on_hover_text("Muet ce joueur")
-                                        .clicked()
-                                {
-                                    settings.mute_player(&line.sender);
+            egui::ScrollArea::vertical()
+                .id_salt("multiplayer_outer_scroll")
+                .auto_shrink([false, true])
+                .max_height(max_height)
+                .show(ui, |ui| {
+                    ui.label("Adresse du serveur");
+                    ui.add_enabled(
+                        !net_connected,
+                        egui::TextEdit::singleline(server_url).hint_text("ws://127.0.0.1:7777"),
+                    );
+                    ui.label("Pseudo");
+                    ui.add_enabled(
+                        !net_connected,
+                        egui::TextEdit::singleline(name).hint_text("Joueur"),
+                    );
+                    ui.label("Classe");
+                    // Sprint 3 (`sprint10audit.md`) : la classe est fixée au `Join`
+                    // (côté serveur, `spawn_network_player`) — désactivé une fois
+                    // connecté, comme l'adresse et le pseudo juste au-dessus.
+                    ui.add_enabled_ui(!net_connected, |ui| {
+                        egui::ComboBox::from_id_salt("mp_class_select")
+                            .selected_text(class.label())
+                            .show_ui(ui, |ui| {
+                                for c in crate::app::multiplayer::PlayerClass::ALL {
+                                    ui.selectable_value(class, c, c.label());
                                 }
                             });
-                        }
                     });
-                ui.horizontal(|ui| {
-                    ui.add(
-                        egui::TextEdit::singleline(chat_input)
-                            .hint_text("Message…")
-                            .desired_width(180.0)
-                            .char_limit(crate::app::network_client::MAX_CHAT_LEN),
-                    );
-                    let can_send = has_firebase_account
-                        && !chat_input.trim().is_empty()
-                        && !lobby_code.trim().is_empty();
-                    if ui
-                        .add_enabled(can_send, egui::Button::new("Envoyer"))
-                        .clicked()
-                    {
-                        actions.send_chat_message =
-                            Some((lobby_code.clone(), name.clone(), chat_input.clone()));
-                        chat_input.clear();
-                    }
-                });
-                if !has_firebase_account {
-                    ui.small("Connecte-toi d'abord à un compte pour envoyer des messages.");
-                }
-                if ui.button("🔄  Rafraîchir").clicked() && !lobby_code.trim().is_empty() {
-                    actions.refresh_chat = Some(lobby_code.clone());
-                }
-                ui.small(
-                    "Le salon se rafraîchit aussi automatiquement toutes les quelques \
-                     secondes tant que cette fenêtre reste ouverte.",
-                );
-                if !settings.muted_players.is_empty() {
+                    ui.label("Code de partie");
+                    // Sprint 20 (`sprintreflecion.md`) : **distinct** du « Salon » du
+                    // chat plus bas — isole une partie réseau sur le serveur (rejoint
+                    // `ClientMsg::Join::lobby`), vide = salon par défaut inchangé.
+                    // Désactivé une fois connecté, comme l'adresse/le pseudo/la classe.
+                    ui.add_enabled_ui(!net_connected, |ui| {
+                        ui.add(
+                            egui::TextEdit::singleline(room_code)
+                                .hint_text("(salon par défaut si vide)"),
+                        );
+                    });
+                    ui.label("Mode");
+                    // Sprint 21 (`sprintreflecion.md`) : le mode choisi par le
+                    // **premier** joueur à rejoindre un salon vide fait foi côté
+                    // serveur (`Lobby::objective`) — désactivé une fois connecté pour
+                    // ne pas laisser croire qu'un second arrivant peut encore choisir.
+                    ui.add_enabled_ui(!net_connected, |ui| {
+                        egui::ComboBox::from_id_salt("mp_objective_select")
+                            .selected_text(objective.label())
+                            .show_ui(ui, |ui| {
+                                for o in crate::app::multiplayer::RoundObjective::ALL {
+                                    ui.selectable_value(objective, o, o.label());
+                                }
+                            });
+                    });
                     ui.add_space(6.0);
-                    ui.collapsing("Joueurs muets", |ui| {
-                        // Un seul pseudo cloné (au clic), pas toute la liste à chaque
-                        // frame : `settings` reste emprunté en lecture pendant la
-                        // boucle, la mutation n'arrive qu'une fois cet emprunt terminé.
-                        let mut to_unmute: Option<String> = None;
-                        for player in &settings.muted_players {
-                            ui.horizontal(|ui| {
-                                ui.small(player);
-                                if ui.small_button("🔊 Démuter").clicked() {
-                                    to_unmute = Some(player.clone());
+                    if net_connected {
+                        if ui.button("🔌  Se déconnecter").clicked() {
+                            actions.disconnect_from_server = true;
+                        }
+                    } else {
+                        let can_connect = !server_url.trim().is_empty() && !name.trim().is_empty();
+                        if ui
+                            .add_enabled(can_connect, egui::Button::new("▶  Se connecter"))
+                            .clicked()
+                        {
+                            actions.connect_to_server = Some((
+                                server_url.clone(),
+                                name.clone(),
+                                *class,
+                                room_code.clone(),
+                                *objective,
+                            ));
+                        }
+                        if !can_connect {
+                            ui.small("Adresse et pseudo requis.");
+                        }
+                    }
+                    ui.add_space(6.0);
+                    ui.label(if net_status.is_empty() {
+                        "Non connecté"
+                    } else {
+                        net_status
+                    });
+                    ui.add_space(12.0);
+                    ui.separator();
+                    ui.heading("Serveur local");
+                    if local_server_running {
+                        ui.label(format!(
+                            "🟢  En cours (PID {}) — {}",
+                            local_server_pid
+                                .map(|p| p.to_string())
+                                .unwrap_or_else(|| "?".to_string()),
+                            local_server_addr.unwrap_or("?")
+                        ));
+                        ui.horizontal(|ui| {
+                            if ui.button("⏹  Arrêter le serveur").clicked() {
+                                actions.stop_local_server = true;
+                            }
+                            if ui.button("📋  Copier l'adresse").clicked()
+                                && let Some(addr) = local_server_addr
+                            {
+                                let room = room_code.trim();
+                                let text = if room.is_empty() {
+                                    format!("ws://{addr}")
+                                } else {
+                                    format!("ws://{addr}\nCode de partie : {room}")
+                                };
+                                ui.ctx().copy_text(text);
+                            }
+                        });
+                        ui.small(
+                            "Le nombre de joueurs connectés apparaît dans le tableau des joueurs \
+                         une fois toi-même connecté (bouton ▶ Se connecter ci-dessus, avec \
+                         l'adresse copiée).",
+                        );
+                    } else {
+                        if ui.button("▶  Démarrer un serveur local").clicked() {
+                            actions.start_local_server = true;
+                        }
+                        ui.small(
+                            "Lance un serveur sur cette machine (127.0.0.1:7777, accessible \
+                         uniquement depuis cette machine) — pratique pour tester le \
+                         multijoueur avec plusieurs instances de l'éditeur/du player en local, \
+                         sans ouvrir de terminal.",
+                        );
+                    }
+
+                    ui.add_space(12.0);
+                    ui.separator();
+                    ui.heading("Compte (optionnel)");
+                    let firebase_configured = !settings.firebase_api_key.trim().is_empty()
+                        && !settings.firebase_database_url.trim().is_empty();
+                    if !firebase_configured {
+                        ui.small(
+                            "Configure d'abord une clé API et une URL Database dans \
+                         ⚙ Paramètres pour activer les comptes (progression persistante).",
+                        );
+                    } else {
+                        ui.label("Email");
+                        ui.add(egui::TextEdit::singleline(email).hint_text("toi@example.com"));
+                        ui.label("Mot de passe");
+                        ui.add(egui::TextEdit::singleline(password).password(true));
+                        let can_auth = !email.trim().is_empty() && !password.trim().is_empty();
+                        ui.horizontal(|ui| {
+                            if ui
+                                .add_enabled(can_auth, egui::Button::new("Se connecter (compte)"))
+                                .clicked()
+                            {
+                                actions.firebase_sign_in = Some((email.clone(), password.clone()));
+                            }
+                            if ui
+                                .add_enabled(can_auth, egui::Button::new("Créer un compte"))
+                                .clicked()
+                            {
+                                actions.firebase_sign_up = Some((email.clone(), password.clone()));
+                            }
+                        });
+                        ui.small(
+                            "Se connecter avant de rejoindre un salon relie ta progression \
+                         (XP, classement) à ce compte, cf. SPRINT_MMORPG.md.",
+                        );
+                    }
+
+                    if firebase_configured {
+                        ui.add_space(12.0);
+                        ui.separator();
+                        ui.heading("Chat");
+                        ui.label("Salon");
+                        ui.add(egui::TextEdit::singleline(lobby_code).hint_text("default"));
+                        ui.add_space(4.0);
+                        egui::ScrollArea::vertical()
+                            .max_height(140.0)
+                            .show(ui, |ui| {
+                                let visible: Vec<_> = chat_messages
+                                    .iter()
+                                    .filter(|line| !settings.is_muted(&line.sender))
+                                    .collect();
+                                if visible.is_empty() {
+                                    ui.small("Aucun message pour l'instant.");
+                                }
+                                for line in visible {
+                                    ui.horizontal(|ui| {
+                                        ui.label(format!("{} : {}", line.sender, line.text));
+                                        // Un joueur ne peut pas se muter lui-même.
+                                        if line.sender != *name
+                                        // Texte statique plutôt que `format!` par ligne : le
+                                        // pseudo est déjà affiché juste à côté, pas besoin de
+                                        // le répéter dans l'infobulle — évite une allocation
+                                        // par ligne visible à chaque frame.
+                                        && ui
+                                            .small_button("🔇")
+                                            .on_hover_text("Muet ce joueur")
+                                            .clicked()
+                                        {
+                                            settings.mute_player(&line.sender);
+                                        }
+                                    });
+                                }
+                            });
+                        ui.horizontal(|ui| {
+                            ui.add(
+                                egui::TextEdit::singleline(chat_input)
+                                    .hint_text("Message…")
+                                    .desired_width(180.0)
+                                    .char_limit(crate::app::network_client::MAX_CHAT_LEN),
+                            );
+                            let can_send = has_firebase_account
+                                && !chat_input.trim().is_empty()
+                                && !lobby_code.trim().is_empty();
+                            if ui
+                                .add_enabled(can_send, egui::Button::new("Envoyer"))
+                                .clicked()
+                            {
+                                actions.send_chat_message =
+                                    Some((lobby_code.clone(), name.clone(), chat_input.clone()));
+                                chat_input.clear();
+                            }
+                        });
+                        if !has_firebase_account {
+                            ui.small("Connecte-toi d'abord à un compte pour envoyer des messages.");
+                        }
+                        if ui.button("🔄  Rafraîchir").clicked() && !lobby_code.trim().is_empty()
+                        {
+                            actions.refresh_chat = Some(lobby_code.clone());
+                        }
+                        ui.small(
+                            "Le salon se rafraîchit aussi automatiquement toutes les quelques \
+                         secondes tant que cette fenêtre reste ouverte.",
+                        );
+                        if !settings.muted_players.is_empty() {
+                            ui.add_space(6.0);
+                            ui.collapsing("Joueurs muets", |ui| {
+                                // Un seul pseudo cloné (au clic), pas toute la liste à chaque
+                                // frame : `settings` reste emprunté en lecture pendant la
+                                // boucle, la mutation n'arrive qu'une fois cet emprunt terminé.
+                                let mut to_unmute: Option<String> = None;
+                                for player in &settings.muted_players {
+                                    ui.horizontal(|ui| {
+                                        ui.small(player);
+                                        if ui.small_button("🔊 Démuter").clicked() {
+                                            to_unmute = Some(player.clone());
+                                        }
+                                    });
+                                }
+                                if let Some(player) = to_unmute {
+                                    settings.unmute_player(&player);
                                 }
                             });
                         }
-                        if let Some(player) = to_unmute {
-                            settings.unmute_player(&player);
-                        }
-                    });
-                }
 
-                ui.add_space(12.0);
-                ui.separator();
-                ui.heading("Classement");
-                egui::ScrollArea::vertical()
-                    .max_height(120.0)
-                    .show(ui, |ui| {
-                        if leaderboard.is_empty() {
-                            ui.small("Aucun score pour l'instant.");
+                        ui.add_space(12.0);
+                        ui.separator();
+                        ui.heading("Classement");
+                        egui::ScrollArea::vertical()
+                            .max_height(120.0)
+                            .show(ui, |ui| {
+                                if leaderboard.is_empty() {
+                                    ui.small("Aucun score pour l'instant.");
+                                }
+                                for (rank, entry) in leaderboard.iter().enumerate() {
+                                    ui.label(format!(
+                                        "{}. {} — {}",
+                                        rank + 1,
+                                        entry.name,
+                                        entry.score
+                                    ));
+                                }
+                            });
+                        if ui.button("🔄  Rafraîchir le classement").clicked() {
+                            actions.refresh_leaderboard = true;
                         }
-                        for (rank, entry) in leaderboard.iter().enumerate() {
-                            ui.label(format!("{}. {} — {}", rank + 1, entry.name, entry.score));
-                        }
-                    });
-                if ui.button("🔄  Rafraîchir le classement").clicked() {
-                    actions.refresh_leaderboard = true;
-                }
 
-                // Section « Présence en ligne » (Phase L Sprint 1,
-                // `sprint2audijeu0718.md`) : `list_online_players`/`set_presence`
-                // (déjà backés par Firebase, `net/firebase.rs`) n'étaient jusqu'ici
-                // jamais affichés. Présence globale par compte (pas filtrée par
-                // salon, cf. doc du champ `AppState::online_players`) — le heartbeat
-                // et le rafraîchissement automatique tournent tant que cette
-                // fenêtre reste ouverte (`editor::mod`).
-                ui.add_space(12.0);
-                ui.separator();
-                ui.heading("Présence en ligne");
-                if !has_firebase_account {
-                    ui.small(
-                        "Connecte-toi à un compte pour apparaître dans la liste \
-                         (le heartbeat de présence nécessite un compte).",
-                    );
-                }
-                egui::ScrollArea::vertical()
-                    .max_height(100.0)
-                    .show(ui, |ui| {
-                        if online_players.is_empty() {
-                            ui.small("Aucun joueur en ligne pour l'instant.");
+                        // Section « Présence en ligne » (Phase L Sprint 1,
+                        // `sprint2audijeu0718.md`) : `list_online_players`/`set_presence`
+                        // (déjà backés par Firebase, `net/firebase.rs`) n'étaient jusqu'ici
+                        // jamais affichés. Présence globale par compte (pas filtrée par
+                        // salon, cf. doc du champ `AppState::online_players`) — le heartbeat
+                        // et le rafraîchissement automatique tournent tant que cette
+                        // fenêtre reste ouverte (`editor::mod`).
+                        ui.add_space(12.0);
+                        ui.separator();
+                        ui.heading("Présence en ligne");
+                        if !has_firebase_account {
+                            ui.small(
+                                "Connecte-toi à un compte pour apparaître dans la liste \
+                             (le heartbeat de présence nécessite un compte).",
+                            );
                         }
-                        for uid in online_players {
-                            ui.label(format!("🟢 {uid}"));
+                        egui::ScrollArea::vertical()
+                            .max_height(100.0)
+                            .show(ui, |ui| {
+                                if online_players.is_empty() {
+                                    ui.small("Aucun joueur en ligne pour l'instant.");
+                                }
+                                for uid in online_players {
+                                    ui.label(format!("🟢 {uid}"));
+                                }
+                            });
+                        if ui.button("🔄  Rafraîchir la présence").clicked() {
+                            actions.refresh_online_players = true;
                         }
-                    });
-                if ui.button("🔄  Rafraîchir la présence").clicked() {
-                    actions.refresh_online_players = true;
-                }
-            }
+                    }
+                });
         });
     panels.multiplayer = open;
 }
@@ -2926,7 +2947,10 @@ pub(super) fn player_welcome_window(
         .resizable(false)
         .title_bar(true)
         .frame(frame)
-        .fixed_pos(egui::pos2(area.center().x - win_w / 2.0, area.center().y - 190.0))
+        .fixed_pos(egui::pos2(
+            area.center().x - win_w / 2.0,
+            area.center().y - 190.0,
+        ))
         .default_width(win_w)
         .max_width(win_w)
         .show(ctx, |ui| {
