@@ -106,6 +106,9 @@ impl Renderer {
             if let Some(v) = actions.reduce_shake {
                 app.set_reduce_shake(v);
             }
+            if let Some(v) = actions.render_quality {
+                app.set_render_quality(v);
+            }
             if let Some(kb) = &actions.keyboard_bindings {
                 app.set_keyboard_bindings(kb);
             }
@@ -1504,6 +1507,9 @@ fn apply_editor_actions(
     }
     if let Some(v) = actions.reduce_shake {
         app.set_reduce_shake(v);
+    }
+    if let Some(v) = actions.render_quality {
+        app.set_render_quality(v);
     }
     if let Some(v) = actions.mouse_sensitivity {
         app.set_mouse_sensitivity(v);

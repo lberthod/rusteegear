@@ -1166,6 +1166,28 @@ fn settings_player_sections(
     if changed {
         settings.save();
     }
+
+    ui.add_space(12.0);
+    ui.separator();
+    ui.heading(settings_heading(locale, SettingsSection::Graphics));
+    ui.small(crate::app::locale::render_quality_hint(locale));
+    ui.horizontal(|ui| {
+        use crate::app::build_config::RenderQuality;
+        let mut changed = false;
+        for q in [
+            RenderQuality::Low,
+            RenderQuality::Medium,
+            RenderQuality::High,
+        ] {
+            changed |= ui
+                .selectable_value(&mut settings.render_quality, q, q.label())
+                .changed();
+        }
+        if changed {
+            settings.save();
+            actions.render_quality = Some(settings.render_quality);
+        }
+    });
 }
 
 /// Paramètres du mode Player (`--player`/mobile/web) : Audio, Accessibilité,
@@ -2599,6 +2621,7 @@ pub(super) fn help_window(
     open: &mut bool,
     locale: crate::app::locale::Locale,
     touch: bool,
+    ability_bar: bool,
 ) {
     if !*open {
         return;
@@ -2639,11 +2662,26 @@ pub(super) fn help_window(
                     .spacing([18.0, 3.0])
                     .show(ui, |ui| {
                         for s in by_scope(*scope) {
+                            // Scènes à barre de capacités (`Scene::ability_bar`, ex. démo
+                            // Rivière) : ces trois lignes décrivent l'ancien kit d'armes
+                            // (`J` attaque / `K` tir / `1` `2` `3` choix d'arme), remplacé
+                            // ici par `H`+capacités 1-4 — cf. `ability_bar_hint` ci-dessous.
+                            // Les scènes à kit d'armes (`weapon_inventory`, ex. hameau_gdd)
+                            // gardent ces lignes, toujours exactes pour elles.
+                            if ability_bar
+                                && *scope == Scope::Play
+                                && matches!(s.keys, "`J`" | "`K`" | "`1` `2` `3`")
+                            {
+                                continue;
+                            }
                             ui.label(s.keys.replace('`', ""));
                             ui.label(s.action);
                             ui.end_row();
                         }
                     });
+                if ability_bar && *scope == Scope::Play {
+                    ui.small(crate::app::locale::ability_bar_hint(locale));
+                }
                 ui.add_space(6.0);
             }
             ui.small(match locale {
@@ -2934,6 +2972,7 @@ pub(super) fn player_welcome_window(
     actions: &mut UiActions,
     settings_open: &mut bool,
     help_open: &mut bool,
+    ability_bar: bool,
 ) -> Option<WelcomeChoice> {
     use crate::app::locale as l;
     use crate::net::protocol::MAX_NAME_LEN;
@@ -3071,7 +3110,7 @@ pub(super) fn player_welcome_window(
                 ui.colored_label(egui::Color32::from_rgb(240, 115, 106), format!("⚠ {err}"));
             }
             ui.add_space(6.0);
-            ui.small(l::controls_hint(locale));
+            ui.small(l::welcome_controls_hint(locale, ability_bar));
         });
     choice
 }

@@ -2042,6 +2042,17 @@ impl AppState {
         self.fx.reduce_shake = v;
     }
 
+    /// Qualité de rendu choisie par le joueur (roadmap.md, audit UX
+    /// 2026-09-15, persistée dans `Settings::render_quality`). Effet
+    /// immédiat sur `light_budget()`/`bloom_enabled()`, lus chaque frame
+    /// depuis ce champ (cf. `gfx::renderer::sync`/`frame`) ; `msaa_samples()`
+    /// et `shadow_size()` restent figés jusqu'au prochain lancement (lus une
+    /// seule fois à la création du renderer, cf.
+    /// `gfx::renderer::resources::new_impl`).
+    pub fn set_render_quality(&mut self, v: build_config::RenderQuality) {
+        self.render_quality = v;
+    }
+
     /// Remapping clavier (Paramètres › Clavier) — cf. `keys`.
     pub fn set_keyboard_bindings(&mut self, b: &settings::KeyboardBindings) {
         self.keys = input::ResolvedKeys::from_bindings(b);

@@ -860,7 +860,7 @@ impl ApplicationHandler for App {
             }
         };
         #[cfg(not(target_arch = "wasm32"))]
-        match pollster::block_on(Renderer::new(window)) {
+        match pollster::block_on(Renderer::new(window, self.state.player)) {
             Ok(renderer) => {
                 self.state
                     .set_viewport(renderer.size.width, renderer.size.height);
@@ -877,8 +877,9 @@ impl ApplicationHandler for App {
         #[cfg(target_arch = "wasm32")]
         {
             let slot = self.pending_renderer.clone();
+            let player = self.state.player;
             wasm_bindgen_futures::spawn_local(async move {
-                match Renderer::new(window).await {
+                match Renderer::new(window, player).await {
                     Ok(renderer) => *slot.borrow_mut() = Some(renderer),
                     Err(e) => log::error!("Initialisation du renderer impossible : {e}"),
                 }

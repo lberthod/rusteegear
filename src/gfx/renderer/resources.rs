@@ -1,22 +1,30 @@
 use super::*;
 
 impl Renderer {
-    pub async fn new(window: Arc<Window>) -> Result<Renderer, String> {
+    /// `player` distingue le mode Player (jeu exporté/joué, `Settings` fait autorité
+    /// pour la qualité de rendu) de l'édition desktop (`BuildConfig`/panneau Export
+    /// fait autorité) — cf. `build_config::effective_render_quality`, utilisé plus bas
+    /// pour `msaa_samples`/`shadow_size`, même bascule que `App::advance_play`
+    /// (`app/simulation.rs`) pour le reste du `render_quality`.
+    pub async fn new(window: Arc<Window>, player: bool) -> Result<Renderer, String> {
         let size = window.inner_size();
-        Self::new_impl(Some(window), size).await
+        Self::new_impl(Some(window), size, player).await
     }
 
     /// Rendu headless : pas de fenêtre ni de surface d'écran (golden tests).
     /// `compatible_surface: None` à la création de l'adaptateur ; format fixe
-    /// (`Rgba8UnormSrgb`) puisqu'il n'y a pas de surface pour en dicter un.
+    /// (`Rgba8UnormSrgb`) puisqu'il n'y a pas de surface pour en dicter un. `player` n'a
+    /// aucun effet ici (branches `window.is_some()` ci-dessous toutes désactivées) —
+    /// passé `false` par simplicité côté appelants (tests, outillage).
     pub async fn new_headless(width: u32, height: u32) -> Result<Renderer, String> {
         let size = winit::dpi::PhysicalSize::new(width.max(1), height.max(1));
-        Self::new_impl(None, size).await
+        Self::new_impl(None, size, false).await
     }
 
     pub(super) async fn new_impl(
         window: Option<Arc<Window>>,
         size: winit::dpi::PhysicalSize<u32>,
+        player: bool,
     ) -> Result<Renderer, String> {
         let instance = wgpu::Instance::default();
         let surface = match &window {
@@ -121,9 +129,8 @@ impl Renderer {
         // ce nombre d'échantillons pour les deux formats de la passe principale (repli
         // silencieux à 1 sinon, ex. certains backends GLES/WebGL).
         let msaa_samples = if window.is_some() {
-            let wanted = crate::app::build_config::BuildConfig::load()
-                .render_quality
-                .msaa_samples();
+            let wanted =
+                crate::app::build_config::effective_render_quality(player).msaa_samples();
             let supported = wanted <= 1
                 || (adapter
                     .get_texture_format_features(HDR_FORMAT)
@@ -141,9 +148,7 @@ impl Renderer {
         // Taille de la carte d'ombre : réglage de qualité en fenêtré, valeur de
         // référence en headless (goldens déterministes, cf. `msaa_samples`).
         let shadow_size = if window.is_some() {
-            crate::app::build_config::BuildConfig::load()
-                .render_quality
-                .shadow_size()
+            crate::app::build_config::effective_render_quality(player).shadow_size()
         } else {
             SHADOW_SIZE
         };

@@ -818,6 +818,12 @@ pub struct UiActions {
     /// accessibilité §16.6) — `hud_scale` n'a pas besoin de ce détour, lu
     /// directement depuis `Settings` aux points de dessin du HUD.
     pub reduce_shake: Option<bool>,
+    /// Fenêtre Paramètres : qualité de rendu changée par le joueur (roadmap.md,
+    /// audit UX 2026-09-15) — `light_budget`/`bloom_enabled` s'appliquent en
+    /// direct via `AppState::render_quality` ; `msaa_samples`/`shadow_size`
+    /// restent figés jusqu'au prochain lancement (lus une seule fois à la
+    /// création du renderer, cf. `gfx::renderer::resources::new_impl`).
+    pub render_quality: Option<crate::app::build_config::RenderQuality>,
     /// Réordonnancement de l'objet sélectionné : `Some(true)` = descendre, `Some(false)` = monter.
     pub move_in_list: Option<bool>,
     /// Réordonnancement par glisser-déposer dans la hiérarchie : `(index source, index cible)`.
@@ -1447,6 +1453,7 @@ impl Editor {
                     &mut actions,
                     settings_open,
                     help_open,
+                    scene.ability_bar,
                 ) {
                     *welcome_pending = false;
                     *settings_open = false;
@@ -1483,7 +1490,7 @@ impl Editor {
                         locale,
                     );
                 }
-                windows::help_window(ctx, help_open, locale, touch_ui && mobile.any());
+                windows::help_window(ctx, help_open, locale, touch_ui && mobile.any(), scene.ability_bar);
                 windows::crash_log_window(ctx, crash_open, crash_log_text, crash_confirm, locale);
                 return;
             }
@@ -1824,7 +1831,7 @@ impl Editor {
             // dernier n'était câblé que dans l'éditeur : un plantage en mode
             // joueur restait muet. Section « Tactile » sur le même critère que
             // le stick (roadmap v2 1.1).
-            windows::help_window(ctx, help_open, locale, touch_ui && mobile.any());
+            windows::help_window(ctx, help_open, locale, touch_ui && mobile.any(), scene.ability_bar);
             windows::crash_log_window(ctx, crash_open, crash_log_text, crash_confirm, locale);
             // Carte (Phase carte plein écran) : mini-carte permanente en coin,
             // remplacée par la carte plein écran pendant que `M` la garde ouverte
@@ -2421,7 +2428,7 @@ fn build_ui(
     }
     // Aide en jeu (F1, roadmap 5.5) — en Play depuis l'éditeur.
     if *playing {
-        windows::help_window(root.ctx(), &mut panels.help, locale, false);
+        windows::help_window(root.ctx(), &mut panels.help, locale, false, scene.ability_bar);
     } else {
         panels.help = false;
     }

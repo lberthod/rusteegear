@@ -1189,9 +1189,17 @@ impl AppState {
             self.time = 0.0;
             // Relit la qualité visée (modifiable dans le panneau Export sans redémarrer
             // l'app) : s'applique dès ce lancement de Play, pas seulement au build exporté.
-            let cfg = crate::app::build_config::BuildConfig::load();
-            self.render_quality = cfg.render_quality;
-            self.bloom_enabled = cfg.bloom;
+            // En mode Player, `BuildConfig` (fichier `~/.motor3derust/…`, no-op
+            // sur wasm32 car basé sur `std::env::var("HOME")`) reste la source
+            // pour `bloom`, mais `render_quality` doit primer depuis
+            // `Settings` (roadmap.md, audit UX 2026-09-15) — seul réglage qui
+            // persiste réellement côté web (`localStorage`) et que le joueur
+            // peut changer lui-même (Paramètres › Qualité graphique). En
+            // édition desktop, le panneau Export reste la seule source. Même
+            // bascule que `Renderer::new_impl` (msaa/ombres), via
+            // `build_config::effective_render_quality`.
+            self.render_quality = crate::app::build_config::effective_render_quality(self.player);
+            self.bloom_enabled = crate::app::build_config::BuildConfig::load().bloom;
             // La caméra libre est un outil d'édition : la caméra de jeu prend le
             // relais en Play, cf. `toggle_fly_cam`.
             self.fly_cam = false;

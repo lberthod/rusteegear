@@ -133,6 +133,17 @@ pub struct Settings {
     /// (roadmap v2 1.4) ; vide = `network_client::DEFAULT_SERVER_URL`.
     #[serde(default)]
     pub server_url: String,
+    /// Qualité de rendu choisie par le joueur (roadmap.md, audit UX
+    /// 2026-09-15 : avant, `RenderQuality` n'était réglable que depuis le
+    /// panneau Export de l'éditeur desktop — `BuildConfig::load()`/`save()`
+    /// reposent sur `std::env::var("HOME")` + `std::fs`, un no-op sur wasm32,
+    /// donc figé à `Medium` sur le web quel que soit l'appareil). Ce champ vit
+    /// dans `Settings`, qui persiste réellement sur le web via `localStorage`
+    /// (`assets::persisted_read`/`persisted_write`). Défaut par plateforme :
+    /// `Low` sur Android/iOS natifs (même signal que
+    /// `AppState::touch_ui_active`), `Medium` ailleurs.
+    #[serde(default = "default_render_quality")]
+    pub render_quality: crate::app::build_config::RenderQuality,
 }
 
 /// Touches des actions de jeu, remappables (roadmap post-audit UX 2026-09-04,
@@ -296,6 +307,21 @@ fn default_hud_scale() -> f32 {
     1.0
 }
 
+/// Qualité de rendu par défaut d'un premier lancement, avant tout choix
+/// joueur : `Low` sur Android/iOS natifs (même signal que
+/// `cfg!(target_os = "android"/"ios")` dans `AppState::touch_ui_active`), où
+/// le matériel visé est en moyenne plus contraint qu'un desktop ; `Medium`
+/// partout ailleurs (desktop et web — aucun signal fiable de détection
+/// tactile n'est câblé côté web avant le premier `touch`, cf.
+/// `AppState::touch_ui_active`).
+fn default_render_quality() -> crate::app::build_config::RenderQuality {
+    if cfg!(any(target_os = "android", target_os = "ios")) {
+        crate::app::build_config::RenderQuality::Low
+    } else {
+        crate::app::build_config::RenderQuality::Medium
+    }
+}
+
 impl Default for Settings {
     fn default() -> Self {
         Self {
@@ -327,6 +353,7 @@ impl Default for Settings {
             player_room: String::new(),
             last_play_online: true,
             server_url: String::new(),
+            render_quality: default_render_quality(),
         }
     }
 }
@@ -675,6 +702,41 @@ mod tests {
         let settings: Settings = serde_json::from_str(old_json)
             .expect("un ancien settings.json sans `gamepad` doit rester lisible");
         assert_eq!(settings.gamepad, GamepadBindings::default());
+    }
+
+    /// Roadmap.md, audit UX 2026-09-15 : un `settings.json` antérieur au
+    /// champ `render_quality` doit continuer à charger, avec le défaut par
+    /// plateforme plutôt qu'une erreur de désérialisation. Sur la machine de
+    /// test (ni Android ni iOS), le défaut attendu est `Medium`.
+    #[test]
+    fn an_old_settings_file_without_render_quality_loads_with_platform_default() {
+        let old_json = r#"{"music_volume": 0.8, "sfx_volume": 0.8}"#;
+        let settings: Settings = serde_json::from_str(old_json)
+            .expect("un ancien settings.json sans `render_quality` doit rester lisible");
+        assert!(matches!(
+            settings.render_quality,
+            crate::app::build_config::RenderQuality::Medium
+        ));
+        assert_eq!(
+            Settings::default().render_quality.light_budget(),
+            crate::app::build_config::RenderQuality::Medium.light_budget()
+        );
+    }
+
+    /// Le choix joueur (Paramètres › Qualité graphique) doit survivre à un
+    /// aller-retour JSON, comme tout autre réglage persisté.
+    #[test]
+    fn render_quality_round_trips_through_json() {
+        let s = Settings {
+            render_quality: crate::app::build_config::RenderQuality::High,
+            ..Settings::default()
+        };
+        let json = serde_json::to_string(&s).expect("sérialisable");
+        let back: Settings = serde_json::from_str(&json).expect("désérialisable");
+        assert!(matches!(
+            back.render_quality,
+            crate::app::build_config::RenderQuality::High
+        ));
     }
 
     /// 15 septembre 2026 : un `settings.json` antérieur avec un objet `gamepad`

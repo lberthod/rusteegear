@@ -67,6 +67,20 @@ else
     echo "⚠ wasm-opt introuvable (brew install binaryen) — .wasm non compacté, ~20-35 % plus gros que nécessaire."
 fi
 
+# Garde-fou de taille (roadmap.md, § Priorisation perf, quick win 1) : un
+# build concurrent (ex. un autre `cargo build` en cours ailleurs) peut écraser
+# le .wasm en cours d'écriture par wasm-bindgen/wasm-opt et produire un
+# fichier tronqué qui charge quand même dans le navigateur, avec la scène
+# dégradée en cubes faute d'assets — déjà vécu deux fois (3-4 septembre 2026).
+# Seuil choisi par roadmap.md : bien en dessous du ~36-37 Mo attendu (assets
+# Rivière ~12 Mo embarqués), largement au-dessus des ~15 Mo observés lors de
+# l'incident. Logique extraite dans check_wasm_size.sh pour être testable
+# isolément (cf. packaging/test_check_wasm_size.sh). À réévaluer si une
+# optimisation future (compression de texture GPU, lazy-loading — pistes
+# roadmap.md) fait légitimement baisser la taille attendue du bundle sous ce
+# seuil : ce garde-fou rejetterait alors des builds sains.
+"$(dirname "$0")/check_wasm_size.sh" packaging/web/pkg/motor3derust_bg.wasm 30
+
 if [ "${PLAYER_BUILD:-0}" = "1" ]; then
     STAGE="target/export/web_stage/${OUTPUT_NAME}"
     ZIP="target/export/${OUTPUT_NAME}-web.zip"

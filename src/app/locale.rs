@@ -456,7 +456,7 @@ pub fn play_solo_label(locale: Locale) -> &'static str {
 }
 
 /// Rappel du kit de capacités 1-2-3-4 (14 septembre 2026, `Scene::ability_bar`)
-/// — cf. `editor::hud::ability_bar_hint`.
+/// — cf. `editor::hud::ability_bar`.
 pub fn ability_bar_hint(locale: Locale) -> &'static str {
     match locale {
         Locale::Fr => "1/J Mêlée · 2 Bouclier · 3/K Sort · 4 Ruée · H Soin · G Griffe",
@@ -493,6 +493,52 @@ pub fn controls_hint(locale: Locale) -> &'static str {
         }
         Locale::En => {
             "WASD/arrows: move · Space: jump · J: attack · K: shoot · H: heal · Esc: pause · M: map"
+        }
+    }
+}
+
+/// Déplacement/saut/pause/carte, sans mention d'arme ou de capacité (cf.
+/// `welcome_controls_hint`, qui complète avec `controls_hint` ou
+/// `ability_bar_hint` selon le kit de la scène — les deux couvrent déjà les
+/// attaques/soins avec leurs propres touches).
+fn movement_hint(locale: Locale) -> &'static str {
+    match locale {
+        Locale::Fr => "WASD/flèches : se déplacer · Espace : sauter · Échap : pause · M : carte",
+        Locale::En => "WASD/arrows: move · Space: jump · Esc: pause · M: map",
+    }
+}
+
+/// Hint de contrôles de l'écran d'accueil (`player_welcome_window`) : correctif UX
+/// 2026-09-15, revue adversariale — avant, une scène à barre de capacités
+/// (`Scene::ability_bar`, ex. démo Rivière) basculait ENTIÈREMENT sur `ability_bar_hint`
+/// (mêlée/bouclier/sort/ruée/soin/griffe) à la place de `controls_hint`, qui perdait donc
+/// le déplacement WASD/flèches, le saut, la pause et la carte — un nouveau joueur qui ne
+/// lit que ce hint avant de cliquer « Jouer » ne savait plus s'orienter. Combine
+/// maintenant `movement_hint` (déplacement/saut/pause/carte, commun aux deux kits) avec
+/// soit `ability_bar_hint` (scène à capacités), soit le reste de `controls_hint`
+/// (attaque/tir/soin, scène à kit d'armes classique) — jamais l'un sans l'autre.
+pub fn welcome_controls_hint(locale: Locale, ability_bar: bool) -> String {
+    if ability_bar {
+        format!("{} · {}", movement_hint(locale), ability_bar_hint(locale))
+    } else {
+        controls_hint(locale).to_string()
+    }
+}
+
+/// Description courte sous le sélecteur de qualité graphique (roadmap.md,
+/// audit UX 2026-09-15) : les libellés Basse/Moyenne/Haute viennent de
+/// `build_config::RenderQuality::label()`, pas d'ici — ce texte explique
+/// juste la limite MSAA/ombres, pas répétée dans le libellé lui-même.
+pub fn render_quality_hint(locale: Locale) -> &'static str {
+    match locale {
+        Locale::Fr => {
+            "Nombre de lumières et flou (bloom) appliqués immédiatement. \
+             Netteté des bords (anti-crénelage) et des ombres : prend effet \
+             au prochain lancement."
+        }
+        Locale::En => {
+            "Light count and bloom apply immediately. Edge smoothing \
+             (anti-aliasing) and shadow sharpness: take effect on next launch."
         }
     }
 }
@@ -650,10 +696,13 @@ pub enum SettingsSection {
     Language,
     Keyboard,
     Gamepad,
+    /// Qualité de rendu joueur (roadmap.md, audit UX 2026-09-15) — cf.
+    /// `Settings::render_quality`.
+    Graphics,
 }
 
 impl SettingsSection {
-    pub const ALL: [SettingsSection; 7] = [
+    pub const ALL: [SettingsSection; 8] = [
         SettingsSection::Accounts,
         SettingsSection::Audio,
         SettingsSection::Startup,
@@ -661,6 +710,7 @@ impl SettingsSection {
         SettingsSection::Language,
         SettingsSection::Keyboard,
         SettingsSection::Gamepad,
+        SettingsSection::Graphics,
     ];
 }
 
@@ -674,6 +724,7 @@ pub fn settings_heading(locale: Locale, section: SettingsSection) -> &'static st
         (Locale::Fr, S::Language) => "🌐 Langue (jeu)",
         (Locale::Fr, S::Keyboard) => "⌨ Clavier",
         (Locale::Fr, S::Gamepad) => "🎮 Manette",
+        (Locale::Fr, S::Graphics) => "🖥 Qualité graphique",
         (Locale::En, S::Accounts) => "Multiplayer — accounts (Firebase)",
         (Locale::En, S::Audio) => "🔊 Sound",
         (Locale::En, S::Startup) => "📁 Startup",
@@ -681,6 +732,7 @@ pub fn settings_heading(locale: Locale, section: SettingsSection) -> &'static st
         (Locale::En, S::Language) => "🌐 Language (game)",
         (Locale::En, S::Keyboard) => "⌨ Keyboard",
         (Locale::En, S::Gamepad) => "🎮 Gamepad",
+        (Locale::En, S::Graphics) => "🖥 Graphics quality",
     }
 }
 
@@ -814,6 +866,10 @@ mod tests {
                 "{section:?}"
             );
         }
+        assert_ne!(
+            render_quality_hint(Locale::Fr),
+            render_quality_hint(Locale::En)
+        );
     }
 
     /// Roadmap post-audit UX v2 2026-09-04, 1.9 : le texte spectateur cite la
@@ -897,5 +953,69 @@ mod tests {
     #[test]
     fn default_locale_is_french() {
         assert_eq!(Locale::default(), Locale::Fr);
+    }
+
+    /// Correctif UX 2026-09-15 : le hint de contrôles affiché sur l'écran
+    /// d'accueil des scènes à kit de capacités (`Scene::ability_bar`, ex.
+    /// Rivière) doit mentionner le Bouclier et la Ruée, absents de
+    /// `controls_hint` (qui décrit l'ancien kit d'armes J/K).
+    #[test]
+    fn ability_bar_hint_mentions_shield_and_dash() {
+        assert!(ability_bar_hint(Locale::Fr).contains("Bouclier"));
+        assert!(ability_bar_hint(Locale::Fr).contains("Ruée"));
+        assert!(ability_bar_hint(Locale::En).contains("Shield"));
+        assert!(ability_bar_hint(Locale::En).contains("Dash"));
+        assert_ne!(ability_bar_hint(Locale::Fr), ability_bar_hint(Locale::En));
+    }
+
+    #[test]
+    fn controls_hint_does_not_mention_shield_or_dash() {
+        // `controls_hint` reste le hint des scènes sans barre de capacités
+        // (ancien kit d'armes) : il ne doit pas laisser croire à un bouclier
+        // ou une ruée qui n'existent pas dans ce kit.
+        assert!(!controls_hint(Locale::Fr).contains("Bouclier"));
+        assert!(!controls_hint(Locale::En).contains("Shield"));
+    }
+
+    /// Bug [MEDIUM] corrigé ici : sur une scène à barre de capacités (`ability_bar`,
+    /// ex. démo Rivière), l'écran d'accueil basculait entièrement sur `ability_bar_hint`
+    /// et perdait le déplacement/saut/pause/carte. `welcome_controls_hint` doit
+    /// combiner les deux informations plutôt que remplacer l'une par l'autre.
+    #[test]
+    fn welcome_controls_hint_combines_movement_and_abilities_for_ability_bar_scenes() {
+        for locale in [Locale::Fr, Locale::En] {
+            let hint = welcome_controls_hint(locale, true);
+            // Toujours là : déplacement, saut, pause, carte.
+            assert!(hint.contains("WASD"));
+            assert!(hint.to_lowercase().contains(if locale == Locale::Fr {
+                "sauter"
+            } else {
+                "jump"
+            }));
+            assert!(hint.contains('M'), "doit mentionner la carte (M)");
+            // Et le kit de capacités réel de la scène (bouclier/ruée), pas l'ancien
+            // kit d'armes.
+            if locale == Locale::Fr {
+                assert!(hint.contains("Bouclier"));
+                assert!(hint.contains("Ruée"));
+            } else {
+                assert!(hint.contains("Shield"));
+                assert!(hint.contains("Dash"));
+            }
+        }
+    }
+
+    #[test]
+    fn welcome_controls_hint_falls_back_to_controls_hint_for_weapon_kit_scenes() {
+        // Scène sans barre de capacités (kit d'armes classique, ex. hameau_gdd) :
+        // inchangé, c'est `controls_hint` qui fait référence.
+        assert_eq!(
+            welcome_controls_hint(Locale::Fr, false),
+            controls_hint(Locale::Fr)
+        );
+        assert_eq!(
+            welcome_controls_hint(Locale::En, false),
+            controls_hint(Locale::En)
+        );
     }
 }

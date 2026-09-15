@@ -34,7 +34,7 @@ impl Orientation {
 }
 
 /// Niveau de qualité de rendu visé par le player mobile.
-#[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize, Default)]
 pub enum RenderQuality {
     Low,
     #[default]
@@ -100,6 +100,40 @@ impl RenderQuality {
     }
 }
 
+/// Qualité de rendu à appliquer selon le mode (même bascule que `App::advance_play`,
+/// `app/simulation.rs`, pour `self.render_quality`/`self.bloom_enabled` — voir la doc
+/// à cet appel pour le détail) : en mode Player, `Settings` (fichier
+/// `~/.motor3derust/settings.json`, ou `localStorage` sur le web) est la seule source
+/// qui persiste réellement côté joueur et que le panneau Paramètres peut modifier ;
+/// `BuildConfig` (`~/.motor3derust/build_config.json`, no-op sur wasm32 — cf. `load`
+/// ci-dessous) reste la source en édition desktop, où seul le panneau Export pilote la
+/// qualité visée par l'export. Utilisée par `Renderer::new_impl` (msaa/ombres, fixées à
+/// la création du renderer) en plus de `App::advance_play` (lumières/bloom, relus à
+/// chaque lancement de Play).
+pub fn effective_render_quality(player: bool) -> RenderQuality {
+    choose_render_quality(
+        player,
+        crate::app::settings::Settings::load().render_quality,
+        BuildConfig::load().render_quality,
+    )
+}
+
+/// Logique pure derrière `effective_render_quality`, séparée de la lecture disque pour
+/// rester testable sans toucher `$HOME` (même souci que les tests `assets_dir`/
+/// `Settings::parse` déjà présents dans le crate) : en mode Player, la valeur
+/// `Settings` prime ; sinon (édition desktop), `BuildConfig` prime.
+fn choose_render_quality(
+    player: bool,
+    settings_quality: RenderQuality,
+    build_config_quality: RenderQuality,
+) -> RenderQuality {
+    if player {
+        settings_quality
+    } else {
+        build_config_quality
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -141,6 +175,27 @@ mod tests {
         assert!(!RenderQuality::Low.bloom_enabled());
         assert!(RenderQuality::Medium.bloom_enabled());
         assert!(RenderQuality::High.bloom_enabled());
+    }
+
+    #[test]
+    fn choose_render_quality_picks_settings_in_player_mode_and_build_config_in_editor_mode() {
+        // Bug [HIGH] corrigé ici : `Renderer::new_impl` (msaa/ombres) et
+        // `App::advance_play` (lumières/bloom) doivent tous deux lire `Settings`
+        // (seule source qui persiste réellement côté joueur, y compris sur le web) en
+        // mode Player, et `BuildConfig` (panneau Export) en édition desktop — jamais
+        // l'inverse, sous peine de rendre `render_quality_hint()` mensonger (cf. revue
+        // adversariale). Testé sur la fonction pure `choose_render_quality`, pas sur
+        // `effective_render_quality`, pour ne pas dépendre de `$HOME`/disque.
+        assert_eq!(
+            choose_render_quality(true, RenderQuality::High, RenderQuality::Low),
+            RenderQuality::High,
+            "mode Player : `Settings` doit primer sur `BuildConfig`"
+        );
+        assert_eq!(
+            choose_render_quality(false, RenderQuality::High, RenderQuality::Low),
+            RenderQuality::Low,
+            "édition desktop : `BuildConfig` doit primer sur `Settings`"
+        );
     }
 
     #[test]
