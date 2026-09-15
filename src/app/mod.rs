@@ -2356,6 +2356,13 @@ impl AppState {
         self.player_object().map(|o| o.transform.position)
     }
 
+    /// Durées (ms) scripts Lua / physique rapier3d du dernier pas fixe
+    /// (`sim_step`) — diagnostic pour les bancs d'essai headless
+    /// (`examples/bench_sim_riviere.rs`), sans exposer `PerfState` en entier.
+    pub fn sim_perf_ms(&self) -> (f32, f32) {
+        (self.perf.sim_scripts_ms, self.perf.sim_physics_ms)
+    }
+
     /// Allié vivant que la caméra suit quand on est vaincu en ligne
     /// (roadmap post-audit UX 2026-09-04, 5.6) : `(nom, position)`, choisi par
     /// `spectate_cursor` dans la liste des fantômes réseau encore en vie,
