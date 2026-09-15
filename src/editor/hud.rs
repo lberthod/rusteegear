@@ -1101,11 +1101,66 @@ pub(super) const BOSSES: [(&str, PhaseLabelFn); 2] = [
 
 /// Hauteur (pt, avant mise à l'échelle `scale`) réservée par une barre de vie
 /// de boss empilée (`boss_health_bar`, paramètre `row`) : nom au-dessus
-/// (-9 pt), jauge (15 pt), libellé de phase en dessous (+7 pt jusqu'à sa
-/// propre hauteur de texte), plus une marge — dérivée des décalages déjà en
-/// dur dans cette fonction, avec de la place pour ne jamais chevaucher la
-/// barre suivante.
-const BOSS_BAR_ROW_HEIGHT: f32 = 46.0;
+/// (-9 pt), jauge (15 pt), libellé de phase en dessous (+7 pt), plus la
+/// hauteur de ligne RÉELLE des deux textes (mesurée via
+/// `painter.layout_no_wrap` dans `boss_health_bar`, pas devinée), plus une
+/// marge.
+///
+/// Audit du 15 septembre 2026 (chevauchement observé à 800×600 avec les deux
+/// boss de la démo Rivière) : l'ancienne valeur (`46.0`) ne provisionnait que
+/// les décalages numériques ci-dessus (-9/+7), pas la hauteur du glyphe des
+/// textes eux-mêmes. Avec les noms réels des deux boss (« L'Aîné de la
+/// Cascade », « Le Roi-Champignon du Sous-bois », `FontId::proportional
+/// (15.0)`) et le libellé de phase le plus long (`FontId::proportional
+/// (11.0)`), le bloc nom+jauge+libellé mesure réellement environ 48 pt à
+/// `scale = 1.0` (demi-hauteur de ligne mesurée ~9,7 pt pour le nom, ~7,1 pt
+/// pour le libellé, cf. `boss_bar_block_extent` dans les tests) — déjà égal
+/// ou supérieur aux 46 pt qui étaient censés séparer deux rangées, d'où le
+/// chevauchement. `60.0` laisse ~12 pt de marge réelle par rangée (cohérent
+/// avec `margin = 8.0` déjà utilisé ailleurs dans ce fichier), vérifiée par
+/// mesure exacte du texte et non plus par estimation — voir le
+/// `debug_assert!` dans `boss_health_bar` et le test
+/// `boss_bar_rows_never_overlap_at_default_scale`.
+const BOSS_BAR_ROW_HEIGHT: f32 = 60.0;
+
+/// Étendue verticale réelle (pt, offsets signés relatifs au centre de la
+/// jauge — `bar_top` dans `boss_health_bar`) du bloc nom+jauge+libellé de
+/// phase d'UNE barre de boss, mesurée avec les mêmes polices/décalages que
+/// `boss_health_bar` peint réellement, plutôt que devinée. Partagée entre le
+/// code de dessin (garde-fou `debug_assert!`/`log::warn!` contre
+/// `BOSS_BAR_ROW_HEIGHT`) et les tests (`boss_bar_rows_never_overlap_at_
+/// default_scale`) : la même mesure sert à peindre et à vérifier, donc un
+/// changement de police ou de décalage ne peut pas désynchroniser les deux.
+/// Retourne `(top, bottom)` : `top` est négatif (distance du haut du nom
+/// au-dessus du centre de la jauge), `bottom` est positif (distance du bas
+/// du libellé de phase en dessous) — la hauteur totale du bloc est
+/// `bottom - top`.
+pub(super) fn boss_bar_vertical_extent(
+    painter: &egui::Painter,
+    boss_name: &str,
+    phase_label: &str,
+    scale: f32,
+) -> (f32, f32) {
+    let h = 15.0 * scale; // hauteur de la jauge, cf. `boss_health_bar`
+    let name_galley = painter.layout_no_wrap(
+        boss_name.to_string(),
+        egui::FontId::proportional(15.0 * scale),
+        egui::Color32::WHITE,
+    );
+    let phase_galley = painter.layout_no_wrap(
+        phase_label.to_string(),
+        egui::FontId::proportional(11.0 * scale),
+        egui::Color32::WHITE,
+    );
+    // Centre du nom = bar.top() - 9*scale = -(h/2) - 9*scale (relatif au
+    // centre de la jauge) ; centre du libellé = bar.bottom() + 7*scale =
+    // h/2 + 7*scale — mêmes décalages que `boss_health_bar`.
+    let name_center = -(h / 2.0) - 9.0 * scale;
+    let phase_center = h / 2.0 + 7.0 * scale;
+    let top = name_center - name_galley.size().y / 2.0;
+    let bottom = phase_center + phase_galley.size().y / 2.0;
+    (top, bottom)
+}
 
 /// Barre de vie d'un boss de fin de parcours de la démo Rivière & cascade,
 /// centrée en haut de l'écran façon boss de raid — même bandeau top-center
@@ -1174,6 +1229,27 @@ pub(super) fn boss_health_bar(
         egui::Order::Foreground,
         egui::Id::new(format!("hud_boss_{row}")),
     ));
+    // Vérifie, en mesurant le texte réel (pas une estimation), que le bloc
+    // nom+jauge+libellé de cette rangée tient dans `BOSS_BAR_ROW_HEIGHT` —
+    // audit du 15 septembre 2026 (chevauchement observé entre deux barres
+    // empilées, cf. la doc de la constante). Un dépassement ici, silencieux
+    // en `release`, reproduirait exactement ce chevauchement pour la rangée
+    // suivante : signalé en `debug` pour l'attraper avant qu'un nom de boss
+    // plus long ou un changement de police ne le fasse réapparaître.
+    let (block_top, block_bottom) = boss_bar_vertical_extent(&painter, &boss.name, phase_label, scale);
+    let block_height = block_bottom - block_top;
+    let row_height = BOSS_BAR_ROW_HEIGHT * scale;
+    if block_height > row_height {
+        log::warn!(
+            "boss_health_bar: le bloc de la barre « {} » ({block_height:.1} pt) dépasse BOSS_BAR_ROW_HEIGHT ({row_height:.1} pt) à l'échelle {scale:.2} — risque de chevauchement avec la rangée suivante",
+            boss.name
+        );
+    }
+    debug_assert!(
+        block_height <= row_height,
+        "boss_health_bar: bloc de {block_height} pt > BOSS_BAR_ROW_HEIGHT de {row_height} pt (échelle {scale}) pour « {} »",
+        boss.name
+    );
     let row_offset = row as f32 * BOSS_BAR_ROW_HEIGHT * scale;
     let h = 15.0 * scale;
     let nominal_w = 340.0 * scale;
@@ -2427,16 +2503,18 @@ mod tests {
     /// seulement un chevauchement réduit. Vérifié par arithmétique exacte,
     /// avec les mêmes constantes que `boss_health_bar`, plutôt que deviné :
     /// à `scale = 1.0`, la seconde barre (row = 1) est centrée à
-    /// `area.top() + 44.0 + 8.0 + 22.0 + 46.0 = area.top() + 120.0`, sa
-    /// jauge se termine à `+ 7.5` (`h / 2`, `h = 15.0`) et son libellé de
-    /// phase, centré `7.0` pt plus bas, ajoute encore une demi-hauteur de
-    /// texte (`FontId::proportional(11.0)`) — un contenu qui va donc
-    /// nettement au-delà de `area.top() + 130.0`. Sans décalage,
-    /// `kills_hud` resterait ancré à `area.top() + 112.0`, en plein dans
-    /// cette plage (chevauchement, pas empilement propre) ; ce test exige
-    /// que `boss_hud_extra_offset` le repousse d'au moins `120.0 + 7.5 +
-    /// 7.0 + 8.0 - 112.0 = 30.5` pt à `scale = 1.0` (une bande de boss
-    /// entière, `46.0`, largement suffisant) — et vaut `0.0` avec un seul
+    /// `area.top() + 44.0 + 8.0 + 22.0 + 60.0 = area.top() + 134.0` (cf.
+    /// `BOSS_BAR_ROW_HEIGHT = 60.0`, dérivée de la mesure réelle du bloc
+    /// nom+jauge+libellé, cf. sa doc), sa jauge se termine à `+ 7.5`
+    /// (`h / 2`, `h = 15.0`) et son libellé de phase, centré `7.0` pt plus
+    /// bas, ajoute encore une demi-hauteur de texte
+    /// (`FontId::proportional(11.0)`) — un contenu qui va donc nettement
+    /// au-delà de `area.top() + 141.5`. Sans décalage, `kills_hud`
+    /// resterait ancré à `area.top() + 112.0`, en plein dans cette plage
+    /// (chevauchement, pas empilement propre) ; ce test exige que
+    /// `boss_hud_extra_offset` le repousse d'au moins `134.0 + 7.5 + 7.0 +
+    /// 8.0 - 112.0 = 44.5` pt à `scale = 1.0` (une bande de boss entière,
+    /// `60.0`, largement suffisant) — et vaut `0.0` avec un seul
     /// boss visible (aucune collision connue/signalée pour ce cas, cf. la
     /// doc de `boss_hud_extra_offset`) ou hors de la branche « sous les
     /// boutons » (bureau/mobile assez large).
@@ -2463,7 +2541,7 @@ mod tests {
         let scale = 1.0;
 
         let extra_two = boss_hud_extra_offset(area, &scene, scale, buttons_left);
-        let required_min = 120.0_f32 + 7.5 + 7.0 + 8.0 - 112.0;
+        let required_min = 134.0_f32 + 7.5 + 7.0 + 8.0 - 112.0;
         assert!(
             extra_two >= required_min,
             "décalage {extra_two} insuffisant pour ne pas chevaucher la 2e barre de boss (minimum {required_min})"
@@ -2491,6 +2569,88 @@ mod tests {
             boss_hud_extra_offset(wide_area, &scene, scale, wide_area.right() - 40.0),
             0.0
         );
+    }
+
+    /// Non-régression du chevauchement entre deux barres de boss empilées
+    /// (audit du 15 septembre 2026 — observé à 800×600 avec les deux boss de
+    /// la démo Rivière : le libellé de phase de la rangée 0 chevauchait le
+    /// nom de la rangée 1). Contrairement à `kills_hud_is_pushed_below_two_
+    /// stacked_boss_bars_on_a_narrow_screen` (qui vérifie que `kills_hud` ne
+    /// chevauche pas la DERNIÈRE barre), ce test vérifie directement que les
+    /// barres de boss ENTRE ELLES ne se chevauchent jamais — c'est le test
+    /// qui aurait attrapé le bug d'origine. Utilise `boss_bar_vertical_extent`
+    /// (la même mesure que `boss_health_bar` peint réellement, pas une
+    /// estimation) avec les vrais noms des deux boss et le libellé de phase
+    /// le plus long de chacun (« Dernier sursaut », « Éruption des spores »)
+    /// : le pire cas pour la hauteur du bloc, donc pour le risque de
+    /// chevauchement, quelle que soit la phase courante en jeu. Vérifié à
+    /// plusieurs échelles HUD (`Settings::hud_scale`, curseur `0.6..=2.0`
+    /// des Paramètres) : tous les termes de `boss_bar_vertical_extent` et de
+    /// `BOSS_BAR_ROW_HEIGHT * scale` grandissent proportionnellement à
+    /// `scale`, mais la mesure réelle de police (`layout_no_wrap`) peut
+    /// arrondir au pixel près plutôt que suivre l'échelle exactement — d'où
+    /// un test à plusieurs échelles plutôt qu'une simple confiance dans la
+    /// linéarité de la formule.
+    #[test]
+    #[allow(deprecated)]
+    fn boss_bar_rows_never_overlap_at_default_scale() {
+        for scale in [0.6_f32, 1.0, 1.5, 2.0] {
+            let ctx = egui::Context::default();
+            let mut block0 = (0.0_f32, 0.0_f32);
+            let mut block1 = (0.0_f32, 0.0_f32);
+            let input = egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(800.0, 600.0),
+                )),
+                ..Default::default()
+            };
+            let _ = ctx.run(input, |ctx| {
+                let painter = ctx.layer_painter(egui::LayerId::new(
+                    egui::Order::Foreground,
+                    egui::Id::new("test_boss_bar_extent"),
+                ));
+                block0 = boss_bar_vertical_extent(
+                    &painter,
+                    crate::app::boss::BOSS_NAME,
+                    "Dernier sursaut",
+                    scale,
+                );
+                block1 = boss_bar_vertical_extent(
+                    &painter,
+                    crate::app::boss2::BOSS2_NAME,
+                    "Éruption des spores",
+                    scale,
+                );
+            });
+            let (block0_top, block0_bottom) = block0;
+            let (block1_top, block1_bottom) = block1;
+            let row_height = BOSS_BAR_ROW_HEIGHT * scale;
+
+            // Chaque bloc individuel doit tenir dans sa propre rangée —
+            // même garde que le `debug_assert!` de `boss_health_bar`.
+            assert!(
+                block0_bottom - block0_top <= row_height,
+                "scale {scale}: bloc rangée 0 ({} pt) dépasse BOSS_BAR_ROW_HEIGHT ({row_height} pt)",
+                block0_bottom - block0_top
+            );
+            assert!(
+                block1_bottom - block1_top <= row_height,
+                "scale {scale}: bloc rangée 1 ({} pt) dépasse BOSS_BAR_ROW_HEIGHT ({row_height} pt)",
+                block1_bottom - block1_top
+            );
+
+            // Les deux rangées sont centrées à `row_height` l'une de l'autre
+            // (cf. `row_offset` dans `boss_health_bar`) : le bas du bloc de
+            // la rangée 0 (relatif au centre de la rangée 0) doit rester
+            // au-dessus du haut du bloc de la rangée 1 (relatif au centre de
+            // la rangée 0, donc décalé de `+row_height`).
+            let row1_top_relative_to_row0 = row_height + block1_top;
+            assert!(
+                block0_bottom <= row1_top_relative_to_row0,
+                "scale {scale}: chevauchement : bas du bloc rangée 0 ({block0_bottom}) au-delà du haut du bloc rangée 1 ({row1_top_relative_to_row0}) à BOSS_BAR_ROW_HEIGHT={row_height}"
+            );
+        }
     }
 
     /// Marqueur allié hors-écran (Phase L Sprint 2) : un allié déjà visible

@@ -231,6 +231,12 @@ pub(super) struct Boss2State {
     /// **franchissement** d'un seuil de phase, pour y accrocher la
     /// révélation ponctuelle des Champiblobs (cf. `reveal_boss2_minions`).
     last_phase: Option<Boss2Phase>,
+    /// Indice en cache de `BOSS2_NAME` dans `scene.objects`, validé en O(1)
+    /// avant réutilisation (cf. `simulation::find_named_object_cached`) —
+    /// même correctif perf que `app::boss::BossState::boss_idx_cache`.
+    boss_idx_cache: Option<usize>,
+    /// Même rôle que `boss_idx_cache`, pour `BOSS2_LOOT_NAME`.
+    loot_idx_cache: Option<usize>,
 }
 
 impl AppState {
@@ -251,7 +257,13 @@ impl AppState {
         if self.boss2.hazard.stopped_until.is_none() || self.boss2.hazard.frozen_pos.is_none() {
             return;
         }
-        if let Some(obj) = self.scene.objects.iter().find(|o| o.name == BOSS2_NAME) {
+        let idx = super::simulation::find_named_object_cached(
+            &self.scene,
+            self.boss2.boss_idx_cache,
+            BOSS2_NAME,
+        );
+        self.boss2.boss_idx_cache = idx;
+        if let Some(obj) = idx.and_then(|i| self.scene.objects.get(i)) {
             self.boss2.hazard.frozen_pos = Some(obj.transform.position);
         }
     }
@@ -264,7 +276,13 @@ impl AppState {
     /// fait vivre sa zone de spores (visée, marquage au sol, détonation).
     pub(super) fn update_boss2(&mut self, dt: f32, time: f32) {
         self.update_boss2_loot();
-        let Some(boss_idx) = self.scene.objects.iter().position(|o| o.name == BOSS2_NAME) else {
+        let boss_idx = super::simulation::find_named_object_cached(
+            &self.scene,
+            self.boss2.boss_idx_cache,
+            BOSS2_NAME,
+        );
+        self.boss2.boss_idx_cache = boss_idx;
+        let Some(boss_idx) = boss_idx else {
             return;
         };
         if !self.scene.objects[boss_idx].visible {
@@ -451,16 +469,23 @@ impl AppState {
     /// Dérive la visibilité du butin garanti (`BOSS2_LOOT_NAME`) de celle du
     /// boss — même patron que `app::boss::update_boss_loot` (cf. sa doc).
     fn update_boss2_loot(&mut self) {
-        let Some(boss_visible) = self
-            .scene
-            .objects
-            .iter()
-            .find(|o| o.name == BOSS2_NAME)
-            .map(|o| o.visible)
+        let boss_idx = super::simulation::find_named_object_cached(
+            &self.scene,
+            self.boss2.boss_idx_cache,
+            BOSS2_NAME,
+        );
+        self.boss2.boss_idx_cache = boss_idx;
+        let Some(boss_visible) = boss_idx.and_then(|i| self.scene.objects.get(i)).map(|o| o.visible)
         else {
             return;
         };
-        if let Some(loot) = self.scene.objects.iter_mut().find(|o| o.name == BOSS2_LOOT_NAME) {
+        let loot_idx = super::simulation::find_named_object_cached(
+            &self.scene,
+            self.boss2.loot_idx_cache,
+            BOSS2_LOOT_NAME,
+        );
+        self.boss2.loot_idx_cache = loot_idx;
+        if let Some(loot) = loot_idx.and_then(|i| self.scene.objects.get_mut(i)) {
             let want_visible = !boss_visible;
             if loot.visible != want_visible {
                 loot.visible = want_visible;

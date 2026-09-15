@@ -853,6 +853,31 @@ pub(super) fn creature_is_server_synced(
     last_snapshot.is_some_and(|t| now.duration_since(t) < timeout)
 }
 
+/// Retrouve l'indice d'un `SceneObject` par nom, avec un cache validé en O(1)
+/// (audit perf du 15 septembre 2026 — pics de frame 100-400ms) : plusieurs
+/// systèmes indépendants (boss, boss2, créatures à distance) refaisaient
+/// chacun un scan linéaire complet de `scene.objects` par nom, jusqu'à
+/// plusieurs dizaines de fois par sous-pas fixe. Aucun de ces systèmes ne
+/// réordonne ni ne retire d'objets en cours de sous-pas (seuls des `push`
+/// en fin de traitement), donc un indice validé au nom attendu reste
+/// exact jusqu'au prochain scan invalidant — ce helper ne change *que*
+/// la façon dont l'objet est retrouvé, jamais quel objet est retrouvé :
+/// même résultat que l'ancien `.iter().position(|o| o.name == name)` à
+/// l'identique, juste sans le refaire à chaque appel quand l'indice
+/// précédent est encore bon.
+pub(super) fn find_named_object_cached(
+    scene: &crate::scene::Scene,
+    cached: Option<usize>,
+    name: &str,
+) -> Option<usize> {
+    if let Some(idx) = cached
+        && scene.objects.get(idx).is_some_and(|o| o.name == name)
+    {
+        return cached;
+    }
+    scene.objects.iter().position(|o| o.name == name)
+}
+
 impl AppState {
     /// Bilan de perf périodique (audit du 16 juillet 2026) : toutes les
     /// `PERF_WINDOW` en mode Play actif, logue en `info` le FPS lissé et la

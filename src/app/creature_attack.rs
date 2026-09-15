@@ -348,6 +348,14 @@ pub(super) struct RangedState {
     /// ce compteur est positif, la créature reste figée et `stopped_until`
     /// porte l'échéance du prochain tir, pas celle de la visée initiale.
     burst_left: u32,
+    /// Indice en cache de `cfg.creature` (l'entrée `RANGED_CREATURE_ATTACKS`
+    /// alignée sur ce `RangedState`) dans `scene.objects`, validé en O(1)
+    /// avant réutilisation (cf. `simulation::find_named_object_cached`) —
+    /// audit perf du 15 septembre 2026 : élimine jusqu'à 14 scans linéaires
+    /// complets par pas fixe dans `update_creature_ranged_attacks` (un par
+    /// entrée de la table, systématique) et autant dans `refresh_frozen_
+    /// anchors` (pendant les visées).
+    idx_cache: Option<usize>,
 }
 
 /// Un vecteur d'états alignés sur `RANGED_CREATURE_ATTACKS` (l'initialisation
@@ -420,7 +428,13 @@ impl AppState {
             if state.stopped_until.is_none() || state.frozen_pos.is_none() {
                 continue;
             }
-            if let Some(obj) = self.scene.objects.iter().find(|o| o.name == cfg.creature) {
+            let idx = super::simulation::find_named_object_cached(
+                &self.scene,
+                state.idx_cache,
+                cfg.creature,
+            );
+            state.idx_cache = idx;
+            if let Some(obj) = idx.and_then(|i| self.scene.objects.get(i)) {
                 state.frozen_pos = Some(obj.transform.position);
             }
         }
@@ -439,12 +453,13 @@ impl AppState {
         let player_pos = self.player_position();
 
         for (ci, cfg) in RANGED_CREATURE_ATTACKS.iter().enumerate() {
-            let Some(creature_idx) = self
-                .scene
-                .objects
-                .iter()
-                .position(|o| o.name == cfg.creature)
-            else {
+            let creature_idx = super::simulation::find_named_object_cached(
+                &self.scene,
+                self.projectiles.creature_ranged[ci].idx_cache,
+                cfg.creature,
+            );
+            self.projectiles.creature_ranged[ci].idx_cache = creature_idx;
+            let Some(creature_idx) = creature_idx else {
                 continue;
             };
             if !self.scene.objects[creature_idx].visible {

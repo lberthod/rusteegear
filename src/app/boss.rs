@@ -231,6 +231,14 @@ pub(super) struct BossState {
     /// `update_boss`), impossible à exprimer à partir du seul ratio courant
     /// (qui ne dit rien de la phase précédente).
     last_phase: Option<BossPhase>,
+    /// Indice en cache de `BOSS_NAME` dans `scene.objects`, validé en O(1)
+    /// avant réutilisation (cf. `simulation::find_named_object_cached`) —
+    /// audit perf du 15 septembre 2026 : élimine jusqu'à 3 scans linéaires
+    /// complets par pas fixe (`update_boss`, `refresh_boss_frozen_anchor`,
+    /// `update_boss_loot`) sans changer quel objet est trouvé.
+    boss_idx_cache: Option<usize>,
+    /// Même rôle que `boss_idx_cache`, pour `BOSS_LOOT_NAME`.
+    loot_idx_cache: Option<usize>,
 }
 
 impl AppState {
@@ -250,7 +258,13 @@ impl AppState {
         if self.boss.ranged.stopped_until.is_none() || self.boss.ranged.frozen_pos.is_none() {
             return;
         }
-        if let Some(obj) = self.scene.objects.iter().find(|o| o.name == BOSS_NAME) {
+        let idx = super::simulation::find_named_object_cached(
+            &self.scene,
+            self.boss.boss_idx_cache,
+            BOSS_NAME,
+        );
+        self.boss.boss_idx_cache = idx;
+        if let Some(obj) = idx.and_then(|i| self.scene.objects.get(i)) {
             self.boss.ranged.frozen_pos = Some(obj.transform.position);
         }
     }
@@ -264,7 +278,13 @@ impl AppState {
     /// distance (visée, tir, vol, impact sur le joueur local).
     pub(super) fn update_boss(&mut self, dt: f32, time: f32) {
         self.update_boss_loot();
-        let Some(boss_idx) = self.scene.objects.iter().position(|o| o.name == BOSS_NAME) else {
+        let boss_idx = super::simulation::find_named_object_cached(
+            &self.scene,
+            self.boss.boss_idx_cache,
+            BOSS_NAME,
+        );
+        self.boss.boss_idx_cache = boss_idx;
+        let Some(boss_idx) = boss_idx else {
             return;
         };
         if !self.scene.objects[boss_idx].visible {
@@ -500,16 +520,23 @@ impl AppState {
     /// client connecté (qui reçoit déjà la visibilité du boss via
     /// `Snapshot`/`EntityDelta::visible`).
     fn update_boss_loot(&mut self) {
-        let Some(boss_visible) = self
-            .scene
-            .objects
-            .iter()
-            .find(|o| o.name == BOSS_NAME)
-            .map(|o| o.visible)
+        let boss_idx = super::simulation::find_named_object_cached(
+            &self.scene,
+            self.boss.boss_idx_cache,
+            BOSS_NAME,
+        );
+        self.boss.boss_idx_cache = boss_idx;
+        let Some(boss_visible) = boss_idx.and_then(|i| self.scene.objects.get(i)).map(|o| o.visible)
         else {
             return;
         };
-        if let Some(loot) = self.scene.objects.iter_mut().find(|o| o.name == BOSS_LOOT_NAME) {
+        let loot_idx = super::simulation::find_named_object_cached(
+            &self.scene,
+            self.boss.loot_idx_cache,
+            BOSS_LOOT_NAME,
+        );
+        self.boss.loot_idx_cache = loot_idx;
+        if let Some(loot) = loot_idx.and_then(|i| self.scene.objects.get_mut(i)) {
             let want_visible = !boss_visible;
             if loot.visible != want_visible {
                 loot.visible = want_visible;
