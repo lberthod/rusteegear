@@ -72,14 +72,18 @@ fi
 # le .wasm en cours d'écriture par wasm-bindgen/wasm-opt et produire un
 # fichier tronqué qui charge quand même dans le navigateur, avec la scène
 # dégradée en cubes faute d'assets — déjà vécu deux fois (3-4 septembre 2026).
-# Seuil choisi par roadmap.md : bien en dessous du ~36-37 Mo attendu (assets
-# Rivière ~12 Mo embarqués), largement au-dessus des ~15 Mo observés lors de
-# l'incident. Logique extraite dans check_wasm_size.sh pour être testable
-# isolément (cf. packaging/test_check_wasm_size.sh). À réévaluer si une
-# optimisation future (compression de texture GPU, lazy-loading — pistes
-# roadmap.md) fait légitimement baisser la taille attendue du bundle sous ce
-# seuil : ce garde-fou rejetterait alors des builds sains.
-"$(dirname "$0")/check_wasm_size.sh" packaging/web/pkg/motor3derust_bg.wasm 30
+# Seuil par défaut choisi par roadmap.md : bien en dessous du ~36-37 Mo attendu
+# (assets Rivière ~12 Mo embarqués), largement au-dessus des ~15 Mo observés
+# lors de l'incident. Logique extraite dans check_wasm_size.sh pour être
+# testable isolément (cf. packaging/test_check_wasm_size.sh).
+# MIN_WASM_MB : un appelant qui retire délibérément des assets embarqués avant
+# ce script (ex. tools/build_web.sh de ragequit, qui vide assets/bundle et
+# assets/models/riviere pour ne pas gonfler son .wasm de ~25 Mo d'assets
+# inutiles au jeu) produit un binaire légitimement plus petit que 30 Mo — sans
+# recalibrage, ce garde-fou rejetterait alors un build sain. Un tel appelant
+# doit fournir son propre seuil, calibré sur la taille réelle de SON bundle
+# réduit (pas sur celle, non pertinente ici, de l'incident de septembre).
+"$(dirname "$0")/check_wasm_size.sh" packaging/web/pkg/motor3derust_bg.wasm "${MIN_WASM_MB:-30}"
 
 if [ "${PLAYER_BUILD:-0}" = "1" ]; then
     STAGE="target/export/web_stage/${OUTPUT_NAME}"
