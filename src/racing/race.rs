@@ -15,11 +15,13 @@ pub const COUNTDOWN_SECS: f32 = 3.0;
 pub const GO_SECS: f32 = 0.9;
 
 /// Temps total (s) des médailles sur 3 tours.
-// Repère : le pilote automatique de test boucle les 3 tours en ~100 s.
-pub const MEDAL_AUTHOR: f32 = 92.0;
-pub const MEDAL_GOLD: f32 = 100.0;
-pub const MEDAL_SILVER: f32 = 112.0;
-pub const MEDAL_BRONZE: f32 = 130.0;
+// Repère : le pilote automatique de test boucle les 3 tours en ~86 s turbos compris (~100 s
+// sans les turbos, qu'il ne modélise pas dans les tests purs). Un humain régulier vise l'or ;
+// l'auteur demande de battre nettement le bot (meilleures trajectoires, dérapages, turbos).
+pub const MEDAL_AUTHOR: f32 = 82.0;
+pub const MEDAL_GOLD: f32 = 88.0;
+pub const MEDAL_SILVER: f32 = 98.0;
+pub const MEDAL_BRONZE: f32 = 115.0;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Phase {
@@ -77,7 +79,7 @@ pub enum RaceEvent {
     Restart,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct GhostSample {
     pub pos: Vec3,
     pub fwd: Vec3,
@@ -156,6 +158,24 @@ impl Race {
             beeps: 0,
             gates,
         }
+    }
+
+    /// État à conserver d'une session à l'autre (cf. `SavedBest`).
+    pub fn saved(&self) -> SavedBest {
+        SavedBest {
+            best_total: self.best_total,
+            best_lap: self.best_lap,
+            best_splits: self.best_splits.clone(),
+            ghost: self.ghost.clone(),
+        }
+    }
+
+    /// Recharge un état sauvegardé (record, meilleur tour, fantôme).
+    pub fn restore(&mut self, saved: SavedBest) {
+        self.best_total = saved.best_total;
+        self.best_lap = saved.best_lap;
+        self.best_splits = saved.best_splits;
+        self.ghost = saved.ghost;
     }
 
     /// Nombre de portiques par tour (points de passage + arrivée).
@@ -324,6 +344,94 @@ impl Race {
     }
 }
 
+/// Ce qui survit d'une session à l'autre : record, meilleur tour avec ses temps intermédiaires
+/// et le fantôme du meilleur run.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct SavedBest {
+    pub best_total: Option<f32>,
+    pub best_lap: Option<f32>,
+    pub best_splits: Vec<f32>,
+    pub ghost: Vec<GhostSample>,
+}
+
+const SAVE_MAGIC: &[u8; 4] = b"HRG1";
+
+impl SavedBest {
+    /// Binaire compact : magic, record, meilleur tour, intermédiaires, puis 9 flottants par
+    /// échantillon de fantôme (~220 Ko pour trois tours).
+    pub fn encode(&self) -> Vec<u8> {
+        let mut out = Vec::with_capacity(32 + self.ghost.len() * 36);
+        out.extend_from_slice(SAVE_MAGIC);
+        let opt = |v: Option<f32>| v.unwrap_or(-1.0).to_le_bytes();
+        out.extend_from_slice(&opt(self.best_total));
+        out.extend_from_slice(&opt(self.best_lap));
+        out.extend_from_slice(&(self.best_splits.len() as u32).to_le_bytes());
+        for v in &self.best_splits {
+            out.extend_from_slice(&v.to_le_bytes());
+        }
+        out.extend_from_slice(&(self.ghost.len() as u32).to_le_bytes());
+        for g in &self.ghost {
+            for v in [g.pos, g.fwd, g.up] {
+                for c in v.to_array() {
+                    out.extend_from_slice(&c.to_le_bytes());
+                }
+            }
+        }
+        out
+    }
+
+    /// `None` si le contenu est absent, tronqué ou d'un autre format (jamais de panique sur un
+    /// fichier abîmé : on repart simplement sans fantôme).
+    pub fn decode(bytes: &[u8]) -> Option<SavedBest> {
+        let mut pos = 0usize;
+        let mut take = |n: usize| -> Option<&[u8]> {
+            let slice = bytes.get(pos..pos + n)?;
+            pos += n;
+            Some(slice)
+        };
+        if take(4)? != SAVE_MAGIC {
+            return None;
+        }
+        let f32_at = |b: &[u8]| f32::from_le_bytes([b[0], b[1], b[2], b[3]]);
+        let opt = |v: f32| (v >= 0.0 && v.is_finite()).then_some(v);
+        let best_total = opt(f32_at(take(4)?));
+        let best_lap = opt(f32_at(take(4)?));
+        let n_splits = u32::from_le_bytes(take(4)?.try_into().ok()?) as usize;
+        if n_splits > 64 {
+            return None;
+        }
+        let mut best_splits = Vec::with_capacity(n_splits);
+        for _ in 0..n_splits {
+            best_splits.push(f32_at(take(4)?));
+        }
+        let n_ghost = u32::from_le_bytes(take(4)?.try_into().ok()?) as usize;
+        if n_ghost > 60 * 60 * 30 {
+            return None;
+        }
+        let mut ghost = Vec::with_capacity(n_ghost);
+        for _ in 0..n_ghost {
+            let mut c = [0.0_f32; 9];
+            for v in &mut c {
+                *v = f32_at(take(4)?);
+            }
+            if c.iter().any(|v| !v.is_finite()) {
+                return None;
+            }
+            ghost.push(GhostSample {
+                pos: Vec3::new(c[0], c[1], c[2]),
+                fwd: Vec3::new(c[3], c[4], c[5]),
+                up: Vec3::new(c[6], c[7], c[8]),
+            });
+        }
+        Some(SavedBest {
+            best_total,
+            best_lap,
+            best_splits,
+            ghost,
+        })
+    }
+}
+
 /// Format `m:ss.mmm`, comme le chrono d'un jeu de course.
 pub fn fmt_time(t: f32) -> String {
     let t = t.max(0.0);
@@ -376,6 +484,36 @@ mod tests {
             .filter(|e| matches!(e, RaceEvent::Beep(_)))
             .count();
         assert_eq!(beeps, 3, "trois bips 3-2-1");
+    }
+
+    #[test]
+    fn saved_best_survives_a_round_trip_and_rejects_garbage() {
+        let saved = SavedBest {
+            best_total: Some(98.765),
+            best_lap: Some(32.5),
+            best_splits: vec![5.0, 10.5, 20.25],
+            ghost: (0..300)
+                .map(|i| GhostSample {
+                    pos: Vec3::new(i as f32, 0.5 * i as f32, -3.0),
+                    fwd: Vec3::Z,
+                    up: Vec3::Y,
+                })
+                .collect(),
+        };
+        let bytes = saved.encode();
+        assert_eq!(SavedBest::decode(&bytes).unwrap(), saved);
+        // Sans record : valeurs absentes conservées comme telles.
+        let empty = SavedBest::default();
+        assert_eq!(SavedBest::decode(&empty.encode()).unwrap(), empty);
+        // Fichier tronqué, mauvais format, contenu vide : jamais de panique.
+        assert!(SavedBest::decode(&bytes[..bytes.len() - 7]).is_none());
+        assert!(SavedBest::decode(b"nimportequoi").is_none());
+        assert!(SavedBest::decode(&[]).is_none());
+        // Flottant NaN dans le fantôme : refusé.
+        let mut bad = bytes.clone();
+        let n = bad.len();
+        bad[n - 4..].copy_from_slice(&f32::NAN.to_le_bytes());
+        assert!(SavedBest::decode(&bad).is_none());
     }
 
     #[test]

@@ -274,6 +274,84 @@ mod tests {
         (t, car)
     }
 
+    struct Lcg(u32);
+    impl Lcg {
+        fn next(&mut self) -> f32 {
+            self.0 = self.0.wrapping_mul(1664525).wrapping_add(1013904223);
+            (self.0 >> 8) as f32 / (1u32 << 24) as f32
+        }
+    }
+
+    /// Des commandes aléatoires (changées toutes les ~0,3 s, turbo compris) pendant 10 minutes
+    /// de jeu ne doivent jamais produire de valeur non finie ni de vitesse absurde, et la
+    /// voiture ne doit pas quitter le monde autrement qu'en tombant (détecté par la course).
+    #[test]
+    fn random_driving_never_produces_nan_or_runaway_speed() {
+        let (t, _) = setup();
+        for seed in 1..=4u32 {
+            let mut rng = Lcg(seed * 7919);
+            let f = t.frames[t.start_frame()];
+            let mut car = Car::placed(f.pos, f.fwd, f.up, t.start_frame());
+            let mut inp = CarInput::default();
+            for step in 0..60 * 150 {
+                if step % 18 == 0 {
+                    inp = CarInput {
+                        throttle: if rng.next() < 0.7 { rng.next() } else { 0.0 },
+                        brake: if rng.next() < 0.15 { rng.next() } else { 0.0 },
+                        steer: rng.next() * 2.0 - 1.0,
+                        handbrake: rng.next() < 0.2,
+                    };
+                }
+                if step % 900 == 0 {
+                    car.boost = 1.5;
+                }
+                car.step(inp, &t, 1.0 / 60.0);
+                assert!(
+                    car.pos.is_finite() && car.vel.is_finite() && car.fwd.is_finite() && car.up.is_finite(),
+                    "valeur non finie (graine {seed}, pas {step}) : {car:?}"
+                );
+                assert!(car.speed() < 160.0, "vitesse absurde {} (graine {seed}, pas {step})", car.speed());
+                assert!((car.fwd.length() - 1.0).abs() < 0.01, "cap dénormalisé");
+                if car.pos.y < t.min_y - 12.0 {
+                    // Tombée : la course l'aurait replacée, on repart de la ligne.
+                    car = Car::placed(f.pos, f.fwd, f.up, t.start_frame());
+                }
+            }
+        }
+    }
+
+    /// Choc à très haute vitesse (turbo, ~105 m/s) sous tous les angles : la barrière ne doit
+    /// jamais être traversée (pas de « tunneling »).
+    #[test]
+    fn fast_impacts_never_go_through_the_walls() {
+        let (t, _) = setup();
+        for deg in [10.0_f32, 25.0, 45.0, 70.0, 89.0] {
+            for side in [-1.0_f32, 1.0] {
+                // Un tronçon droit et protégé sur les 45 repères (90 m) qui suivent.
+                let i = (0..t.frames.len() - 50)
+                    .find(|&i| {
+                        (i..i + 45).all(|k| t.frames[k].wall_l && t.frames[k].wall_r && !t.frames[k].void)
+                            && t.frames[i].fwd.dot(t.frames[i + 45].fwd) > 0.995
+                    })
+                    .expect("un tronçon protégé assez long");
+                let f = t.frames[i];
+                let mut car = Car::placed(f.pos, f.fwd, f.up, i);
+                let a = deg.to_radians();
+                car.vel = (f.fwd * a.cos() + f.right * (side * a.sin())) * 105.0;
+                car.fwd = car.vel.normalize();
+                for _ in 0..40 {
+                    car.step(CarInput { throttle: 1.0, ..Default::default() }, &t, 1.0 / 60.0);
+                    let fr = &t.frames[t.frame_near(car.pos, i, 20)];
+                    let lateral = (car.pos - fr.pos).dot(fr.right).abs();
+                    assert!(
+                        lateral < fr.half_width + 0.3,
+                        "traversée de barrière à {deg}° côté {side} : {lateral} m"
+                    );
+                }
+            }
+        }
+    }
+
     #[test]
     fn full_throttle_accelerates_and_stays_on_the_road() {
         let (t, mut car) = setup();
@@ -393,3 +471,4 @@ mod tests {
         }
     }
 }
+

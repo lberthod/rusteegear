@@ -1254,6 +1254,7 @@ impl AppState {
         self.step_requested = false;
         if !self.playing || (self.paused && !step_once) {
             self.sim_poses.sim_accumulator = 0.0;
+            self.race_pause_audio();
             return;
         }
 

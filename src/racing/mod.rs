@@ -10,6 +10,7 @@ pub mod bot;
 pub mod car;
 pub mod layout;
 pub mod race;
+pub mod sound;
 pub mod terrain;
 pub mod track;
 

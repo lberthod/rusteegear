@@ -44,7 +44,13 @@ cargo run --release -- --player --demo=herroad
 | Recommencer la course | X ou + | Entrée / R |
 | Changer de caméra (poursuite, éloignée, capot) | − ou clic stick droit | C |
 
-Le record de temps total est gardé dans `~/.motor3derust/herroad_best.txt`.
+Le record de temps total, le meilleur tour avec ses temps intermédiaires et le **fantôme** du meilleur
+run sont gardés dans `~/.motor3derust/save/` (`herroad_ghost.bin`, `herroad_best.txt`) : à la prochaine
+session le fantôme rejoue ton meilleur run et les écarts sont calculés dès le premier tour.
+
+Le moteur et les pneus sont synthétisés en mémoire (`src/racing/sound.rs`) : hauteur du moteur liée à un
+régime simulé avec rapports de boîte, crissement de pneus au dérapage. `HERROAD_AUTOPILOT=1` lance le pilote
+automatique (démonstration).
 
 ## Architecture
 
@@ -54,7 +60,7 @@ Le record de temps total est gardé dans `~/.motor3derust/herroad_best.txt`.
 | `src/racing/car.rs` | voiture arcade (moteur, frein, adhérence, dérapage, gravité sur pente, vol, barrières) |
 | `src/racing/race.rs` | compte à rebours, points de passage, tours, écarts, fantôme, médailles |
 | `src/racing/terrain.rs` | relief autour du circuit : talus, prairie, montagnes, hauteur du sol pour la détection de chute |
-| `src/racing/bot.rs` | pilote automatique de test (boucle les 3 tours en ~100 s, sert de repère aux médailles) |
+| `src/racing/bot.rs` | pilote automatique de test (boucle les 3 tours en ~86 s turbos compris, sert de repère aux médailles) |
 | `src/scene/demos/herroad.rs` | scène 3D et HUD |
 | `src/app/race.rs` | branchement moteur : pas de simulation, caméra de poursuite, HUD, sons, record |
 | `assets/herroad/panel_*.png` | fonds sombres du HUD (natif seulement) |
@@ -71,4 +77,4 @@ relancer `herroad_map` pour voir le tracé, puis `cargo test racing` (le bot doi
   `car.rs` (`drive_on_ground`).
 - Pas d'adversaires ni de multijoueur : contre-la-montre uniquement.
 - Le build web (`?scene=herroad`) n'a pas été testé ; les panneaux du HUD n'y sont pas fournis.
-- Pas de son de moteur : le moteur audio n'expose pas de boucle à hauteur variable (seuls des effets ponctuels).
+- Le son (moteur, pneus) est réglé sans écoute : les fréquences et volumes sont à ajuster à l'oreille dans `src/racing/sound.rs`.

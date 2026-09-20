@@ -8,7 +8,7 @@ use glam::{Quat, Vec3};
 use super::AppState;
 use crate::racing::car::{Car, CarInput};
 use crate::racing::layout::{CarPart, RaceLayout};
-use crate::racing::race::{LAPS, Phase, Race, RaceEvent, fmt_delta, fmt_time};
+use crate::racing::race::{LAPS, Phase, Race, RaceEvent, SavedBest, fmt_delta, fmt_time};
 use crate::racing::track::Track;
 use crate::runtime::sfx::Sfx;
 use crate::scene::Scene;
@@ -30,6 +30,7 @@ pub struct RaceInput {
     pub camera: bool,
 }
 
+#[cfg_attr(test, allow(dead_code))]
 const BEST_FILE: &str = "herroad_best.txt";
 /// Distance de vue de la caméra de course (m).
 const CAMERA_FAR: f32 = 600.0;
@@ -66,32 +67,92 @@ pub struct RaceSession {
     armed: bool,
     /// Durée (s) de conduite à contresens, pour l'alerte « sens interdit ».
     wrong_way: f32,
+    /// Sons synthétisés (moteur, pneus), calculés une fois.
+    engine_wav: Vec<u8>,
+    skid_wav: Vec<u8>,
+    /// Position de la pédale d'accélérateur au dernier pas (pilote le régime du moteur).
+    last_throttle: f32,
+    /// Pilote automatique (`HERROAD_AUTOPILOT=1`) : démonstration et captures de vérification.
+    autopilot: Option<crate::racing::bot::Bot>,
 }
+
+/// Noms des voix en boucle du module audio.
+const VOICE_ENGINE: &str = "herroad-engine";
+const VOICE_SKID: &str = "herroad-skid";
 
 /// Appui prolongé requis (s) pour recommencer / revenir au dernier point de passage.
 const HOLD_RESTART: f32 = 0.4;
 const HOLD_RESPAWN: f32 = 0.25;
 
-fn read_best() -> Option<f32> {
-    let bytes = crate::assets::persisted_read(crate::assets::user_dir(), BEST_FILE)?;
-    std::str::from_utf8(&bytes).ok()?.trim().parse::<f32>().ok()
+#[cfg_attr(test, allow(dead_code))]
+const GHOST_FILE: &str = "herroad_ghost.bin";
+
+/// Record, meilleur tour et fantôme du disque (natif). Retombe sur l'ancien fichier texte de
+/// record si le fichier binaire n'existe pas encore.
+fn read_saved() -> SavedBest {
+    // Les tests ne lisent ni n'écrasent jamais le vrai record de l'utilisateur.
+    #[cfg(test)]
+    return SavedBest::default();
+    #[cfg(not(any(test, target_arch = "wasm32")))]
+    if let Some(dir) = crate::assets::user_dir()
+        && let Ok(bytes) = std::fs::read(dir.join(GHOST_FILE))
+        && let Some(saved) = SavedBest::decode(&bytes)
+    {
+        return saved;
+    }
+    #[cfg(not(test))]
+    {
+        let best_total = crate::assets::persisted_read(crate::assets::user_dir(), BEST_FILE)
+            .and_then(|b| std::str::from_utf8(&b).ok()?.trim().parse::<f32>().ok());
+        SavedBest {
+            best_total,
+            ..Default::default()
+        }
+    }
 }
 
-fn write_best(t: f32) {
-    if let Err(e) = crate::assets::persisted_write(
-        crate::assets::user_dir(),
-        BEST_FILE,
-        format!("{t:.3}").as_bytes(),
-    ) {
+fn write_saved(saved: &SavedBest) {
+    #[cfg(test)]
+    {
+        let _ = saved;
+        return;
+    }
+    #[cfg(not(test))]
+    write_saved_to_disk(saved);
+}
+
+#[cfg(not(test))]
+fn write_saved_to_disk(saved: &SavedBest) {
+    // Le record texte reste écrit (lisible, et seul persisté sur le web).
+    if let Some(t) = saved.best_total
+        && let Err(e) = crate::assets::persisted_write(
+            crate::assets::user_dir(),
+            BEST_FILE,
+            format!("{t:.3}").as_bytes(),
+        )
+    {
         log::warn!("HerRoad : record non enregistré ({e})");
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    if let Some(dir) = crate::assets::user_dir() {
+        let _ = std::fs::create_dir_all(&dir);
+        // Écriture atomique : fichier temporaire puis renommage, jamais un fantôme à moitié écrit.
+        let tmp = dir.join(format!("{GHOST_FILE}.tmp"));
+        if std::fs::write(&tmp, saved.encode()).is_ok()
+            && let Err(e) = std::fs::rename(&tmp, dir.join(GHOST_FILE))
+        {
+            log::warn!("HerRoad : fantôme non enregistré ({e})");
+        }
     }
 }
 
 impl RaceSession {
     pub fn new(scene: &Scene, track: Track, layout: RaceLayout) -> RaceSession {
-        let f = track.frames[track.start_frame()];
-        let car = Car::placed(f.pos, f.fwd, f.up, track.start_frame());
-        let race = Race::new(&track, read_best());
+        let track_start = track.start_frame();
+        let f = track.frames[track_start];
+        let car = Car::placed(f.pos, f.fwd, f.up, track_start);
+        let mut race = Race::new(&track, None);
+        race.restore(read_saved());
         RaceSession {
             object_count: scene.objects.len(),
             track,
@@ -110,6 +171,11 @@ impl RaceSession {
             hold_respawn: 0.0,
             armed: false,
             wrong_way: 0.0,
+            engine_wav: crate::racing::sound::engine_wav(),
+            skid_wav: crate::racing::sound::skid_wav(),
+            last_throttle: 0.0,
+            autopilot: std::env::var_os("HERROAD_AUTOPILOT")
+                .map(|_| crate::racing::bot::Bot::new(track_start)),
         }
     }
 
@@ -184,8 +250,15 @@ impl RaceSession {
         self.race.note_respawn();
     }
 
-    fn step(&mut self, dt: f32, input: RaceInput, scene: &mut Scene) -> StepOut {
+    fn step(&mut self, dt: f32, mut input: RaceInput, scene: &mut Scene) -> StepOut {
         let mut out = StepOut::default();
+        if let Some(bot) = self.autopilot.as_mut() {
+            let c = bot.drive(&self.car, &self.track);
+            input.throttle = c.throttle.max(0.4 * (1.0 - c.brake));
+            input.brake = c.brake;
+            input.steer = c.steer;
+            input.handbrake = false;
+        }
         if self.needs_reset {
             self.reset(scene, "état initial / retour de Play");
         }
@@ -221,6 +294,7 @@ impl RaceSession {
         {
             self.armed = true;
         }
+        self.last_throttle = if self.race.phase == Phase::Running { input.throttle } else { 0.0 };
         let prev = self.car.pos;
         match self.race.phase {
             Phase::Countdown => {
@@ -329,7 +403,7 @@ impl RaceSession {
                     out.sfx.push(Sfx::Pickup);
                     let total = self.track.checkpoints.len();
                     let lap_time = self.race.splits.last().copied().unwrap_or(0.0);
-                    let head = delta.map_or_else(|| format!("POINT {}/{total}", index + 1), fmt_delta);
+                    let head = delta.map_or_else(|| format!("PASSAGE {}/{total}", index + 1), fmt_delta);
                     self.split = Some((head, fmt_time(lap_time), 2.6));
                 }
                 RaceEvent::LapDone { lap, time, best } => {
@@ -343,10 +417,11 @@ impl RaceSession {
                         ));
                     }
                 }
-                RaceEvent::Finished { total, record } => {
+                RaceEvent::Finished { total: _, record } => {
                     out.sfx.push(Sfx::Win);
-                    if record {
-                        write_best(total);
+                    // Record battu ou meilleur tour amélioré : on garde tout (fantôme compris).
+                    if record || self.race.best_lap.is_some() {
+                        write_saved(&self.race.saved());
                     }
                 }
                 RaceEvent::Respawn | RaceEvent::Restart => {}
@@ -419,6 +494,29 @@ impl RaceSession {
         if let Some(l) = self.layout.headlight.and_then(|i| scene.point_lights.get_mut(i)) {
             l.position = (car.pos + car.up * 2.5 + car.fwd * 9.0).to_array();
         }
+    }
+
+    /// Hauteur et volume du moteur, volume du crissement de pneus.
+    fn sound_state(&self) -> (f32, f32, f32) {
+        let car = &self.car;
+        let (mut rate, mut gain) =
+            crate::racing::sound::engine_voice(car.speed(), self.last_throttle, car.boost > 0.0);
+        if !car.grounded {
+            // En l'air le moteur s'emballe et se fait plus discret.
+            rate *= 1.15;
+            gain *= 0.6;
+        }
+        match self.race.phase {
+            Phase::Countdown => gain *= 0.7,
+            Phase::Finished => gain *= 0.35,
+            Phase::Running => {}
+        }
+        let skid = if car.grounded {
+            crate::racing::sound::skid_gain(car.drift, car.speed())
+        } else {
+            0.0
+        };
+        (rate, gain, skid)
     }
 
     fn hud(&self, texts: &mut std::collections::HashMap<String, String>) {
@@ -522,20 +620,34 @@ impl AppState {
         if !session.valid_for(&self.scene) {
             // La scène a changé (autre démo, fichier ouvert) : la course s'arrête là.
             self.camera.far = crate::gfx::camera::OrbitCamera::FAR;
+            self.audio.loop_voice_stop(VOICE_ENGINE);
+            self.audio.loop_voice_stop(VOICE_SKID);
             return;
         }
         let out = session.step(dt, self.input_state.race, &mut self.scene);
         session.hud(&mut self.hud_texts);
         // Jauge de vitesse : le HUD lie sa barre à la « vie » (0..1) — jamais 0, sinon le
         // moteur déclarerait la manche perdue.
-        self.hud_health = Some((session.car.kmh() / 300.0).clamp(0.03, 1.0));
+        self.hud_health = Some((session.car.kmh() / 400.0).clamp(0.03, 1.0));
         for s in out.sfx {
             crate::runtime::sfx::play(&mut self.audio, s);
         }
+        let (rate, gain, skid) = session.sound_state();
+        self.audio.loop_voice(VOICE_ENGINE, &session.engine_wav, rate, gain);
+        self.audio
+            .loop_voice(VOICE_SKID, &session.skid_wav, 1.0 + session.car.drift * 0.25, skid);
         if out.shake > 0.0 {
             self.fx.camera_shake = self.fx.camera_shake.max(out.shake);
         }
         self.race = Some(session);
+    }
+
+    /// Jeu en pause : le moteur et les pneus se taisent (les voix repartent à la reprise).
+    pub(super) fn race_pause_audio(&mut self) {
+        if self.race.is_some() {
+            self.audio.loop_voice_stop(VOICE_ENGINE);
+            self.audio.loop_voice_stop(VOICE_SKID);
+        }
     }
 
     /// La course doit repartir de zéro au prochain pas (retour d'un Stop, nouvelle partie).

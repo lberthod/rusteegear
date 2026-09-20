@@ -173,6 +173,9 @@ pub struct Audio {
     /// simple sondage par frame).
     duck_release_at: Option<Instant>,
     playing: Vec<StaticSoundHandle>,
+    /// Voix **en boucle** pilotées en continu (moteur d'une voiture, crissement de pneus…),
+    /// par nom : hauteur (`playback_rate`) et volume changent à chaque frame.
+    loops: HashMap<String, StaticSoundHandle>,
     /// Sons **en flux** en cours de lecture (Sprint 104, `StreamingSoundData`) :
     /// type de handle distinct de `StaticSoundHandle`, pas de décodage complet
     /// en mémoire — évite le pic mémoire d'une musique longue entièrement
@@ -254,6 +257,7 @@ impl Audio {
             music_layer_mix: 0.0,
             duck_release_at: None,
             playing: Vec::new(),
+            loops: HashMap::new(),
             streaming_playing: StreamingHandles::default(),
             cache: HashMap::new(),
             pending: HashMap::new(),
@@ -390,6 +394,56 @@ impl Audio {
         let data = data.playback_rate(playback_rate as f64);
         self.start_on(data, gain, Track::Sfx);
         self.duck();
+    }
+
+    /// Voix en boucle pilotée (moteur, pneus…) : la première fois, décode `wav` (WAV complet,
+    /// bouclé sur toute sa durée) et la lance ; ensuite, ajuste seulement sa hauteur
+    /// (`rate`, 1.0 = normale) et son volume (`gain`, 0..1) avec un lissage de ~50 ms. À appeler
+    /// à chaque frame tant que la voix doit exister ; `loop_voice_stop` la coupe.
+    pub fn loop_voice(&mut self, name: &str, wav: &[u8], rate: f32, gain: f32) {
+        let tween = Tween {
+            duration: Duration::from_millis(50),
+            ..Default::default()
+        };
+        if let Some(handle) = self.loops.get_mut(name) {
+            handle.set_playback_rate(rate.max(0.05) as f64, tween);
+            handle.set_volume(Decibels(gain_to_db(gain)), tween);
+            return;
+        }
+        let key = format!("loop:{name}");
+        let data = if let Some(cached) = self.cache.get(&key).cloned() {
+            cached
+        } else {
+            match StaticSoundData::from_cursor(std::io::Cursor::new(wav.to_vec())) {
+                Ok(data) => {
+                    let data = data.loop_region(..);
+                    self.cache.insert(key, data.clone());
+                    data
+                }
+                Err(e) => {
+                    log::error!("Voix '{name}' illisible : {e}");
+                    return;
+                }
+            }
+        };
+        let data = data
+            .playback_rate(rate.max(0.05) as f64)
+            .volume(Decibels(gain_to_db(gain)));
+        if let Some(track) = self.sfx_track.as_mut() {
+            match track.play(data) {
+                Ok(handle) => {
+                    self.loops.insert(name.to_string(), handle);
+                }
+                Err(e) => log::error!("Voix '{name}' : lecture échouée : {e}"),
+            }
+        }
+    }
+
+    /// Coupe une voix en boucle (sans effet si elle n'existe pas).
+    pub fn loop_voice_stop(&mut self, name: &str) {
+        if let Some(mut handle) = self.loops.remove(name) {
+            handle.stop(Tween::default());
+        }
     }
 
     /// À appeler chaque frame : récupère les sons décodés et joue ceux en attente,
@@ -583,6 +637,9 @@ impl Audio {
             handle.stop(Tween::default());
         }
         self.playing.clear();
+        for (_, mut handle) in self.loops.drain() {
+            handle.stop(Tween::default());
+        }
         #[cfg(not(target_arch = "wasm32"))]
         {
             for handle in &mut self.streaming_playing {

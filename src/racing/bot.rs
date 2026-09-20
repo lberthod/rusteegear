@@ -13,11 +13,21 @@ const BRAKE_BUDGET: f32 = 30.0;
 
 pub struct Bot {
     hint: usize,
+    /// Plafond de vitesse (m/s) : simule un pilote prudent ou débutant.
+    cap: f32,
 }
 
 impl Bot {
     pub fn new(frame: usize) -> Bot {
-        Bot { hint: frame }
+        Bot {
+            hint: frame,
+            cap: f32::MAX,
+        }
+    }
+
+    /// Pilote qui ne dépasse jamais `cap` m/s.
+    pub fn with_cap(frame: usize, cap: f32) -> Bot {
+        Bot { hint: frame, cap }
     }
 
     fn turn_at(track: &Track, i: usize) -> f32 {
@@ -44,7 +54,7 @@ impl Bot {
 
         // Vitesse admissible : virage le plus contraignant à venir, ramené à ici par le
         // freinage disponible.
-        let mut allowed = f32::MAX;
+        let mut allowed = self.cap;
         for k in 0..70 {
             let kappa = Self::turn_at(track, self.hint + k).max(1e-4);
             let vt = (LATERAL_BUDGET / kappa).sqrt();
@@ -54,6 +64,8 @@ impl Bot {
         // Dans un saut, on ne touche à rien : plein gaz, cap tenu.
         let (throttle, brake) = if !car.grounded {
             (1.0, 0.0)
+        } else if car.speed() > allowed * 1.02 && car.speed() > self.cap * 0.999 - 0.01 && allowed >= self.cap {
+            (0.0, 0.3)
         } else if car.speed() > allowed * 1.02 {
             (0.0, ((car.speed() - allowed) / 6.0).clamp(0.2, 1.0))
         } else {
@@ -73,6 +85,43 @@ mod tests {
     use super::*;
     use crate::racing::race::{LAPS, Phase, Race};
     use crate::racing::track::TrackSpec;
+
+    /// Un pilote prudent (vitesse plafonnée) doit lui aussi pouvoir finir la course : les sauts
+    /// ne doivent pas exiger la vitesse maximale. Affiche, pour chaque plafond, le nombre de
+    /// chutes et le temps — repère d'équilibrage.
+    #[test]
+    fn slower_drivers_can_finish_too() {
+        let track = Track::build(&TrackSpec::herroad());
+        let mut report = Vec::new();
+        for cap in [30.0_f32, 40.0, 50.0, 60.0] {
+            let mut race = Race::new(&track, None);
+            let f = track.frames[track.start_frame()];
+            let mut car = Car::placed(f.pos, f.fwd, f.up, track.start_frame());
+            let mut bot = Bot::with_cap(track.start_frame(), cap);
+            let (mut falls, mut steps) = (0, 0);
+            while race.phase != Phase::Finished && steps < 60 * 400 {
+                steps += 1;
+                let prev = car.pos;
+                if race.phase == Phase::Running {
+                    let inp = bot.drive(&car, &track);
+                    car.step(inp, &track, 1.0 / 60.0);
+                    if car.pos.y < track.min_y - 5.0 || car.air_time > 5.0 {
+                        falls += 1;
+                        let s = race.spawn;
+                        car = Car::placed(s.pos, s.fwd, s.up, s.frame);
+                        bot = Bot::with_cap(s.frame, cap);
+                    }
+                }
+                race.update(1.0 / 60.0, &car, prev, &track);
+            }
+            report.push((cap, falls, race.total));
+        }
+        eprintln!("plafond m/s → chutes, temps : {report:?}");
+        for (cap, falls, total) in &report {
+            assert!(total.is_some(), "plafond {cap} m/s : course non terminée");
+            assert_eq!(*falls, 0, "plafond {cap} m/s : {falls} chutes (saut trop dur)");
+        }
+    }
 
     /// Une course complète pilotée par le bot : le circuit est bouclable, sans tomber ni se
     /// bloquer, et le temps obtenu sert de repère pour les médailles.
