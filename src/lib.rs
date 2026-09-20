@@ -19,6 +19,9 @@ pub mod app;
 pub mod assets;
 pub mod crash_log;
 pub mod editor;
+/// Manettes macOS via GameController (la lecture HID brute décode mal une Switch Pro en Bluetooth).
+#[cfg(target_os = "macos")]
+pub mod gamepad_mac;
 pub mod gfx;
 pub mod log_buffer;
 pub mod net;
@@ -27,6 +30,7 @@ pub mod net;
 #[cfg(not(any(target_os = "ios", target_os = "android", target_arch = "wasm32")))]
 pub mod pilot;
 pub mod project;
+pub mod racing;
 pub mod runtime;
 pub mod scene;
 pub mod time_compat;
@@ -92,6 +96,17 @@ struct App {
     keys_held: std::collections::HashSet<winit::keyboard::KeyCode>,
     /// Touches d'action tenues (Espace/J/K/H) — cf. `recompute_action_buttons`.
     action_keys_held: std::collections::HashSet<winit::keyboard::KeyCode>,
+    /// Touches de conduite tenues (HerRoad) — cf. `update_race_input`.
+    race_keys: std::collections::HashSet<winit::keyboard::KeyCode>,
+    /// Gâchettes analogiques de la manette (ZL/LT, ZR/RT), 0..1 — HerRoad.
+    gamepad_triggers: (f32, f32),
+    /// macOS : une manette GameController est active, `gilrs` (lecture HID brute, fausse en
+    /// Bluetooth pour la Switch Pro) est alors ignoré.
+    #[cfg(target_os = "macos")]
+    mac_pad_active: bool,
+    /// macOS : lecture GameController activée (désactivée par `RUSTEEGEAR_NO_GAMEPAD`).
+    #[cfg(target_os = "macos")]
+    mac_pad_enabled: bool,
 
     // --- caméra en vol au clic droit (analyse comparative 2026-09-04) ---
     /// Dernière position connue du curseur (pixels physiques) : les mouvements
@@ -167,6 +182,29 @@ const FLY_LOOK_DRAG_PX: f64 = 4.0;
 /// qui vient de changer — sinon relâcher une touche opposée à une autre
 /// encore enfoncée remettrait l'axe à 0 au lieu de revenir à la direction
 /// encore tenue (cf. docs/audits/misc.md pour le bug concret que ça évite).
+/// Touches lues par la conduite de HerRoad.
+fn is_race_key(code: winit::keyboard::KeyCode) -> bool {
+    use winit::keyboard::KeyCode as K;
+    matches!(
+        code,
+        K::ArrowUp
+            | K::ArrowDown
+            | K::ArrowLeft
+            | K::ArrowRight
+            | K::KeyW
+            | K::KeyA
+            | K::KeyS
+            | K::KeyD
+            | K::KeyQ
+            | K::Space
+            | K::Backspace
+            | K::Delete
+            | K::Enter
+            | K::KeyR
+            | K::KeyC
+    )
+}
+
 fn axis_from_held(negative: bool, positive: bool) -> f32 {
     match (negative, positive) {
         (true, false) => -1.0,
@@ -524,11 +562,61 @@ impl App {
             .unwrap_or_default()
     }
 
+    /// Commandes de conduite de HerRoad : gâchettes/boutons/stick de la manette (nomenclature
+    /// Switch Pro : ZR/A accélère, ZL/B freine et recule, stick ou croix dirige, R/L frein à
+    /// main, Y point de passage, X/+ recommencer, − caméra) combinés au clavier (flèches/WASD,
+    /// Espace, Retour arrière, Entrée, C).
+    fn update_race_input(&mut self) {
+        use gilrs::Button as B;
+        use winit::keyboard::KeyCode as K;
+        if self.state.race.is_none() {
+            return;
+        }
+        let k = |c: K| self.race_keys.contains(&c);
+        let h = |b: B| self.gamepad_held.contains(&b);
+        // Zone morte des gâchettes : une manette qui bruite ou repose légèrement appuyée ne
+        // doit pas freiner/accélérer toute seule.
+        let trigger = |v: f32| if v < 0.15 { 0.0 } else { v };
+        let (lt, rt) = (trigger(self.gamepad_triggers.0), trigger(self.gamepad_triggers.1));
+        // Stick : zone morte 10 % puis courbe douce (précis au centre, plein à la butée).
+        let curve = |v: f32| {
+            let m = ((v.abs() - 0.1) / 0.9).clamp(0.0, 1.0);
+            (0.35 * m + 0.65 * m * m).copysign(v)
+        };
+        let mut steer = curve(self.gamepad_axes.0);
+        if h(B::DPadLeft) {
+            steer -= 1.0;
+        }
+        if h(B::DPadRight) {
+            steer += 1.0;
+        }
+        steer += axis_from_held(
+            k(K::ArrowLeft) || k(K::KeyA) || k(K::KeyQ),
+            k(K::ArrowRight) || k(K::KeyD),
+        );
+        let digital = |b: bool| if b { 1.0_f32 } else { 0.0 };
+        let throttle = rt
+            .max(digital(h(B::RightTrigger2) || h(B::East) || k(K::ArrowUp) || k(K::KeyW)));
+        let brake = lt.max(digital(
+            h(B::LeftTrigger2) || h(B::South) || k(K::ArrowDown) || k(K::KeyS),
+        ));
+        self.state.input_state.race = app::race::RaceInput {
+            throttle,
+            brake,
+            steer: steer.clamp(-1.0, 1.0),
+            handbrake: h(B::RightTrigger) || h(B::LeftTrigger) || k(K::Space),
+            respawn: h(B::West) || k(K::Backspace) || k(K::Delete),
+            restart: h(B::North) || h(B::Start) || k(K::Enter) || k(K::KeyR),
+            camera: h(B::Select) || h(B::RightThumb) || k(K::KeyC),
+        };
+    }
+
     /// Recalcule saut/attaque/tir/soin à partir de **toutes** les sources tenues
     /// (touches d'action clavier + boutons manette), même principe que
     /// `axis_from_held` pour les axes : combiner plutôt qu'écraser, sinon relâcher
     /// une des deux sources couperait l'action même si l'autre est encore tenue.
     fn recompute_action_buttons(&mut self) {
+        self.update_race_input();
         use winit::keyboard::KeyCode;
         let bindings = self.gamepad_bindings();
         let gp = app::input::resolve_gamepad_input(
@@ -653,7 +741,98 @@ impl App {
     /// axes) et recalcule l'état combiné — appelé à chaque tour de boucle
     /// (`about_to_wait`), `gilrs` n'ayant pas de mécanisme de callback/event-loop
     /// propre à intégrer à celle de winit.
+    /// macOS : lit les manettes par GameController (propre, contrairement à la lecture HID
+    /// brute de `gilrs` pour une Switch Pro Bluetooth). Renvoie `true` si une manette est
+    /// active — `poll_gamepad` laisse alors `gilrs` de côté.
+    #[cfg(target_os = "macos")]
+    fn poll_gamepad_mac(&mut self) -> bool {
+        if !self.mac_pad_enabled {
+            return false;
+        }
+        let pads = gamepad_mac::read_all();
+        if pads.is_empty() {
+            if self.mac_pad_active {
+                // Toutes les manettes ont disparu : relâche tout.
+                self.mac_pad_active = false;
+                self.gamepad_held.clear();
+                self.gamepad_held2.clear();
+                self.gamepad_axes = (0.0, 0.0);
+                self.gamepad_axes2 = (0.0, 0.0);
+                self.gamepad_axes_right = (0.0, 0.0);
+                self.gamepad_triggers = (0.0, 0.0);
+                self.state.gamepad_hud.pads.clear();
+                self.recompute_action_buttons();
+            }
+            return false;
+        }
+        // Les événements bruts (faux) de gilrs sont jetés, jamais interprétés.
+        if let Some(g) = self.gilrs.as_mut() {
+            while g.next_event().is_some() {}
+        }
+        self.mac_pad_active = true;
+        self.state.gamepad_hud.unavailable = false;
+        let coop = self.state.scene.platformer.is_some_and(|p| p.coop);
+        let strongest = |a: (f32, f32), b: (f32, f32)| {
+            if b.0.hypot(b.1) > a.0.hypot(a.1) { b } else { a }
+        };
+        let (mut held, mut held2) = (std::collections::HashSet::new(), std::collections::HashSet::new());
+        let (mut axes, mut axes2, mut right) = ((0.0, 0.0), (0.0, 0.0), (0.0, 0.0));
+        let mut trig = (0.0_f32, 0.0_f32);
+        for (i, p) in pads.iter().enumerate() {
+            if coop && i >= 1 {
+                held2.extend(p.held.iter().copied());
+                axes2 = strongest(axes2, p.left);
+            } else {
+                // Hors coop (ou 1re manette) : toutes les manettes pilotent le joueur 1, on
+                // garde le stick le plus sollicité — l'autre manette éventuelle reste muette.
+                held.extend(p.held.iter().copied());
+                axes = strongest(axes, p.left);
+                right = strongest(right, p.right);
+                trig = (trig.0.max(p.lt), trig.1.max(p.rt));
+            }
+        }
+        let near = |a: (f32, f32), b: (f32, f32)| (a.0 - b.0).abs() < 0.01 && (a.1 - b.1).abs() < 0.01;
+        let changed = held != self.gamepad_held
+            || held2 != self.gamepad_held2
+            || !near(axes, self.gamepad_axes)
+            || !near(axes2, self.gamepad_axes2)
+            || !near(right, self.gamepad_axes_right)
+            || (trig.0 - self.gamepad_triggers.0).abs() > 0.01
+            || (trig.1 - self.gamepad_triggers.1).abs() > 0.01;
+        let start_pressed = held.contains(&gilrs::Button::Start)
+            && !self.gamepad_held.contains(&gilrs::Button::Start);
+        self.gamepad_held = held;
+        self.gamepad_held2 = held2;
+        self.gamepad_axes = axes;
+        self.gamepad_axes2 = axes2;
+        self.gamepad_axes_right = right;
+        self.gamepad_triggers = trig;
+        if start_pressed && self.state.playing && self.state.scene.platformer.is_some() {
+            self.state.restart_level();
+        }
+        let names: Vec<(String, u8)> = pads
+            .iter()
+            .enumerate()
+            .map(|(i, p)| (p.name.clone(), if coop { i.min(1) as u8 + 1 } else { 1 }))
+            .collect();
+        if self.state.gamepad_hud.pads != names {
+            log::info!(
+                "Manettes (GameController) : {}",
+                names.iter().map(|(n, _)| n.as_str()).collect::<Vec<_>>().join(", ")
+            );
+            self.state.gamepad_hud.pads = names;
+        }
+        if changed {
+            self.recompute_action_buttons();
+        }
+        true
+    }
+
     fn poll_gamepad(&mut self) {
+        #[cfg(target_os = "macos")]
+        if self.poll_gamepad_mac() {
+            return;
+        }
         let Some(gilrs) = self.gilrs.as_mut() else {
             return;
         };
@@ -725,6 +904,14 @@ impl App {
                     held.remove(&btn);
                     changed = true;
                 }
+                gilrs::EventType::ButtonChanged(gilrs::Button::LeftTrigger2, v, _) => {
+                    self.gamepad_triggers.0 = v;
+                    changed = true;
+                }
+                gilrs::EventType::ButtonChanged(gilrs::Button::RightTrigger2, v, _) => {
+                    self.gamepad_triggers.1 = v;
+                    changed = true;
+                }
                 gilrs::EventType::AxisChanged(gilrs::Axis::LeftStickX, v, _) => {
                     axes.0 = v;
                     changed = true;
@@ -742,6 +929,7 @@ impl App {
                     changed = true;
                 }
                 gilrs::EventType::Disconnected => {
+                    self.gamepad_triggers = (0.0, 0.0);
                     held.clear();
                     *axes = (0.0, 0.0);
                     self.gamepad_axes_right = (0.0, 0.0);
@@ -802,6 +990,11 @@ impl ApplicationHandler for App {
         }
         // `RUSTEEGEAR_NO_GAMEPAD=1` : ignore les manettes (tests pilotés
         // déterministes — une manette Bluetooth au repos peut émettre des axes).
+        #[cfg(target_os = "macos")]
+        if std::env::var_os("RUSTEEGEAR_NO_GAMEPAD").is_none() {
+            gamepad_mac::init();
+            self.mac_pad_enabled = true;
+        }
         if self.gilrs.is_none() && std::env::var_os("RUSTEEGEAR_NO_GAMEPAD").is_none() {
             match gilrs::Gilrs::new() {
                 Ok(g) => self.gilrs = Some(g),
@@ -1350,6 +1543,15 @@ impl ApplicationHandler for App {
                 // Contrôles « ordinateur » : flèches / WASD = déplacement, Espace = saut.
                 if let PhysicalKey::Code(code) = key_event.physical_key {
                     let pressed = key_event.state == ElementState::Pressed;
+                    // HerRoad : touches de conduite suivies à part, résolues avec la manette.
+                    if self.state.race.is_some() && is_race_key(code) {
+                        if pressed {
+                            self.race_keys.insert(code);
+                        } else {
+                            self.race_keys.remove(&code);
+                        }
+                        self.update_race_input();
+                    }
                     let is_move_key = matches!(
                         code,
                         KeyCode::ArrowLeft
@@ -1747,8 +1949,9 @@ fn make_app(player: bool) -> App {
         // `?scene=reeduc` (web, cf. `packaging/web/reeduc.html`) — la page web de
         // rééducation charge le moteur générique et choisit sa scène par l'URL.
         #[cfg(not(any(target_os = "ios", target_os = "android", target_arch = "wasm32")))]
-        let requested_demo =
-            std::env::args().find_map(|a| a.strip_prefix("--demo=").map(str::to_string));
+        let requested_demo = FORCED_DEMO.get().map(|d| d.to_string()).or_else(|| {
+            std::env::args().find_map(|a| a.strip_prefix("--demo=").map(str::to_string))
+        });
         #[cfg(target_arch = "wasm32")]
         let requested_demo = web_requested_scene();
         #[cfg(any(target_os = "ios", target_os = "android"))]
@@ -1768,6 +1971,11 @@ fn make_app(player: bool) -> App {
                 app.state.load_reeducation_demo();
                 force_solo_demo = true;
                 log::info!("Démo Rééducation jouée en mode Player.");
+            }
+            Some("herroad") => {
+                app.state.load_herroad_demo();
+                force_solo_demo = true;
+                log::info!("HerRoad jouée en mode Player.");
             }
             Some("riviere") | Some("cascade") | Some("water") => {
                 app.state.load_riviere_demo();
@@ -1916,6 +2124,18 @@ fn guest_digits(seed: u64) -> u64 {
     (seed.wrapping_mul(0x9E37_79B9_7F4A_7C15) >> 40) % 10000
 }
 
+/// Démo imposée par un binaire dédié (`herroad`) : lancée directement en mode Player, comme
+/// `--player --demo=<nom>`.
+#[cfg(not(target_arch = "wasm32"))]
+static FORCED_DEMO: std::sync::OnceLock<&'static str> = std::sync::OnceLock::new();
+
+/// Point d'entrée d'un jeu autonome : joue la démo `name` en plein Player (cf. `src/bin/herroad.rs`).
+#[cfg(not(target_arch = "wasm32"))]
+pub fn run_demo(name: &'static str) {
+    let _ = FORCED_DEMO.set(name);
+    run();
+}
+
 /// Point d'entrée desktop (et iOS via le bin).
 #[cfg(not(target_arch = "wasm32"))]
 pub fn run() {
@@ -1959,6 +2179,7 @@ pub fn run() {
     // Mobile = mode Player (plein écran, sans éditeur) ; desktop via --player ou
     // via la feature `player_build` (utilisée pour exporter un .app jouable).
     let player = std::env::args().any(|a| a == "--player")
+        || FORCED_DEMO.get().is_some()
         || cfg!(target_os = "ios")
         || cfg!(feature = "player_build");
     let mut app = make_app(player);

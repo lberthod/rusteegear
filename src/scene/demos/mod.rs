@@ -249,6 +249,7 @@ mod escorte;
 
 mod misc;
 
+pub mod herroad;
 pub mod reeducation;
 pub mod riviere;
 

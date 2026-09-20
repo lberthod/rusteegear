@@ -365,6 +365,10 @@ impl AppState {
                     self.load_components_demo();
                     "démo composants chargée".into()
                 }
+                Some("herroad") => {
+                    self.load_herroad_demo();
+                    "HerRoad chargée (lance Play pour rouler)".into()
+                }
                 Some("riviere") | Some("cascade") => {
                     self.load_riviere_demo();
                     "démo rivière & cascade chargée".into()

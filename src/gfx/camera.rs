@@ -26,6 +26,9 @@ pub struct OrbitCamera {
     /// pixelisation est active — sans ça, un mouvement de caméra sous-pixel fait
     /// scintiller tous les bords du décor. N'affecte que les matrices de rendu.
     pub snap: f32,
+    /// Plan lointain (m) : 100 par défaut ; un jeu de course (HerRoad) le pousse à plusieurs
+    /// centaines de mètres pour voir venir les virages.
+    pub far: f32,
 }
 
 impl OrbitCamera {
@@ -40,6 +43,7 @@ impl OrbitCamera {
             collision_distance: None,
             ortho_height: 0.0,
             snap: 0.0,
+            far: Self::FAR,
         }
     }
 
@@ -64,9 +68,9 @@ impl OrbitCamera {
         if self.ortho_height > 0.0 {
             let hh = self.ortho_height * 0.5;
             let hw = hh * self.aspect;
-            directx::orthographic(-hw, hw, -hh, hh, Self::NEAR, Self::FAR)
+            directx::orthographic(-hw, hw, -hh, hh, Self::NEAR, self.far)
         } else {
-            directx::perspective(self.fovy, self.aspect, Self::NEAR, Self::FAR)
+            directx::perspective(self.fovy, self.aspect, Self::NEAR, self.far)
         }
     }
 

@@ -292,3 +292,11 @@ js-sys = "0.3"
 console_error_panic_hook = "0.1"
 console_log = "1.0"
 egui-winit = { version = "0.34.3", default-features = false, features = ["links"] }
+
+# macOS : lecture des manettes par le framework Apple GameController. La lecture HID brute
+# de `gilrs` décode mal une Switch Pro en Bluetooth (macOS la passe en mode complet : les
+# données de mouvement sont lues comme des boutons — des milliers d'événements parasites).
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6"
+objc2-foundation = "0.3"
+objc2-game-controller = { version = "0.3.2", default-features = false, features = ["std", "GCController", "GCExtendedGamepad", "GCControllerElement", "GCControllerButtonInput", "GCControllerAxisInput", "GCControllerDirectionPad", "GCPhysicalInputProfile", "GCDevice"] }

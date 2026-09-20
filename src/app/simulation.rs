@@ -238,6 +238,10 @@ pub(super) fn apply_deadzone(v: (f32, f32), threshold: f32) -> (f32, f32) {
 /// recul compris), bien en dessous d'un vrai respawn/effet téléporté (plusieurs mètres).
 const TELEPORT_SNAP_PER_STEP: f32 = 0.5;
 
+/// Idem en course (HerRoad) : une voiture à 100 m/s avance de 1,7 m par pas sans être
+/// téléportée ; seuls un retour au point de passage ou un redémarrage claquent.
+const RACE_SNAP_PER_STEP: f32 = 4.0;
+
 /// `true` si le transform est resté (à un epsilon de f32 près) sur la pose donnée —
 /// sert à `restore_sim_poses` pour détecter qu'une écriture externe a eu lieu depuis
 /// le dernier mélange de rendu. Comparaison à epsilon plutôt qu'exacte : par valeur
@@ -970,6 +974,7 @@ impl AppState {
     /// de scène hors objets (lumière, HUD… édités en pause) ont changé entre
     /// temps : ceux-là ne sont pas restaurés, ils restent à enregistrer.
     pub(super) fn on_play_stopped(&mut self) {
+        self.race_request_reset();
         self.camera_zoom = None;
         self.zone_slow_until = 0.0;
         self.scene.objects = self.play_snapshot.clone();
@@ -1297,6 +1302,7 @@ impl AppState {
             // retarde d'au plus un pas (≤ 16,7 ms), imperceptible, contre une
             // trajectoire parfaitement continue à l'écran.
             self.blend_render_poses(self.sim_poses.sim_accumulator / FIXED_DT);
+            self.race_camera(dt, self.sim_poses.sim_accumulator / FIXED_DT);
 
             // Ramassage par contact : le joueur récupère les pièces qu'il traverse.
             // Score +1 par pièce ; les pièces bonus (respawn_delay>0) réapparaissent.
@@ -1686,6 +1692,8 @@ impl AppState {
     fn sim_step_inner(&mut self, dt: f32) {
         // 1. scripts
         self.time += dt;
+        // HerRoad : voiture, règles de course et HUD (no-op hors de la démo).
+        self.race_step(dt);
         let time = self.time;
         // Marqueurs temporels : accumulés ici, délivrés aux scripts **ce
         // même tick** (fusionnés dans `events_in` plus bas) — contrairement aux
@@ -3150,8 +3158,12 @@ impl AppState {
             // pas un mouvement : l'interpoler tracerait une traînée entre les deux
             // points. Au-delà d'un déplacement impossible en un seul pas de 1/60 s
             // (`TELEPORT_SNAP_PER_STEP`), on claque directement sur la pose finale.
-            let teleported =
-                (cp - pp).length_squared() > TELEPORT_SNAP_PER_STEP * TELEPORT_SNAP_PER_STEP;
+            let snap = if self.race.is_some() {
+                RACE_SNAP_PER_STEP
+            } else {
+                TELEPORT_SNAP_PER_STEP
+            };
+            let teleported = (cp - pp).length_squared() > snap * snap;
             if !ghosts.contains(&i) {
                 if teleported {
                     obj.transform.position = cp;

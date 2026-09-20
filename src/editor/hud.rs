@@ -99,7 +99,13 @@ pub(super) fn hud_widgets(
         egui::Area::new(egui::Id::new(("hud_widget", widget.id.as_str())))
             .fixed_pos(anchor_pos)
             .pivot(pivot)
-            .order(egui::Order::Foreground)
+            // Une image sert de fond (panneau) : couche inférieure, pour que le texte et les
+            // jauges posés dessus restent toujours devant, quel que soit l'ordre de la liste.
+            .order(if matches!(widget.kind, HudWidgetKind::Image { .. }) {
+                egui::Order::Middle
+            } else {
+                egui::Order::Foreground
+            })
             .movable(false)
             .show(ctx, |ui| match &widget.kind {
                 HudWidgetKind::Text { content, binding } => {

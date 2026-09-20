@@ -22,6 +22,7 @@ pub mod multiplayer;
 pub mod network_client;
 mod persistence;
 mod picking;
+pub mod race;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod scripting;
 // Backend Lua du player web (Sprint 137) : symétrique de `scripting` (mlua, natif),
@@ -241,6 +242,8 @@ pub struct GamepadHudInfo {
 pub struct PlayerInput {
     /// Axe du joystick virtuel, chaque composante dans [-1, 1].
     pub joy: (f32, f32),
+    /// Commandes de conduite de HerRoad (manette/clavier), cf. `race::RaceInput`.
+    pub race: race::RaceInput,
     /// Boutons actuellement pressés (par nom).
     pub buttons: std::collections::HashSet<String>,
     /// Inclinaison (gyroscope/accéléromètre), chaque composante dans [-1, 1].
@@ -1252,6 +1255,8 @@ pub struct AppState {
     /// zéro à l'entrée en Play seulement (une vanne de mort doit survivre à
     /// `restart_game`).
     pub hud_texts: std::collections::HashMap<String, String>,
+    /// Course HerRoad en cours (`None` hors de la démo), cf. `app::race`.
+    pub race: Option<race::RaceSession>,
     /// Dernière pose corporelle reçue (démo Rééducation, cf. `app::pose`) :
     /// alimentée par `set_pose` (export wasm `set_pose_landmarks`, tests),
     /// vieillie d'un pas à chaque `sim_step`, exposée aux scripts en `pose`.
@@ -1691,6 +1696,7 @@ impl AppState {
             start_level: None,
             start_level_pending: None,
             hud_texts: std::collections::HashMap::new(),
+            race: None,
             pose: pose::PoseFrame::default(),
             hands: pose::HandFrame::default(),
             game_events: Vec::new(),
