@@ -91,10 +91,12 @@ const EMBEDDED_MODELS: &[(&str, &[u8])] = &[
 
 /// Assets de la démo « Rivière & cascade » (`assets/models/riviere/`, ≈ 12 Mo :
 /// terrain, albédo, nappes d'eau, végétation générée) — compilés dans le
-/// `.wasm` **seulement** (`embedded://riviere/<fichier>`, cf.
-/// `scene::demos::riviere`) : en natif la démo lit le dossier sur disque, pas
-/// de raison d'alourdir le binaire de l'éditeur.
-#[cfg(target_arch = "wasm32")]
+/// `.wasm` et l'APK Android (`embedded://riviere/<fichier>`, cf.
+/// `scene::demos::riviere`) : sur desktop la démo lit le dossier sur disque,
+/// pas de raison d'alourdir le binaire de l'éditeur. Sur le Quest, sans ces
+/// octets, Rivière n'avait ni terrain ni décor (joueur en chute dans le
+/// brouillard, 1er test casque du 24 septembre 2026).
+#[cfg(any(target_arch = "wasm32", target_os = "android"))]
 static RIVIERE_DIR: Dir = include_dir!("$CARGO_MANIFEST_DIR/assets/models/riviere");
 
 /// Octets d'un modèle embarqué (`EMBEDDED_MODELS`, ou `riviere/<fichier>` sur
@@ -107,7 +109,7 @@ pub fn embedded_bytes(name: &str) -> Option<Vec<u8>> {
     {
         return Some(found);
     }
-    #[cfg(target_arch = "wasm32")]
+    #[cfg(any(target_arch = "wasm32", target_os = "android"))]
     if let Some(key) = name.strip_prefix("riviere/") {
         return RIVIERE_DIR.get_file(key).map(|f| f.contents().to_vec());
     }

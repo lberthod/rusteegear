@@ -48,11 +48,12 @@ impl Lcg {
 /// Chemin d'un asset partagé avec la démo Rivière : dossier `assets/models/` en natif,
 /// `embedded://` (compilé dans le `.wasm`) sur le web.
 fn asset_path(file: &str) -> String {
-    #[cfg(target_arch = "wasm32")]
+    // Web et Android (APK Quest) : pas de dossier du projet sur l'appareil.
+    #[cfg(any(target_arch = "wasm32", target_os = "android"))]
     {
         format!("{}{file}", crate::assets::EMBEDDED_SCHEME)
     }
-    #[cfg(not(target_arch = "wasm32"))]
+    #[cfg(not(any(target_arch = "wasm32", target_os = "android")))]
     {
         format!("{}/assets/models/{}", env!("CARGO_MANIFEST_DIR"), file)
     }
