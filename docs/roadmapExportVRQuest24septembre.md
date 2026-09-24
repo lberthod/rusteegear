@@ -488,6 +488,8 @@ vue spectateur. Performance inchangée (~10 ms/image stéréo sur Mac).
 à la manette, « avant » fait marcher le personnage **vers la caméra** quand
 elle est alignée sur Z (`camera_relative_move` renvoie des coordonnées monde,
 puis `vz = −my` inverse Z une seconde fois : réflexion du repère caméra ;
-vérifié par rendu avant/après). Le tactile n'est pas touché. Tâche séparée
-proposée ; la VR compense via `engine_move` et son test d'intégration cassera
-si la convention du moteur change.
+vérifié par rendu avant/après). **Corrigé le jour même** dans le moteur
+(commit `51ef677`, `camera_relative_axes`, clavier + manette + tactile +
+réseau, avec tests) ; `engine_move` suit désormais la convention corrigée
+(θ = atan2(−Lx, −Lz), stick tel quel) et son test d'intégration sur le vrai
+moteur cassera si elle change encore.
