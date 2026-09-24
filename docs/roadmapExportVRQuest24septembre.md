@@ -595,3 +595,22 @@ Tout le code est écrit, compilé (desktop, Android `vr`, web, serveur) et test�
 autant que possible sans casque. **La prochaine étape décisive est le test P0
 sur le Quest 3** (`VR_SCENE=cubes INSTALL=1 ./packaging/build_quest.sh`) : il
 valide l'hypothèse technique dont dépend tout le reste.
+
+## 21. Sélecteur de niveaux, HerRoad et RageQuit en VR (24 septembre 2026, soir)
+
+APK « à transmettre » : au lancement, menu **Choisir un niveau** (Rivière en fond), aussi accessible
+depuis la pause. `VR_SCENE` par défaut = `menu` ; `VR_SCENE=riviere|hameau|herroad|ragequit|reeduc`
+garde un APK à un seul jeu.
+
+| Niveau | Façon de jouer en VR | Vérifié |
+|---|---|---|
+| Rivière, Hameau | personnage (1re personne / spectateur) | simulateur |
+| **HerRoad** | cockpit au-dessus du capot (ou poursuite) ; gâchette droite = gaz, gauche = frein, stick gauche = direction, poignée = frein à main, B = point de passage, Y = recommencer ; tableau de bord devant soi ; lacet lissé (pas fixe 60 Hz → 72–90 Hz) | simulateur (104 km/h, départ, turbo) |
+| **RageQuit** | maquette du niveau à 7 m (ou 11 m), suivie en douceur, recadrée d'un coup au passage d'une porte ; stick + A | test `ragequit_player_walks_right_with_the_stick`, simulateur |
+| Rééducation | inchangé (P8) | — |
+
+Corrections trouvées en route : le second joueur local masqué hors coop avait encore un corps
+physique (mur invisible au départ de RageQuit, aussi en desktop) ; `save.set(clé, nil)` levait une
+erreur Lua ; le joueur du hameau apparaissait dans le feu communal puis était éjecté par un PNJ
+(désormais en (3,5 ; −6)) ; panneaux VR sans roulis. Serveur VPS et water.loicberthod.ch redéployés
+en 0ab912b.
