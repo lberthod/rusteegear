@@ -286,7 +286,7 @@ fn run_inner(app: &AndroidApp) -> Result<(), String> {
         });
         let [left, right] = &eye_views[image_index];
         let input = actions.read(&session, &stage, frame_state.predicted_display_time);
-        let haptics = content.render(
+        let out = content.render(
             &gpu.device,
             &gpu.queue,
             eyes,
@@ -295,7 +295,13 @@ fn run_inner(app: &AndroidApp) -> Result<(), String> {
             width,
             height,
         );
-        actions.vibrate(&session, haptics);
+        actions.vibrate(&session, out.haptics);
+        // « Quitter » du menu VR : fin de session propre (le runtime renvoie
+        // ensuite STOPPING puis EXITING, gérés plus haut).
+        if out.quit && !exit_requested {
+            exit_requested = true;
+            let _ = session.request_exit();
+        }
 
         swapchain.release_image().map_err(err("release"))?;
         let rect = xr::Rect2Di {

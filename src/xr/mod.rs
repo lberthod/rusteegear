@@ -19,6 +19,7 @@ pub mod quality;
 pub mod rig;
 pub mod sim;
 pub mod test_scene;
+pub mod ui;
 
 #[cfg(all(target_os = "android", feature = "vr"))]
 pub mod actions;

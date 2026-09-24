@@ -493,3 +493,13 @@ vérifié par rendu avant/après). **Corrigé le jour même** dans le moteur
 réseau, avec tests) ; `engine_move` suit désormais la convention corrigée
 (θ = atan2(−Lx, −Lz), stick tel quel) et son test d'intégration sur le vrai
 moteur cassera si elle change encore.
+
+## 14. Phase 5 — interface en VR (24 septembre 2026)
+
+| Élément | Fichier | Vérifié |
+|---|---|---|
+| Panneaux egui rendus **dans des textures** (un contexte egui + un `egui_wgpu::Renderer` par panneau), posés dans le monde en quads, dessinés dans chaque œil après la scène (sRGB correct, alpha prémultiplié) | `src/xr/ui.rs` | shader validé par naga |
+| **Menu de pause** flottant (bouton menu de la manette gauche / Tab au simulateur), 1,3 m devant la tête, jeu en pause : Reprendre, Recentrer la vue, Vue 1re personne/spectateur, Rotation par crans 15/30/45°, Vignette oui/non, Rejouer la manche, Quitter (fin de session OpenXR / fermeture du simulateur) | `src/xr/content.rs` | capture |
+| Pointage au **rayon de la manette droite** (rayon dessiné, curseur orange), gâchette = clic ; manettes relâchées pour le jeu tant que le menu est ouvert | `xr::ui::PanelPose::hit`, `VrUi::paint` | 3 tests purs + **test GPU** `tests/vr_menu.rs` (viser/appuyer/relâcher = un clic ; hors panneau = aucun) |
+| **Affichage au poignet** gauche : vie (barre) et ennemis vaincus, tourné vers la tête | `xr::ui::PanelPose::facing` | capture |
+| Couleurs de l'écran d'accueil (#12141a / #e8763b) | — | — |

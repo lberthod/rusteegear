@@ -344,18 +344,19 @@ impl Gpu {
     }
 
     /// Rend les deux yeux puis les recopie côte à côte, proportions conservées.
-    fn render(&mut self, head: &SimHead, input: &XrInput) {
+    /// Renvoie `true` si le menu VR a demandé à quitter.
+    fn render(&mut self, head: &SimHead, input: &XrInput) -> bool {
         let frame = match self.surface.get_current_texture() {
             wgpu::CurrentSurfaceTexture::Success(t)
             | wgpu::CurrentSurfaceTexture::Suboptimal(t) => t,
             wgpu::CurrentSurfaceTexture::Outdated | wgpu::CurrentSurfaceTexture::Lost => {
                 self.surface.configure(&self.device, &self.config);
-                return;
+                return false;
             }
-            _ => return,
+            _ => return false,
         };
         let p = self.eyes.profile;
-        let haptics = self.content.render(
+        let out = self.content.render(
             &self.device,
             &self.queue,
             head.eye_views(&p),
@@ -365,7 +366,7 @@ impl Gpu {
             p.eye_height,
         );
         // Pas de moteur de vibration sur un Mac : on le dit.
-        for (hand, h) in ["gauche", "droite"].iter().zip(haptics) {
+        for (hand, h) in ["gauche", "droite"].iter().zip(out.haptics) {
             if let Some(h) = h {
                 log::info!(
                     "Vibration manette {hand} : {:.0} % pendant {:.0} ms",
@@ -406,6 +407,7 @@ impl Gpu {
         }
         self.queue.submit([encoder.finish()]);
         frame.present();
+        out.quit
     }
 }
 
@@ -590,7 +592,10 @@ impl ApplicationHandler for Sim {
                 let Some(gpu) = self.gpu.as_mut() else {
                     return;
                 };
-                gpu.render(&self.head, &input);
+                if gpu.render(&self.head, &input) {
+                    event_loop.exit();
+                    return;
+                }
                 // Pas d'attente du GPU : comme dans un casque, CPU (image N+1) et
                 // GPU (image N) travaillent en parallèle, `get_current_texture`
                 // freine quand le GPU prend du retard. Le temps par image est donc
