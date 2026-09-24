@@ -23,6 +23,9 @@ pub enum Target {
     Android,
     Ios,
     Web,
+    /// APK VR Meta Quest (OpenXR, `packaging/build_quest.sh`) — roadmap
+    /// `docs/roadmapExportVRQuest24septembre.md`, phase 7.
+    Quest,
 }
 
 impl Target {
@@ -37,6 +40,7 @@ impl Target {
             Target::Android => "Android · .apk — non re-vérifié (préversion)",
             Target::Ios => "iOS · .ipa — non re-vérifié (préversion)",
             Target::Web => "Web · .zip",
+            Target::Quest => "Meta Quest · .apk VR — préversion (non testé au casque)",
         }
     }
 
@@ -47,6 +51,7 @@ impl Target {
             Target::Android => "packaging/build_apk.sh",
             Target::Ios => "packaging/build_ios.sh",
             Target::Web => "packaging/build_web.sh",
+            Target::Quest => "packaging/build_quest.sh",
         }
     }
 }
@@ -86,7 +91,7 @@ pub struct ExportPanel {
     /// un échec.
     cancelled: bool,
     /// Pré-requis détectés une fois au démarrage : `Ok` = prêt, `Err` = ce qui manque.
-    prereqs: [(Target, Result<(), String>); 4],
+    prereqs: [(Target, Result<(), String>); 5],
     /// Android : installer l'APK sur l'appareil branché (adb) après le build.
     install_device: bool,
     /// `adb` est-il disponible (sinon l'option d'installation est grisée).
@@ -142,6 +147,7 @@ impl ExportPanel {
                 (Target::Android, detect(Target::Android)),
                 (Target::Ios, detect(Target::Ios)),
                 (Target::Web, detect(Target::Web)),
+                (Target::Quest, detect(Target::Quest)),
             ],
             install_device: false,
             adb_available: has_cmd("adb"),
@@ -232,7 +238,7 @@ impl ExportPanel {
         // installation device : case cochée (Android requiert adb, iOS devicectl/Xcode).
         let install = self.install_device
             && match target {
-                Target::Android => self.adb_available,
+                Target::Android | Target::Quest => self.adb_available,
                 Target::Ios => true,
                 Target::Macos | Target::Web => false,
             };
@@ -539,7 +545,13 @@ impl ExportPanel {
 
                 ui.add_space(4.0);
                 ui.strong("⚙  Actions");
-                let targets = [Target::Macos, Target::Android, Target::Ios, Target::Web];
+                let targets = [
+                    Target::Macos,
+                    Target::Android,
+                    Target::Ios,
+                    Target::Web,
+                    Target::Quest,
+                ];
                 for t in targets {
                     self.card(ui, t, scene, settings);
                 }
@@ -656,6 +668,20 @@ impl ExportPanel {
                     ui.checkbox(
                         &mut self.install_device,
                         "Installer sur l'iPhone branché (devicectl)",
+                    );
+                });
+            }
+            Target::Quest => {
+                ui.indent("quest_opt", |ui| {
+                    ui.add_enabled_ui(self.adb_available, |ui| {
+                        ui.checkbox(
+                            &mut self.install_device,
+                            "Installer et lancer sur le casque (adb, mode développeur)",
+                        );
+                    });
+                    ui.weak(
+                        "Scène du projet en VR (OpenXR) : manettes Touch, vue 1re personne, \
+                         menu au bouton menu. Aperçu sans casque : cargo run --release --bin quest_sim.",
                     );
                 });
             }
@@ -786,7 +812,7 @@ fn detect(target: Target) -> Result<(), String> {
             }
             Ok(())
         }
-        Target::Android => {
+        Target::Android | Target::Quest => {
             if !has_cmd("cargo-apk") {
                 return Err("cargo install cargo-apk".into());
             }

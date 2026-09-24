@@ -30,6 +30,7 @@ dans `~/.motor3derust/presets/` — pratique pour « Démo », « Interne », «
 | **Android** (.apk) | `cargo-apk` + NDK + cible Rust | `cargo install cargo-apk` · NDK via Android Studio · `rustup target add aarch64-linux-android` |
 | **iOS** (.ipa) | Xcode + `xcodegen` + cible Rust + identité de signature | `brew install xcodegen` · `rustup target add aarch64-apple-ios` · certificat « Apple Development » dans le trousseau |
 | **Web** (.zip) | cible wasm32 + `wasm-bindgen-cli` (version exacte du lockfile, vérifiée par le panneau) | `rustup target add wasm32-unknown-unknown` · `cargo install wasm-bindgen-cli --version <version du Cargo.lock>` |
+| **Meta Quest** (.apk VR) | mêmes outils qu'Android (`cargo-apk`, NDK, cible Rust) ; le loader OpenXR Khronos est téléchargé une fois par le script | cf. Android · casque en **mode développeur** (app Meta Horizon) pour l'installation |
 
 Le panneau affiche **✓ prêt** ou **⚠ + ce qui manque** par cible (détecté au lancement).
 
@@ -42,6 +43,7 @@ Le panneau affiche **✓ prêt** ou **⚠ + ce qui manque** par cible (détecté
 ## Installation sur appareil
 
 - **Android** : coche « Installer sur l'appareil (adb) » → `adb install -r` après le build (appareil branché, débogage USB activé).
+- **Meta Quest** : coche « Installer et lancer sur le casque (adb, mode développeur) » → `adb install -r` puis lancement de l'app VR. L'APK (`target/export/<nom>-quest.apk`, identifiant `<bundle>.vr`, installable à côté de l'APK téléphone) embarque **la scène du projet** en VR : manettes Touch, vue 1re personne, menu au bouton menu de la manette gauche. Préversion : jamais encore testée sur un casque réel. Aperçu sans casque : `cargo run --release --bin quest_sim -- --scene embedded` (cf. `docs/roadmapExportVRQuest24septembre.md`).
 - **iOS** : coche « Installer sur l'iPhone branché (devicectl) » → build + signature + installation/lancement via `install_ios_device.sh` (nécessite un appareil enregistré et un certificat).
 
 Après un export réussi : **📂 Révéler le dossier** ouvre `target/export/`.

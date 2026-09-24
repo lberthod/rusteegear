@@ -23,13 +23,19 @@ use crate::gfx::renderer::Renderer;
 pub enum SceneChoice {
     Cubes,
     Riviere,
+    /// La scène du projet embarquée par le panneau Export
+    /// (`assets/player_scene.json`, cf. `Scene::embedded_player`).
+    Embedded,
 }
 
 impl SceneChoice {
-    /// `"cubes"` → `Cubes`, tout le reste → `Riviere` (défaut depuis la phase 1).
+    /// `"cubes"` → `Cubes`, `"embedded"` → `Embedded` (export depuis
+    /// l'éditeur), tout le reste → `Riviere` (défaut depuis la phase 1).
     pub fn parse(name: &str) -> Self {
         if name.eq_ignore_ascii_case("cubes") {
             Self::Cubes
+        } else if name.eq_ignore_ascii_case("embedded") {
+            Self::Embedded
         } else {
             Self::Riviere
         }
@@ -115,9 +121,13 @@ impl XrContent {
     ) -> Self {
         match choice {
             SceneChoice::Cubes => Self::Cubes(CubeScene::new(device, format, width, height)),
-            SceneChoice::Riviere => {
+            SceneChoice::Riviere | SceneChoice::Embedded => {
                 let mut app = AppState::default();
-                app.load_riviere_demo();
+                if choice == SceneChoice::Embedded {
+                    app.load_embedded_player_scene();
+                } else {
+                    app.load_riviere_demo();
+                }
                 app.playing = true;
                 let renderer = Renderer::new_external(
                     adapter,

@@ -512,3 +512,18 @@ moteur cassera si elle change encore.
 | **Table Lua `vr`** : `vr.active`, `vr.head {x,y,z,yaw}`, `vr.left`/`vr.right {x,y,z,trigger,grip,a,b}` (monde), `vr.haptic(côté, intensité, durée)` — **les deux backends** (mlua natif, rilua web ; hors VR `vr.active` = faux, un même script marche partout) | `app::script_ctx`, `app::scripting`, `app::scripting_web`, `docs/LUA_API.md` | test mlua (`simulation_tests`) + test rilua (`scripting_web`) |
 | Vibrations demandées par les scripts fusionnées avec celles des effets du jeu (la plus forte l'emporte) | `src/xr/content.rs` | — |
 | Simulateur : fenêtre masquée → pas de fausse mesure « 0,00 ms », pas de boucle à vide | `src/bin/quest_sim.rs` | constaté lors d'une session de jeu (≈2 min 30, profils Quest 3 et 2, vibrations sur coup encaissé, 7,5–14 ms/image) |
+
+## 16. Phase 7 — export « Meta Quest » depuis l'éditeur (24 septembre 2026)
+
+| Élément | Fichier | Vérifié |
+|---|---|---|
+| Cible **« Meta Quest · .apk VR »** dans le panneau Export (prérequis = ceux d'Android, case « Installer et lancer sur le casque », incluse dans « Tout exporter ») | `src/editor/export.rs`, `packaging/EXPORT.md` | compile, clippy |
+| L'APK embarque **la scène du projet** (`SceneChoice::Embedded`, `assets/player_scene.json` écrit par le panneau) au lieu de Rivière | `src/xr/content.rs` | simulateur `--scene embedded` |
+| `build_quest.sh` comprend le contrat du panneau (`PLAYER_BUILD=1`, `OUTPUT_NAME`, `BUNDLE_ID` → `<bundle>.vr`, `APP_NAME`, `INSTALL_DEVICE`) et copie l'APK dans `target/export/<nom>-quest.apk` | `packaging/build_quest.sh` | build réel : `com.berthod.monjeu.vr`, « Mon Jeu VR », 21 Mo |
+| CI : build `aarch64-linux-android --features vr` | `.github/workflows/ci.yml` | (depuis la phase 2) |
+
+À noter (hors VR) : dans le hameau MMORPG (scène embarquée par défaut), le
+point d'apparition du joueur (0, 0, 0) coïncide avec le **feu communal** —
+invisible en 3ᵉ personne sur desktop, mais en VR 1re personne on démarre dans
+le feu. À corriger dans la scène (point d'apparition décalé) si elle doit être
+jouée en VR.

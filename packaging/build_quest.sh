@@ -28,6 +28,18 @@ ADB="$ANDROID_HOME/platform-tools/adb"
 RELEASE=0
 [ "${1:-}" = "--release" ] && RELEASE=1
 
+# Lancé par le panneau Export de l'éditeur (PLAYER_BUILD=1, même contrat que
+# build_apk.sh) : scène du projet embarquée, identifiant propre au casque
+# (« <bundle>.vr », l'APK téléphone du même projet reste installable à côté),
+# installation demandée par la case « Installer et lancer sur le casque ».
+if [ "${PLAYER_BUILD:-0}" = "1" ]; then
+    VR_SCENE="${VR_SCENE:-embedded}"
+    if [ -n "${BUNDLE_ID:-}" ] && [ "${BUNDLE_ID%.vr}" = "$BUNDLE_ID" ]; then
+        BUNDLE_ID="$BUNDLE_ID.vr"
+    fi
+    [ "${INSTALL_DEVICE:-0}" = "1" ] && INSTALL=1
+fi
+
 # --- Loader OpenXR Khronos (libopenxr_loader.so arm64) ---------------------------
 # Le Quest n'embarque pas de loader global : chaque APK apporte le sien, qui
 # trouve ensuite le runtime Meta. Pris dans l'AAR officiel Khronos (Maven Central),
@@ -154,7 +166,13 @@ export RUSTEEGEAR_VR_RENDER_SCALE="${VR_RENDER_SCALE:-1.0}"
 echo "▶ Scène VR : $RUSTEEGEAR_VR_SCENE · $RUSTEEGEAR_VR_HZ Hz · résolution × $RUSTEEGEAR_VR_RENDER_SCALE"
 echo "▶ cargo apk build ${PROFILE_ARGS[*]+"${PROFILE_ARGS[*]}"} --lib --features vr"
 cargo apk build ${PROFILE_ARGS[@]+"${PROFILE_ARGS[@]}"} --lib --features vr
-echo "✅ APK Quest : $APK"
+# Renomme selon OUTPUT_NAME (panneau Export), comme build_apk.sh.
+if [ -n "${OUTPUT_NAME:-}" ]; then
+    mkdir -p target/export
+    cp "$APK" "target/export/${OUTPUT_NAME}-quest.apk"
+    APK="target/export/${OUTPUT_NAME}-quest.apk"
+fi
+echo "✅ APK Quest : $APK ($(du -h "$APK" | cut -f1))"
 
 if [ "${INSTALL:-0}" = 1 ]; then
     BUNDLE="${BUNDLE_ID:-com.berthod.rusteegear.vr}"
