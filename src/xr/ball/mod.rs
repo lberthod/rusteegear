@@ -593,6 +593,23 @@ impl BallGame {
         let _ = (input, head);
     }
 
+    /// État de la connexion, affiché au casque (diagnostic sans câble).
+    fn link_text(&self) -> &'static str {
+        #[cfg(not(any(target_arch = "wasm32", target_os = "ios")))]
+        {
+            match self.link.as_ref().map(net::Link::status) {
+                None => "Réseau désactivé",
+                Some(net::LinkStatus::Offline) => "Hors ligne (relais injoignable) : jeu en solo",
+                Some(net::LinkStatus::Waiting) => "En ligne · en attente d'un joueur PC",
+                Some(net::LinkStatus::Paired) => "En ligne · adversaire PC connecté",
+            }
+        }
+        #[cfg(any(target_arch = "wasm32", target_os = "ios"))]
+        {
+            "Réseau indisponible"
+        }
+    }
+
     /// Informations pour le joueur PC.
     fn hud_lines(&self) -> Vec<String> {
         let c = &COURSES[self.course];
@@ -720,8 +737,8 @@ impl BallGame {
             self.pause,
             self.best,
             self.targets().0,
-            self.remote.is_some().then_some(self.world.blocked)
-        )
+            self.remote.is_some().then_some(self.world.blocked),
+        ) + self.link_text()
     }
 
     fn banner_key(&self) -> String {
@@ -851,6 +868,8 @@ struct MenuView {
     new_record: bool,
     /// Joueur PC présent : tirs qu'il a arrêtés.
     rival: Option<u32>,
+    /// État de la connexion au relais, en clair.
+    link: &'static str,
 }
 
 impl MenuView {
@@ -866,7 +885,16 @@ impl MenuView {
             best: g.best,
             new_record: g.new_record,
             rival: g.remote.is_some().then_some(g.world.blocked),
+            link: g.link_text(),
         }
+    }
+}
+
+fn link_color(text: &str) -> egui::Color32 {
+    if text.starts_with("En ligne") {
+        egui::Color32::from_rgb(110, 200, 140)
+    } else {
+        MUTED
     }
 }
 
@@ -963,6 +991,7 @@ fn lobby_ui(ui: &mut egui::Ui, v: &MenuView, actions: &mut Vec<Action>) {
             .size(14.0)
             .color(MUTED),
     );
+    ui.label(egui::RichText::new(v.link).size(15.0).color(link_color(v.link)));
     if let Some(n) = v.rival {
         let _ = n;
         ui.label(
@@ -1000,6 +1029,9 @@ fn scoreboard_ui(ui: &mut egui::Ui, v: &MenuView) {
         .size(40.0)
         .color(MUTED),
     );
+    if v.rival.is_none() {
+        ui.label(egui::RichText::new(v.link).size(26.0).color(link_color(v.link)));
+    }
     if let Some(n) = v.rival {
         ui.label(
             egui::RichText::new(format!("Adversaire PC · tirs arrêtés {n}"))
