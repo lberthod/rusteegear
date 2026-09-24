@@ -6,7 +6,9 @@
 #   ./packaging/build_quest.sh              # APK de test (profil dev-fast, clé debug)
 #   INSTALL=1 ./packaging/build_quest.sh    # + installe et lance sur le casque (adb)
 #   RUSTEEGEAR_KEYSTORE_PASS=… ./packaging/build_quest.sh --release
-#   VR_SCENE=cubes ./packaging/build_quest.sh   # scène de test de la phase 0 (défaut : Rivière)
+#   VR_SCENE=cubes ./packaging/build_quest.sh   # scène de test de la phase 0 (défaut : menu,
+#                                               # le sélecteur de niveaux ; ou riviere, hameau,
+#                                               # herroad, ragequit, reeduc : un seul jeu)
 #   VR_HZ=90 VR_RENDER_SCALE=0.8 ./packaging/build_quest.sh   # fréquence, résolution de rendu
 #   VR_TARGET=pico ./packaging/build_quest.sh     # autre famille de casques (quest, pico, androidxr)
 #
@@ -189,7 +191,7 @@ fi
 
 # Réglages lus à la compilation par `xr::hello` (option_env!) : scène,
 # fréquence d'affichage (défaut 72 Hz), résolution de rendu (× recommandée).
-export RUSTEEGEAR_VR_SCENE="${VR_SCENE:-riviere}"
+export RUSTEEGEAR_VR_SCENE="${VR_SCENE:-menu}"
 export RUSTEEGEAR_VR_HZ="${VR_HZ:-72}"
 export RUSTEEGEAR_VR_RENDER_SCALE="${VR_RENDER_SCALE:-1.0}"
 echo "▶ Scène VR : $RUSTEEGEAR_VR_SCENE · $RUSTEEGEAR_VR_HZ Hz · résolution × $RUSTEEGEAR_VR_RENDER_SCALE"

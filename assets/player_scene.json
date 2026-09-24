@@ -49344,9 +49344,9 @@
       "name": "Joueur",
       "transform": {
         "position": [
-          0.0,
-          0.0,
-          0.0
+          3.5,
+          1.0,
+          -6.0
         ],
         "rotation": [
           0.0,

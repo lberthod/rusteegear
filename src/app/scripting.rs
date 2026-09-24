@@ -335,8 +335,13 @@ pub(super) fn run_script(
     let save_get =
         lua.create_function(move |_, key: String| Ok(vars_get.borrow().get(&key).copied()))?;
     let vars_set = vars_cell.clone();
-    let save_set = lua.create_function(move |_, (key, val): (String, f64)| {
-        vars_set.borrow_mut().insert(key, val);
+    // `save.set("clé", nil)` efface la clé (idiome Lua, utilisé par RageQuit).
+    let save_set = lua.create_function(move |_, (key, val): (String, Option<f64>)| {
+        let mut vars = vars_set.borrow_mut();
+        match val {
+            Some(v) => vars.insert(key, v),
+            None => vars.remove(&key),
+        };
         Ok(())
     })?;
     let save_api = lua.create_table()?;
@@ -1259,6 +1264,50 @@ mod tests {
         .unwrap();
         assert_eq!(t.position.x, 42.0);
         assert_eq!(vars.get("pv_max"), Some(&42.0));
+    }
+
+    #[test]
+    fn script_save_set_nil_erases_the_key() {
+        // `save.set("clé", nil)` efface la clé (idiome Lua) au lieu d'arrêter
+        // le script sur une erreur — le pic « timide » de RageQuit en dépend.
+        let lua = Lua::new();
+        let src = "save.set('a', 1.0); save.set('a', nil); obj.x = save.get('a') == nil and 7 or 0";
+        let func = lua.load(src).into_function().unwrap();
+        let mut t = Transform::from_pos(Vec3::ZERO);
+        let mut col = [1.0; 3];
+        let mut vars = std::collections::HashMap::new();
+        run_script(
+            &lua,
+            &func,
+            &mut t,
+            &mut col,
+            &mut None,
+            0.016,
+            0.0,
+            &PlayerInput::default(),
+            false,
+            false,
+            false,
+            false,
+            false,
+            &[],
+            &mut Vec::new(),
+            &[],
+            &mut Vec::new(),
+            &mut Vec::new(),
+            &mut false,
+            &mut vars,
+            &mut Vec::new(),
+            &mut None,
+            &mut Vec::new(),
+            false,
+            None,
+            &mut Vec::new(),
+            &[],
+        )
+        .unwrap();
+        assert_eq!(t.position.x, 7.0);
+        assert!(!vars.contains_key("a"));
     }
 
     #[test]

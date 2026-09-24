@@ -657,6 +657,16 @@ impl AppState {
         }
     }
 
+    /// Voiture vue depuis la VR (cockpit, `xr::content`) : position interpolée entre deux
+    /// pas fixes comme `race_camera` (sinon le monde saccade à 72–90 Hz), direction avant,
+    /// haut, vitesse en km/h.
+    pub fn race_car_view(&self) -> Option<(Vec3, Vec3, Vec3, f32)> {
+        let s = self.race.as_ref()?;
+        let alpha = (self.sim_poses.sim_accumulator * 60.0).clamp(0.0, 1.0); // pas fixe 1/60 s
+        let car = &s.car;
+        Some((car.prev_pos.lerp(car.pos, alpha), car.fwd, car.up, car.kmh()))
+    }
+
     /// Caméra de poursuite, au rythme des frames (interpolée entre deux pas fixes).
     pub fn race_camera(&mut self, dt: f32, alpha: f32) {
         let Some(s) = self.race.as_mut() else {

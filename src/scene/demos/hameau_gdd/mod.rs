@@ -61,7 +61,7 @@ impl Scene {
         sol.physics = PhysicsKind::Static;
         sol.color = [0.30, 0.40, 0.22];
 
-        let mut joueur = demo_obj("Joueur", MeshKind::Capsule, Vec3::new(0.0, 1.0, 0.0));
+        let mut joueur = demo_obj("Joueur", MeshKind::Capsule, Vec3::new(3.5, 1.0, -6.0));
         joueur.color = [0.95, 0.6, 0.25];
         joueur.tag = "joueur".into();
         joueur.controller = Some(Controller {

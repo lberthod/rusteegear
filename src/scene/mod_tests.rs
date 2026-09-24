@@ -2707,6 +2707,33 @@ fn the_embedded_scene_player_is_the_skinned_fairy_hero() {
     );
 }
 
+/// Le joueur du hameau n'apparaît plus dans le feu communal (en VR à la
+/// première personne, on démarrait dans les flammes), ni collé à un PNJ.
+#[test]
+fn embedded_player_spawns_clear_of_the_communal_fire() {
+    let scene = Scene::embedded_player();
+    let pos = |name: &str| {
+        scene
+            .objects
+            .iter()
+            .find(|o| o.name == name)
+            .map(|o| o.transform.position)
+            .expect(name)
+    };
+    let (joueur, feu) = (pos("Joueur"), pos("Feu communal"));
+    let flat = |a: Vec3, b: Vec3| Vec3::new(a.x - b.x, 0.0, a.z - b.z).length();
+    assert!(flat(joueur, feu) > 5.0, "joueur à {joueur:?}, feu à {feu:?}");
+    for o in &scene.objects {
+        if o.name != "Joueur" && o.name != "Sol" && o.physics != PhysicsKind::None {
+            assert!(
+                flat(joueur, o.transform.position) > 2.0,
+                "« {} » colle au point d'apparition",
+                o.name
+            );
+        }
+    }
+}
+
 /// Le prototype mis en cache pour le serveur (roadmap post-audit UX v2
 /// 2026-09-04, 0.1 bis) doit être une copie fidèle et indépendante de la
 /// scène embarquée : même nombre d'objets et de modèles, et une mutation de

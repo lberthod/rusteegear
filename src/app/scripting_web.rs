@@ -562,9 +562,17 @@ fn host_save_get(state: &mut LuaState) -> LuaResult<u32> {
 
 fn host_save_set(state: &mut LuaState) -> LuaResult<u32> {
     let key = arg_str(state, 0)?;
-    let val = arg_num(state, 1)?;
+    // `save.set("clé", nil)` efface la clé, comme le backend mlua.
+    let val = match state.stack_get(state.base + 1) {
+        Val::Nil => None,
+        _ => Some(arg_num(state, 1)?),
+    };
     ACCUM.with(|a| {
-        a.borrow_mut().vars.insert(key, val);
+        let vars = &mut a.borrow_mut().vars;
+        match val {
+            Some(v) => vars.insert(key, v),
+            None => vars.remove(&key),
+        };
     });
     Ok(0)
 }

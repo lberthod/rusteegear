@@ -178,7 +178,7 @@ fn run_inner(app: &AndroidApp) -> Result<(), String> {
 
     // Scène fixée à la compilation (`VR_SCENE=cubes ./packaging/build_quest.sh`
     // pour le test pur de la phase 0) ; Rivière par défaut depuis la phase 1.
-    let choice = SceneChoice::parse(option_env!("RUSTEEGEAR_VR_SCENE").unwrap_or("riviere"));
+    let choice = SceneChoice::parse(option_env!("RUSTEEGEAR_VR_SCENE").unwrap_or("menu"));
     log::info!("VR : scène {choice:?}");
     // Manettes Touch (phase 3) : actions OpenXR, lues à chaque image.
     let actions = super::actions::TouchActions::new(&instance, &session, enabled.ext_hand_tracking)

@@ -31,6 +31,17 @@ impl AppState {
         self.world = super::multiplayer::WorldKind::Hameau;
     }
 
+    /// Remplace la scène par `scene`, construite ailleurs (RageQuit embarqué
+    /// dans l'APK VR, `xr::content`) : même remise à zéro qu'une démo.
+    pub fn load_scene(&mut self, scene: Scene) {
+        self.scene = scene;
+        self.scene_file = None;
+        self.async_load.imported_dirty = true;
+        self.hud_health = None;
+        self.is_leveled_demo = false;
+        self.clear_selection();
+    }
+
     /// Charge la démo mobile prête à jouer (avec historique pour annuler).
     pub fn load_mobile_demo(&mut self) {
         self.push_undo();

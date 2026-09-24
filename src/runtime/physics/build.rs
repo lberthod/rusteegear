@@ -28,6 +28,15 @@ impl Physics {
             // collider bloquerait le joueur alors qu'il est invisible (cf.
             // `App::init_waves`/`update_waves`).
             let is_player = obj.controller.as_ref().is_some_and(|c| c.input || c.gyro);
+            // Second joueur local du plateformer 2D, masqué hors coop : pas de
+            // corps, sinon il reste un mur invisible au point de départ (RageQuit :
+            // le joueur 1 butait dessus à x = 0,5 sans pouvoir avancer).
+            if is_player
+                && !obj.visible
+                && obj.controller.as_ref().is_some_and(|c| c.player_slot > 0)
+            {
+                continue;
+            }
             // Créature scriptée kinématique AVEC `ai_chaser` (chantier 4.1,
             // audit 2026-07-20 : créatures de la scène servie qui patrouillent
             // en Lua ET chassent par archétype) : le scripté PRIME. Sans ce

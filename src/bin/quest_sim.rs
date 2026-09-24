@@ -13,8 +13,9 @@
 //! `QUEST_SIM_DRAW_DISTANCE=1` : distances d'affichage du jeu desktop au lieu
 //! du profil VR (mesures de la phase 2).
 //!
-//! Scène : `--scene riviere` (défaut, phase 1 : la vraie partie Rivière rendue
-//! par le `Renderer` du moteur) ou `--scene cubes` (scène de test de la phase 0).
+//! Scène : `--scene menu` (défaut : sélecteur de niveaux, Rivière en fond),
+//! `riviere`, `hameau`, `herroad`, `ragequit`, `reeduc`, `embedded` ou `cubes`
+//! (scène de test de la phase 0).
 //!
 //! Commandes : clic gauche glissé = tourner la tête · flèches = marcher dans la
 //! pièce · Page↑ / Page↓ = se lever / s'accroupir · R = recentrer · 2 = profil
@@ -95,7 +96,7 @@ fn scene_from_args(args: &[String]) -> SceneChoice {
     args.iter()
         .position(|a| a == "--scene")
         .and_then(|i| args.get(i + 1))
-        .map_or(SceneChoice::Riviere, |s| SceneChoice::parse(s))
+        .map_or(SceneChoice::Launcher, |s| SceneChoice::parse(s))
 }
 
 /// Les deux « swapchains » d'œil simulées (une texture à 2 couches, comme
@@ -826,7 +827,16 @@ async fn snapshot(path: &str, profile: QuestProfile, choice: SceneChoice) -> Res
     );
     // Une partie : ~1 s de jeu avant la capture (physique posée, créatures en
     // mouvement, rig placé sur le terrain), rendue à chaque pas comme en direct.
-    let frames = if choice == SceneChoice::Cubes { 1 } else { 60 };
+    // `QUEST_SIM_FRAMES=300` : jouer plus longtemps avant la capture ;
+    // `QUEST_SIM_SWITCH=herroad` : changer de niveau (comme le menu « Choisir
+    // un niveau ») à la première image.
+    let frames = std::env::var("QUEST_SIM_FRAMES")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(if choice == SceneChoice::Cubes { 1 } else { 60 });
+    if let Ok(level) = std::env::var("QUEST_SIM_SWITCH") {
+        content.load_level(SceneChoice::parse(&level));
+    }
     // Touches tenues pendant la seconde de jeu (`QUEST_SIM_HOLD=W,F`) :
     // vérifie déplacement, rotation, actions sans fenêtre.
     let head = SimHead::default();
@@ -845,6 +855,19 @@ async fn snapshot(path: &str, profile: QuestProfile, choice: SceneChoice) -> Res
         std::thread::sleep(std::time::Duration::from_millis(16));
     }
     if let XrContent::Game(g) = &content
+        && let (Some((pos, _, _, kmh)), Some(rig)) = (g.app.race_car_view(), g.rig)
+    {
+        println!(
+            "Voiture en ({:.1}, {:.1}, {:.1}) à {kmh:.0} km/h · rig ({:.1}, {:.1}, {:.1}), lacet {:.0}°",
+            pos.x,
+            pos.y,
+            pos.z,
+            rig.origin.x,
+            rig.origin.y,
+            rig.origin.z,
+            rig.yaw.to_degrees()
+        );
+    } else if let XrContent::Game(g) = &content
         && let (Some(i), Some(rig)) = (g.app.player_index(), g.rig)
     {
         let p = g.app.scene.objects[i].transform.position;

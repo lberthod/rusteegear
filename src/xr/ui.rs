@@ -34,12 +34,16 @@ impl PanelPose {
         }
     }
 
-    /// Panneau tourné vers la tête depuis `center` (affichage au poignet).
+    /// Panneau tourné vers la tête depuis `center` (affichage au poignet),
+    /// **sans roulis** : ses bords horizontaux restent horizontaux, quel que
+    /// soit l'endroit d'où on le regarde.
     pub fn facing(center: Vec3, head: Vec3, size: Vec2) -> Self {
         let to_head = (head - center).normalize_or(Vec3::Z);
+        let yaw = to_head.x.atan2(to_head.z);
+        let pitch = -to_head.y.clamp(-1.0, 1.0).asin();
         Self {
             center,
-            rotation: Quat::from_rotation_arc(Vec3::Z, to_head),
+            rotation: Quat::from_rotation_y(yaw) * Quat::from_rotation_x(pitch),
             size,
         }
     }

@@ -16,6 +16,7 @@ use super::rig::Rig;
 use super::test_scene::CubeScene;
 use super::ui::{MENU, PanelPose, Pointer, VrUi, WRIST};
 use crate::app::AppState;
+use crate::app::race::RaceInput;
 use crate::gfx::renderer::Renderer;
 
 /// Scène VR choisie au lancement.
@@ -28,20 +29,127 @@ pub enum SceneChoice {
     Embedded,
     /// La démo de rééducation Mouvéo (phase 8 : mains suivies en VR).
     Reeducation,
+    /// Le hameau MMORPG (scène embarquée par défaut du moteur).
+    Hameau,
+    /// HerRoad, la course façon Trackmania : conduite depuis le cockpit.
+    HerRoad,
+    /// RageQuit, le plateformer 2D : joué comme une maquette posée devant soi.
+    RageQuit,
+    /// Sélecteur de niveaux : Rivière en fond, menu « Choisir un niveau » ouvert.
+    Launcher,
+}
+
+/// Niveaux proposés par le menu « Choisir un niveau », dans l'ordre affiché.
+pub const LEVELS: [SceneChoice; 5] = [
+    SceneChoice::Riviere,
+    SceneChoice::Hameau,
+    SceneChoice::HerRoad,
+    SceneChoice::RageQuit,
+    SceneChoice::Reeducation,
+];
+
+/// Comment une scène se joue en VR.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Style {
+    /// Un personnage à incarner (première personne ou spectateur derrière lui).
+    Character,
+    /// Pas de personnage : le joueur se tient à la place de la caméra (Mouvéo).
+    Rehab,
+    /// Assis dans la voiture (HerRoad) : le monde suit la voiture.
+    Vehicle,
+    /// Plateformer 2D vu de côté, comme une maquette à quelques mètres.
+    Diorama,
 }
 
 impl SceneChoice {
-    /// `"cubes"` → `Cubes`, `"embedded"` → `Embedded` (export depuis
-    /// l'éditeur), tout le reste → `Riviere` (défaut depuis la phase 1).
+    /// `"cubes"`, `"embedded"` (export depuis l'éditeur), `"reeduc"`,
+    /// `"riviere"`, `"hameau"`, `"herroad"`, `"ragequit"` ; tout le reste →
+    /// `Launcher` (le sélecteur de niveaux, défaut de l'APK).
     pub fn parse(name: &str) -> Self {
-        if name.eq_ignore_ascii_case("cubes") {
-            Self::Cubes
-        } else if name.eq_ignore_ascii_case("embedded") {
-            Self::Embedded
-        } else if name.eq_ignore_ascii_case("reeduc") {
-            Self::Reeducation
-        } else {
-            Self::Riviere
+        match name.to_ascii_lowercase().as_str() {
+            "cubes" => Self::Cubes,
+            "embedded" => Self::Embedded,
+            "reeduc" => Self::Reeducation,
+            "riviere" | "water" => Self::Riviere,
+            "hameau" => Self::Hameau,
+            "herroad" => Self::HerRoad,
+            "ragequit" => Self::RageQuit,
+            _ => Self::Launcher,
+        }
+    }
+
+    /// Nom affiché dans le menu des niveaux.
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Cubes => "Cubes de test",
+            Self::Riviere | Self::Launcher => "Rivière",
+            Self::Embedded => "Mon jeu",
+            Self::Reeducation => "Rééducation Mouvéo",
+            Self::Hameau => "Hameau",
+            Self::HerRoad => "HerRoad · course",
+            Self::RageQuit => "RageQuit · plateformer",
+        }
+    }
+
+    /// Une ligne d'explication sous le nom, dans le menu des niveaux.
+    fn blurb(self) -> &'static str {
+        match self {
+            Self::Riviere | Self::Launcher => "Vallée, cascade et créatures",
+            Self::Hameau => "Le village fortifié du MMORPG",
+            Self::HerRoad => "Gâchette droite = gaz, gauche = frein",
+            Self::RageQuit => "Stick gauche + A pour sauter",
+            Self::Reeducation => "Mouvements des bras et des mains",
+            Self::Cubes | Self::Embedded => "",
+        }
+    }
+
+    fn style(self) -> Style {
+        match self {
+            Self::Reeducation => Style::Rehab,
+            Self::HerRoad => Style::Vehicle,
+            Self::RageQuit => Style::Diorama,
+            _ => Style::Character,
+        }
+    }
+
+    /// Une partie de ce niveau, prête à jouer.
+    fn load(self) -> AppState {
+        let mut app = AppState::default();
+        match self {
+            Self::Embedded | Self::Hameau => app.load_embedded_player_scene(),
+            Self::Reeducation => app.load_reeducation_demo(),
+            Self::HerRoad => app.load_herroad_demo(),
+            Self::RageQuit => app.load_scene(ragequit_scene()),
+            Self::Riviere | Self::Launcher | Self::Cubes => app.load_riviere_demo(),
+        }
+        app.playing = true;
+        app
+    }
+}
+
+/// La scène de RageQuit (`../ragequit/scenes/main.scene.json`, générée par
+/// son `build_scene.py`), embarquée compressée : `assets/vr/ragequit.scene.json.zst`.
+fn ragequit_scene() -> crate::scene::Scene {
+    use std::io::Read;
+    const ZST: &[u8] = include_bytes!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/assets/vr/ragequit.scene.json.zst"
+    ));
+    let mut json = String::new();
+    let parsed = ruzstd::decoding::StreamingDecoder::new(ZST)
+        .map_err(|e| e.to_string())
+        .and_then(|mut d| d.read_to_string(&mut json).map_err(|e| e.to_string()))
+        .and_then(|_| {
+            serde_json::from_str::<crate::scene::Scene>(&json).map_err(|e| e.to_string())
+        });
+    match parsed {
+        Ok(mut scene) => {
+            scene.reload_imported();
+            scene
+        }
+        Err(e) => {
+            log::error!("RageQuit : scène embarquée illisible ({e}) — Rivière à la place.");
+            crate::scene::Scene::riviere_demo()
         }
     }
 }
@@ -60,6 +168,8 @@ pub struct FrameOut {
 struct MenuState {
     pose: PanelPose,
     paused_before: bool,
+    /// Page « Choisir un niveau » plutôt que la pause.
+    levels: bool,
 }
 
 /// Actions du menu VR (phase 5).
@@ -73,6 +183,12 @@ enum MenuAction {
     Restart,
     /// Rééducation : lance la séance (bouton « Démarrer » de la page web).
     StartSession,
+    /// Ouvre la page « Choisir un niveau ».
+    Levels,
+    /// Revient de la page des niveaux à la pause.
+    Back,
+    /// Charge ce niveau.
+    Load(SceneChoice),
     Quit,
 }
 
@@ -111,13 +227,20 @@ pub struct GameView {
     menu: Option<MenuState>,
     /// Bouton menu tenu à l'image précédente (ouverture sur front).
     menu_was: bool,
-    /// Vue spectateur **à la place de la caméra de jeu** (scènes sans
-    /// personnage à incarner : rééducation) plutôt que derrière le personnage.
-    camera_rig: bool,
+    /// Niveau en cours et façon de le jouer.
+    choice: SceneChoice,
+    style: Style,
+    /// Voiture (HerRoad) : position de la tête dans la pièce au dernier
+    /// recentrage — le siège y est ancré, assis comme debout.
+    seat_head: Option<Vec3>,
+    /// Sélecteur de niveaux : ouvre la page des niveaux dès que le rig est posé.
+    open_levels: bool,
     /// Début du pincement gauche en cours (mode mains : un pincement tenu
     /// `MENU_PINCH_SECONDS` ouvre/ferme le menu, faute de bouton menu).
     left_pinch_since: Option<crate::time_compat::Instant>,
     focus_pause: FocusPause,
+    /// Instant de l'image précédente (lissages de la voiture et de la maquette).
+    last_frame: Option<crate::time_compat::Instant>,
 }
 
 impl XrContent {
@@ -134,14 +257,7 @@ impl XrContent {
     ) -> Self {
         match choice {
             SceneChoice::Cubes => Self::Cubes(CubeScene::new(device, format, width, height)),
-            SceneChoice::Riviere | SceneChoice::Embedded | SceneChoice::Reeducation => {
-                let mut app = AppState::default();
-                match choice {
-                    SceneChoice::Embedded => app.load_embedded_player_scene(),
-                    SceneChoice::Reeducation => app.load_reeducation_demo(),
-                    _ => app.load_riviere_demo(),
-                }
-                app.playing = true;
+            _ => {
                 let renderer = Renderer::new_external(
                     adapter,
                     device.clone(),
@@ -150,20 +266,13 @@ impl XrContent {
                     width,
                     height,
                 );
-                Self::Game(Box::new(GameView {
-                    app,
+                let mut game = GameView {
+                    app: AppState::default(),
                     renderer,
                     rig: None,
                     last_sim_ms: 0.0,
                     last_render_ms: 0.0,
-                    comfort: Comfort {
-                        view: if choice == SceneChoice::Reeducation {
-                            ViewMode::Spectator
-                        } else {
-                            ViewMode::FirstPerson
-                        },
-                        ..Comfort::default()
-                    },
+                    comfort: Comfort::default(),
                     snap: SnapTurn::default(),
                     view_click_was: false,
                     prev_fx: (0.0, 0.0),
@@ -172,11 +281,25 @@ impl XrContent {
                     ui: VrUi::new(device, format),
                     menu: None,
                     menu_was: false,
-                    camera_rig: choice == SceneChoice::Reeducation,
+                    choice,
+                    style: choice.style(),
+                    seat_head: None,
+                    open_levels: choice == SceneChoice::Launcher,
                     left_pinch_since: None,
                     focus_pause: FocusPause::default(),
-                }))
+                    last_frame: None,
+                };
+                game.load_level(choice);
+                Self::Game(Box::new(game))
             }
+        }
+    }
+
+    /// Remplace la partie en cours par ce niveau (menu « Choisir un niveau »,
+    /// ou `QUEST_SIM_SWITCH` du simulateur). Sans effet sur la scène de cubes.
+    pub fn load_level(&mut self, choice: SceneChoice) {
+        if let Self::Game(game) = self {
+            game.load_level(choice);
         }
     }
 
@@ -239,6 +362,19 @@ impl GameView {
         } else {
             input.apply_to(&mut self.app.input_state);
         }
+        if self.style == Style::Vehicle {
+            self.app.input_state.race = if menu_open {
+                RaceInput::default()
+            } else {
+                race_input(input)
+            };
+        }
+        let now = crate::time_compat::Instant::now();
+        let dt = self
+            .last_frame
+            .map_or(1.0 / 72.0, |t| now.duration_since(t).as_secs_f32())
+            .clamp(1e-3, 0.1);
+        self.last_frame = Some(now);
 
         // 2. Clic du stick droit : première personne ⇄ spectateur (P4).
         let click = input.hands[RIGHT].stick_click;
@@ -251,7 +387,9 @@ impl GameView {
 
         // 3. Rotation par crans, puis caméra de jeu alignée sur le regard : le
         //    déplacement au stick (relatif à la caméra) va là où l'on regarde.
-        if let Some(rig) = self.rig.as_mut() {
+        if let Some(rig) = self.rig.as_mut()
+            && matches!(self.style, Style::Character | Style::Rehab)
+        {
             let stick_x = if menu_open {
                 0.0
             } else {
@@ -266,6 +404,10 @@ impl GameView {
                 super::locomotion::engine_move(self.app.input_state.gamepad_move, look);
             self.app.input_state.gamepad_move = moves;
             self.app.vr_camera_yaw = Some(yaw);
+        } else if let (Some(rig), Style::Diorama) = (self.rig, self.style) {
+            // Maquette : le stick va à gauche / à droite du niveau, où que
+            // l'on regarde.
+            self.app.vr_camera_yaw = Some(rig.yaw);
         }
 
         // 3 bis. Rééducation (phase 8) : corps et mains vus par une webcam
@@ -302,17 +444,30 @@ impl GameView {
         self.app.advance_play();
         self.last_sim_ms = t0.elapsed().as_secs_f32() * 1000.0;
 
-        // 5. Rig : suit le personnage en première personne, fixe en spectateur.
+        // 5. Rig : suit le personnage en première personne, fixe en spectateur ;
+        //    assis dans la voiture ; face à la maquette du plateformer.
         let feet = player_feet(&self.app);
         let comfort = self.comfort;
-        let camera_rig = self.camera_rig;
+        let style = self.style;
+        if self.rig.is_none() {
+            self.seat_head = Some(head_stage);
+        }
         let rig = self.rig.get_or_insert_with(|| {
-            let rig = match comfort.view {
-                ViewMode::Spectator if camera_rig => {
+            let rig = match (style, comfort.view) {
+                (Style::Rehab, _) => {
                     Rig::from_camera(&self.app, crate::xr::sim::STANDING_EYE_HEIGHT)
                 }
-                ViewMode::Spectator => Rig::spectator(&self.app),
-                ViewMode::FirstPerson => Rig {
+                (Style::Character, ViewMode::Spectator) => Rig::spectator(&self.app),
+                (Style::Diorama, view) => {
+                    let yaw = Rig::yaw_facing(self.app.camera.target - self.app.camera.eye());
+                    Rig {
+                        origin: diorama_origin(&self.app, yaw, view)
+                            .unwrap_or(self.app.camera.eye()),
+                        yaw,
+                    }
+                }
+                (Style::Vehicle, _) => Rig::default(),
+                (Style::Character, ViewMode::FirstPerson) => Rig {
                     origin: Vec3::ZERO,
                     yaw: Rig::yaw_facing(self.app.camera.target - self.app.camera.eye()),
                 },
@@ -326,14 +481,56 @@ impl GameView {
             );
             rig
         });
-        let first_person = comfort.view == ViewMode::FirstPerson;
-        if let (true, Some(feet)) = (first_person, feet) {
-            rig.follow_first_person(feet, head_stage);
+        let first_person = style == Style::Character && comfort.view == ViewMode::FirstPerson;
+        match style {
+            Style::Character if first_person => {
+                if let Some(feet) = feet {
+                    rig.follow_first_person(feet, head_stage);
+                }
+            }
+            Style::Vehicle => {
+                if let Some((pos, fwd, up, _)) = self.app.race_car_view() {
+                    let target = Rig::yaw_facing(fwd);
+                    // Lacet lissé : la direction de la voiture n'avance qu'au pas
+                    // fixe (60 Hz), le casque affiche à 72–90 Hz.
+                    let d = (target - rig.yaw + std::f32::consts::PI)
+                        .rem_euclid(std::f32::consts::TAU)
+                        - std::f32::consts::PI;
+                    rig.yaw += d * (1.0 - (-dt * 18.0).exp());
+                    let flat = Quat::from_rotation_y(rig.yaw) * Vec3::NEG_Z;
+                    let seat = match comfort.view {
+                        ViewMode::FirstPerson => pos + up * COCKPIT_EYE + fwd * COCKPIT_FORWARD,
+                        ViewMode::Spectator => pos + Vec3::Y * 2.6 - flat * 7.5,
+                    };
+                    let head = self.seat_head.unwrap_or(head_stage);
+                    rig.origin = seat - Quat::from_rotation_y(rig.yaw) * head;
+                }
+            }
+            Style::Diorama => {
+                if let Some(want) = diorama_origin(&self.app, rig.yaw, comfort.view) {
+                    let gap = want - rig.origin;
+                    if gap.length() > 15.0 {
+                        rig.origin = want; // porte vers le niveau suivant : on suit d'un coup
+                    } else {
+                        let k = |rate: f32| 1.0 - (-dt * rate).exp();
+                        rig.origin += Vec3::new(gap.x * k(3.0), gap.y * k(1.2), gap.z * k(3.0));
+                    }
+                }
+            }
+            _ => {}
         }
         let rig = *rig;
+        if self.open_levels {
+            self.open_levels = false;
+            let look = rig.look_world(head_rot);
+            let head_world = rig.origin + Quat::from_rotation_y(rig.yaw) * head_stage;
+            self.toggle_menu(head_world, look);
+            if let Some(menu) = self.menu.as_mut() {
+                menu.levels = true;
+            }
+        }
 
         // 6. Vignette selon la vitesse du personnage (première personne).
-        let now = crate::time_compat::Instant::now();
         let speed = match (self.prev_feet, feet) {
             (Some((p, t)), Some(f)) => {
                 let dt = now.duration_since(t).as_secs_f32().max(1e-3);
@@ -381,22 +578,39 @@ impl GameView {
         let mut actions = Vec::new();
         if let Some(menu) = self.menu {
             let pointer = self.menu_pointer(&rig, input, menu.pose);
-            let comfort = self.comfort;
-            let rehab = self.camera_rig;
+            let page = MenuPage {
+                comfort: self.comfort,
+                style: self.style,
+                levels: menu.levels,
+                can_go_back: self.choice != SceneChoice::Launcher,
+            };
             self.ui.paint(device, queue, MENU, pointer, |ui| {
-                menu_ui(ui, comfort, rehab, &mut actions);
+                menu_ui(ui, page, &mut actions);
             });
         }
-        let wrist = input.hands[LEFT].grip.map(|(pos, rot)| {
-            let (p, _) = to_world(&rig, pos, rot);
-            PanelPose::facing(p + Vec3::Y * 0.09, head_world, Vec2::new(0.18, 0.09))
-        });
+        let wrist = if style == Style::Vehicle {
+            // Voiture : tableau de bord fixe devant le volant, les mains sont
+            // sur les gâchettes.
+            let dash = rig.origin
+                + Quat::from_rotation_y(rig.yaw)
+                    * (self.seat_head.unwrap_or(head_stage) + Vec3::new(0.0, -0.32, -0.75));
+            Some(PanelPose::facing(dash, head_world, Vec2::new(0.42, 0.21)))
+        } else {
+            input.hands[LEFT].grip.map(|(pos, rot)| {
+                let (p, _) = to_world(&rig, pos, rot);
+                PanelPose::facing(p + Vec3::Y * 0.09, head_world, Vec2::new(0.18, 0.09))
+            })
+        };
         if wrist.is_some() {
-            let health = self.app.hud_health;
+            let health = match style {
+                Style::Character | Style::Rehab => self.app.hud_health,
+                // HerRoad range sa jauge de vitesse dans `hud_health`.
+                Style::Vehicle | Style::Diorama => None,
+            };
             let kills = self.app.displayed_kill_count();
             // Rééducation : la consigne de la séance (écrite par les scripts
             // Mouvéo pour la page web) plutôt que le score.
-            let hint = self.app.hud_texts.get("consigne").cloned();
+            let hint = wrist_hint(&self.app, style);
             self.ui
                 .paint(device, queue, WRIST, Pointer::default(), |ui| {
                     wrist_ui(ui, health, kills, hint.as_deref());
@@ -439,11 +653,28 @@ impl GameView {
                     };
                 }
                 MenuAction::ToggleVignette => self.comfort.vignette = !self.comfort.vignette,
+                MenuAction::Restart if self.style == Style::Vehicle => {
+                    // Nouvelle course (le fantôme et le record sont sur disque).
+                    self.load_level(SceneChoice::HerRoad);
+                }
                 MenuAction::Restart => {
                     self.close_menu();
                     self.app.restart_game();
                     self.rig = None;
                 }
+                MenuAction::Levels | MenuAction::Back => {
+                    if let Some(menu) = self.menu.as_mut() {
+                        menu.levels = action == MenuAction::Levels;
+                    }
+                }
+                MenuAction::Load(choice)
+                    if self.choice == SceneChoice::Launcher && choice == SceneChoice::Riviere =>
+                {
+                    // Rivière tourne déjà en fond du sélecteur.
+                    self.choice = choice;
+                    self.close_menu();
+                }
+                MenuAction::Load(choice) => self.load_level(choice),
                 MenuAction::StartSession => {
                     self.close_menu();
                     self.app.push_hud_event("demarrer");
@@ -494,9 +725,29 @@ impl GameView {
             self.menu = Some(MenuState {
                 pose: PanelPose::in_front_of(head_world, look, 1.3, Vec2::new(1.0, 0.75)),
                 paused_before: self.app.paused,
+                levels: false,
             });
             self.app.paused = true;
         }
+    }
+
+    /// Remplace la partie par ce niveau ; réglages de confort conservés.
+    fn load_level(&mut self, choice: SceneChoice) {
+        self.menu = None;
+        self.app = choice.load();
+        self.choice = choice;
+        self.style = choice.style();
+        self.comfort.view = match self.style {
+            Style::Character | Style::Vehicle => ViewMode::FirstPerson,
+            Style::Rehab | Style::Diorama => ViewMode::Spectator,
+        };
+        self.rig = None;
+        self.seat_head = None;
+        self.prev_feet = None;
+        self.speed = 0.0;
+        self.prev_fx = (0.0, 0.0);
+        self.renderer.vr_vignette = 0.0;
+        log::info!("VR : niveau « {} »", choice.label());
     }
 
     fn close_menu(&mut self) {
@@ -568,8 +819,20 @@ const BG: egui::Color32 = egui::Color32::from_rgb(18, 20, 26);
 const ACCENT: egui::Color32 = egui::Color32::from_rgb(232, 118, 59);
 const TEXT: egui::Color32 = egui::Color32::from_rgb(230, 232, 227);
 
-/// Menu de pause VR : gros boutons (visés au rayon, cliqués à la gâchette).
-fn menu_ui(root: &mut egui::Ui, comfort: Comfort, rehab: bool, actions: &mut Vec<MenuAction>) {
+/// Ce que le menu VR affiche à cette image.
+#[derive(Debug, Clone, Copy)]
+struct MenuPage {
+    comfort: Comfort,
+    style: Style,
+    /// Page « Choisir un niveau » plutôt que la pause.
+    levels: bool,
+    /// Faux au lancement (sélecteur) : il n'y a pas encore de partie où revenir.
+    can_go_back: bool,
+}
+
+/// Menu VR : gros boutons (visés au rayon, cliqués à la gâchette) — la pause,
+/// ou la liste des niveaux.
+fn menu_ui(root: &mut egui::Ui, page: MenuPage, actions: &mut Vec<MenuAction>) {
     let frame = egui::Frame::NONE
         .fill(BG)
         .corner_radius(24)
@@ -577,48 +840,108 @@ fn menu_ui(root: &mut egui::Ui, comfort: Comfort, rehab: bool, actions: &mut Vec
             2.0_f32,
             egui::Color32::from_rgb(40, 45, 54),
         ))
-        .inner_margin(28);
+        .inner_margin(24);
     egui::CentralPanel::default()
         .frame(frame)
         .show_inside(root, |ui| {
             ui.visuals_mut().override_text_color = Some(TEXT);
             ui.vertical_centered(|ui| {
-                ui.label(egui::RichText::new("Pause").size(30.0).color(ACCENT));
-                ui.add_space(12.0);
-                let size = egui::vec2(ui.available_width() * 0.9, 44.0);
-                let mut button = |label: String, action: MenuAction| {
-                    let b = egui::Button::new(egui::RichText::new(label).size(21.0)).min_size(size);
-                    if ui.add(b).clicked() {
-                        actions.push(action);
-                    }
-                };
-                if rehab {
-                    button("Démarrer la séance".into(), MenuAction::StartSession);
+                if page.levels {
+                    levels_ui(ui, page.can_go_back, actions);
+                } else {
+                    pause_ui(ui, page, actions);
                 }
-                button("Reprendre".into(), MenuAction::Resume);
-                button("Recentrer la vue".into(), MenuAction::Recenter);
-                let view = match comfort.view {
-                    ViewMode::FirstPerson => "première personne",
-                    ViewMode::Spectator => "spectateur",
-                };
-                button(format!("Vue : {view}"), MenuAction::ToggleView);
-                button(
-                    format!("Rotation par crans : {:.0}°", comfort.snap_degrees),
-                    MenuAction::CycleSnap,
-                );
-                let vignette = if comfort.vignette { "oui" } else { "non" };
-                button(
-                    format!("Vignette de confort : {vignette}"),
-                    MenuAction::ToggleVignette,
-                );
-                button("Rejouer la manche".into(), MenuAction::Restart);
-                button("Quitter".into(), MenuAction::Quit);
             });
             // Curseur : là où vise la manette.
             if let Some(pos) = ui.ctx().pointer_latest_pos() {
                 ui.painter().circle_filled(pos, 7.0, ACCENT);
             }
         });
+}
+
+fn pause_ui(ui: &mut egui::Ui, page: MenuPage, actions: &mut Vec<MenuAction>) {
+    ui.label(egui::RichText::new("Pause").size(26.0).color(ACCENT));
+    ui.add_space(6.0);
+    let size = egui::vec2(ui.available_width() * 0.9, 36.0);
+    let mut button = |label: String, action: MenuAction| {
+        let b = egui::Button::new(egui::RichText::new(label).size(19.0)).min_size(size);
+        if ui.add(b).clicked() {
+            actions.push(action);
+        }
+    };
+    if page.style == Style::Rehab {
+        button("Démarrer la séance".into(), MenuAction::StartSession);
+    }
+    button("Reprendre".into(), MenuAction::Resume);
+    button("Choisir un niveau".into(), MenuAction::Levels);
+    button("Recentrer la vue".into(), MenuAction::Recenter);
+    let view = match (page.style, page.comfort.view) {
+        (Style::Vehicle, ViewMode::FirstPerson) => "cockpit",
+        (Style::Vehicle, ViewMode::Spectator) => "poursuite",
+        (Style::Diorama, ViewMode::FirstPerson) => "proche",
+        (Style::Diorama, ViewMode::Spectator) => "éloignée",
+        (_, ViewMode::FirstPerson) => "première personne",
+        (_, ViewMode::Spectator) => "spectateur",
+    };
+    button(format!("Vue : {view}"), MenuAction::ToggleView);
+    if matches!(page.style, Style::Character | Style::Rehab) {
+        button(
+            format!("Rotation par crans : {:.0}°", page.comfort.snap_degrees),
+            MenuAction::CycleSnap,
+        );
+    }
+    if page.style == Style::Character {
+        let vignette = if page.comfort.vignette { "oui" } else { "non" };
+        button(
+            format!("Vignette de confort : {vignette}"),
+            MenuAction::ToggleVignette,
+        );
+    }
+    let restart = match page.style {
+        Style::Vehicle => "Recommencer la course",
+        _ => "Rejouer la manche",
+    };
+    button(restart.into(), MenuAction::Restart);
+    button("Quitter".into(), MenuAction::Quit);
+}
+
+fn levels_ui(ui: &mut egui::Ui, can_go_back: bool, actions: &mut Vec<MenuAction>) {
+    ui.label(
+        egui::RichText::new("Choisir un niveau")
+            .size(26.0)
+            .color(ACCENT),
+    );
+    ui.add_space(6.0);
+    let size = egui::vec2(ui.available_width() * 0.9, 52.0);
+    for level in LEVELS {
+        let text = format!("{}\n{}", level.label(), level.blurb());
+        let mut job = egui::text::LayoutJob::default();
+        let (title, blurb) = text.split_once('\n').unwrap_or((&text, ""));
+        job.append(
+            title,
+            0.0,
+            egui::TextFormat::simple(egui::FontId::proportional(20.0), TEXT),
+        );
+        job.append(
+            &format!("\n{blurb}"),
+            0.0,
+            egui::TextFormat::simple(
+                egui::FontId::proportional(14.0),
+                egui::Color32::from_rgb(160, 166, 160),
+            ),
+        );
+        if ui.add(egui::Button::new(job).min_size(size)).clicked() {
+            actions.push(MenuAction::Load(level));
+        }
+    }
+    if can_go_back {
+        ui.add_space(4.0);
+        let b = egui::Button::new(egui::RichText::new("Retour").size(18.0))
+            .min_size(egui::vec2(size.x * 0.5, 34.0));
+        if ui.add(b).clicked() {
+            actions.push(MenuAction::Back);
+        }
+    }
 }
 
 /// Affichage au poignet gauche : vie et score, lisible d'un coup d'œil.
@@ -647,6 +970,72 @@ fn wrist_ui(root: &mut egui::Ui, health: Option<f32>, kills: u32, hint: Option<&
                 }
             }
         });
+}
+
+/// Hauteur de l'œil au-dessus du centre de la voiture, et avancée depuis ce
+/// centre, en vue cockpit : au-dessus du capot, comme la caméra « capot » de
+/// HerRoad (plus en arrière, on est dans la carrosserie).
+const COCKPIT_EYE: f32 = 1.45;
+const COCKPIT_FORWARD: f32 = 1.4;
+
+/// Manettes Touch → commandes de HerRoad : gâchette droite = gaz, gauche =
+/// frein et marche arrière, stick gauche = direction, poignées = frein à main,
+/// B = dernier point de passage, Y = recommencer (appuis prolongés, comme au
+/// clavier).
+fn race_input(input: &XrInput) -> RaceInput {
+    let (l, r) = (&input.hands[LEFT], &input.hands[RIGHT]);
+    RaceInput {
+        throttle: r.trigger,
+        brake: l.trigger,
+        steer: super::input::deadzone(l.stick).0,
+        handbrake: r.squeeze >= PRESS_THRESHOLD || l.squeeze >= PRESS_THRESHOLD,
+        respawn: r.secondary,
+        restart: l.secondary,
+        camera: false,
+    }
+}
+
+/// Plateformer 2D en maquette : le sol de la pièce 1 m sous le personnage (les
+/// yeux ~0,6 m au-dessus de lui, debout), à 7 m (vue proche) ou 11 m
+/// (éloignée) du plan du niveau.
+fn diorama_origin(app: &AppState, yaw: f32, view: ViewMode) -> Option<Vec3> {
+    let p = app.player_position()?;
+    let plane_z = app.scene.platformer.map_or(p.z, |pl| pl.plane_z);
+    let distance = match view {
+        ViewMode::FirstPerson => 7.0,
+        ViewMode::Spectator => 11.0,
+    };
+    let forward = Quat::from_rotation_y(yaw) * Vec3::NEG_Z;
+    Some(Vec3::new(p.x, p.y - 1.0, plane_z) - forward * distance)
+}
+
+/// Texte du poignet (ou du tableau de bord) selon le jeu.
+fn wrist_hint(app: &AppState, style: Style) -> Option<String> {
+    let text = |k: &str| app.hud_texts.get(k).cloned().unwrap_or_default();
+    match style {
+        Style::Rehab => app.hud_texts.get("consigne").cloned(),
+        Style::Vehicle => {
+            let center = text("hr_center");
+            let head = match center.as_str() {
+                "PRÊT ?" => "PRÊT ? Gâchette droite pour partir".to_string(),
+                "" => text("hr_turbo"),
+                _ => center,
+            };
+            Some(format!(
+                "{}   {} km/h\n{}\n{}",
+                text("hr_time"),
+                text("hr_speed"),
+                text("hr_lap"),
+                head
+            ))
+        }
+        Style::Diorama => Some(format!(
+            "Niveau {}   ·   Morts {}",
+            app.platformer_level().map_or(1, |l| l + 1),
+            app.deaths()
+        )),
+        Style::Character => None,
+    }
 }
 
 /// État VR publié aux scripts (table Lua `vr`) : tête et manettes en monde.
@@ -743,7 +1132,54 @@ fn push_controller_lines(lines: &mut Vec<(Vec3, Vec3, [f32; 3])>, pos: Vec3, rot
 
 #[cfg(test)]
 mod tests {
-    use super::FocusPause;
+    use super::{FocusPause, LEVELS, SceneChoice, Style};
+
+    #[test]
+    fn every_level_parses_back_from_its_build_name() {
+        for (name, choice) in [
+            ("riviere", SceneChoice::Riviere),
+            ("hameau", SceneChoice::Hameau),
+            ("herroad", SceneChoice::HerRoad),
+            ("ragequit", SceneChoice::RageQuit),
+            ("reeduc", SceneChoice::Reeducation),
+            ("cubes", SceneChoice::Cubes),
+            ("embedded", SceneChoice::Embedded),
+            ("menu", SceneChoice::Launcher),
+            ("", SceneChoice::Launcher),
+        ] {
+            assert_eq!(SceneChoice::parse(name), choice, "{name}");
+        }
+        assert!(LEVELS.iter().all(|l| !l.blurb().is_empty()));
+    }
+
+    #[test]
+    fn herroad_is_driven_and_ragequit_is_a_diorama() {
+        assert_eq!(SceneChoice::HerRoad.style(), Style::Vehicle);
+        assert_eq!(SceneChoice::RageQuit.style(), Style::Diorama);
+        let app = SceneChoice::HerRoad.load();
+        assert!(app.race.is_some() && app.playing);
+    }
+
+    /// RageQuit en VR : le stick gauche fait avancer le personnage (le second
+    /// joueur, masqué hors coop, ne bloque plus le départ).
+    #[test]
+    fn ragequit_player_walks_right_with_the_stick() {
+        let mut app = SceneChoice::RageQuit.load();
+        app.vr_camera_yaw = Some(0.0);
+        app.input_state.gamepad_move = (1.0, 0.0);
+        app.advance_steps(60);
+        let i = app.player_index().expect("joueur");
+        let x = app.scene.objects[i].transform.position.x;
+        assert!(x > 3.0, "le joueur est resté à x = {x}");
+    }
+
+    /// La scène RageQuit embarquée se lit (sinon repli silencieux sur Rivière).
+    #[test]
+    fn embedded_ragequit_scene_is_the_platformer() {
+        let scene = super::ragequit_scene();
+        assert!(scene.platformer.is_some(), "mode plateformer 2D");
+        assert!(scene.objects.len() > 1000);
+    }
 
     #[test]
     fn losing_focus_pauses_and_regaining_it_resumes_only_what_it_paused() {
