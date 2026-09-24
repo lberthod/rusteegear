@@ -20,6 +20,9 @@
 //! pièce · Page↑ / Page↓ = se lever / s'accroupir · R = recentrer · 2 = profil
 //! Quest 2 / 3 · Échap = quitter. Manettes Touch simulées (ZQSD/WASD = stick
 //! gauche, Espace = A, F ou clic droit = gâchette…) : cf. `Sim::sim_input`.
+//! `QUEST_SIM_HANDS=1` : suivi des mains à la place des manettes (P / O =
+//! pincement / poing droits, L / M = gauches), pour la rééducation
+//! (`--scene reeduc`).
 //! Titre de la fenêtre : temps CPU+GPU par image comparé au budget du casque —
 //! indicatif seulement (GPU du Mac ≠ Adreno du Quest).
 
@@ -695,8 +698,38 @@ fn input_from_keys(keys: &HashSet<KeyCode>, head: &SimHead, right_mouse: bool) -
         secondary: held(KeyCode::ShiftLeft) || held(KeyCode::ShiftRight),
         menu: false,
     };
+    // Suivi des mains simulé (`QUEST_SIM_HANDS=1`, phase 8) : plus de
+    // manettes (ni boutons ni sticks), des mains synthétiques aux mêmes poses —
+    // P / O = pincement / poing droits, L / M = pincement / poing gauches.
+    if std::env::var("QUEST_SIM_HANDS").is_ok_and(|v| v == "1") {
+        let hand = |i: usize, pinch: KeyCode, fist: KeyCode| {
+            let (pos, rot) = head.controller_pose(i);
+            let amount = |k: KeyCode| if held(k) { 1.0 } else { 0.0 };
+            motor3derust::xr::hands::synthetic_hand(
+                pos,
+                rot,
+                i == RIGHT,
+                amount(pinch),
+                amount(fist),
+            )
+        };
+        return XrInput {
+            hands: [
+                HandInput {
+                    menu: held(KeyCode::Tab),
+                    ..Default::default()
+                },
+                HandInput::default(),
+            ],
+            hand_joints: [
+                Some(hand(LEFT, KeyCode::KeyL, KeyCode::Semicolon)),
+                Some(hand(RIGHT, KeyCode::KeyP, KeyCode::KeyO)),
+            ],
+        };
+    }
     XrInput {
         hands: [left, right],
+        hand_joints: [None, None],
     }
 }
 
@@ -724,6 +757,10 @@ fn held_keys_from_env() -> HashSet<KeyCode> {
                 "SPACE" => KeyCode::Space,
                 "SHIFT" => KeyCode::ShiftLeft,
                 "TAB" => KeyCode::Tab,
+                "P" => KeyCode::KeyP,
+                "O" => KeyCode::KeyO,
+                "L" => KeyCode::KeyL,
+                "M" => KeyCode::Semicolon,
                 other => {
                     eprintln!("QUEST_SIM_HOLD : touche inconnue « {other} »");
                     return None;

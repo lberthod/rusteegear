@@ -3996,3 +3996,38 @@ fn lua_vr_table_exposes_the_headset_and_requests_haptics() {
     assert!((p.z - 0.5).abs() < 1e-6, "vr.head.yaw");
     assert_eq!(take_vr_haptics(), vec![(0, 0.7, 0.1)], "vr.haptic(\"left\", …)");
 }
+
+/// Roadmap VR, phase 8 : le corps et les mains synthétisés depuis le casque
+/// (tête + mains suivies, cf. `xr::hands` — webcam virtuelle face au joueur)
+/// passent la calibration de Mouvéo et lancent le jeu, comme un patient filmé
+/// par la webcam de la page web.
+#[test]
+fn reeducation_calibrates_and_plays_with_a_vr_synthesized_body() {
+    use crate::xr::hands::{VirtualWebcam, WRIST, body_flat, hands_flat, synthetic_hand};
+    let head = Vec3::new(0.0, 1.65, 0.0);
+    let cam = VirtualWebcam::facing(head, Vec3::NEG_Z);
+    // Mains le long du corps, légèrement en avant, doigts vers l'avant.
+    let rot = glam::Quat::IDENTITY;
+    let lh = synthetic_hand(Vec3::new(-0.3, 1.0, -0.2), rot, false, 0.0, 0.0);
+    let rh = synthetic_hand(Vec3::new(0.3, 1.0, -0.2), rot, true, 0.0, 0.0);
+    let pose = body_flat(&cam, head, [Some(lh[WRIST]), Some(rh[WRIST])]);
+    let hands = hands_flat(&cam, [Some(&lh), Some(&rh)]);
+    let mut app = AppState::new();
+    app.load_reeducation_demo();
+    app.playing = true;
+    reeduc_tick(&mut app);
+    app.set_pose(&pose);
+    reeduc_tick(&mut app);
+    app.push_hud_event("demarrer");
+    for _ in 0..400 {
+        app.set_pose(&pose);
+        app.set_hands(&hands);
+        reeduc_tick(&mut app);
+    }
+    assert_eq!(
+        reeduc_var(&app, "rd_stage"),
+        2.0,
+        "séance en jeu après calibration — consigne : {:?}",
+        app.hud_texts.get("consigne")
+    );
+}

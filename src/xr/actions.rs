@@ -23,12 +23,19 @@ pub struct TouchActions {
     haptic: xr::Action<xr::Haptic>,
     grip_spaces: [xr::Space; 2],
     aim_spaces: [xr::Space; 2],
+    /// Suivi des mains (`XR_EXT_hand_tracking`, phase 8) si le runtime le
+    /// propose — Quest : actif dès que le joueur pose les manettes.
+    hand_trackers: Option<[xr::HandTracker; 2]>,
 }
 
 impl TouchActions {
     /// Crée les actions, suggère les correspondances et les attache à la
     /// session (à faire une fois, avant la première image).
-    pub fn new(instance: &xr::Instance, session: &xr::Session<xr::Vulkan>) -> xr::Result<Self> {
+    pub fn new(
+        instance: &xr::Instance,
+        session: &xr::Session<xr::Vulkan>,
+        hand_tracking: bool,
+    ) -> xr::Result<Self> {
         let path = |p: &str| instance.string_to_path(p);
         let hands = [path("/user/hand/left")?, path("/user/hand/right")?];
         let set = instance.create_action_set("gameplay", "Jeu", 0)?;
@@ -106,6 +113,20 @@ impl TouchActions {
         };
         let grip_spaces = [space(&grip, hands[LEFT])?, space(&grip, hands[RIGHT])?];
         let aim_spaces = [space(&aim, hands[LEFT])?, space(&aim, hands[RIGHT])?];
+        let hand_trackers = if hand_tracking {
+            match (
+                session.create_hand_tracker(xr::Hand::LEFT),
+                session.create_hand_tracker(xr::Hand::RIGHT),
+            ) {
+                (Ok(l), Ok(r)) => Some([l, r]),
+                (Err(e), _) | (_, Err(e)) => {
+                    log::warn!("VR : suivi des mains indisponible ({e})");
+                    None
+                }
+            }
+        } else {
+            None
+        };
         Ok(Self {
             set,
             hands,
@@ -119,6 +140,7 @@ impl TouchActions {
             haptic,
             grip_spaces,
             aim_spaces,
+            hand_trackers,
         })
     }
 
@@ -155,6 +177,9 @@ impl TouchActions {
                 secondary: b(&self.secondary),
                 menu: b(&self.menu),
             };
+            if let Some(trackers) = &self.hand_trackers {
+                input.hand_joints[i] = locate_joints(stage, &trackers[i], time);
+            }
         }
         input
     }
@@ -172,6 +197,27 @@ impl TouchActions {
             }
         }
     }
+}
+
+/// Articulations d'une main suivie dans `stage` — `None` si la main n'est pas
+/// suivie (manette en main, hors du champ des caméras) ou si le poignet n'est
+/// pas localisé.
+fn locate_joints(
+    stage: &xr::Space,
+    tracker: &xr::HandTracker,
+    time: xr::Time,
+) -> Option<super::hands::Joints> {
+    let joints = stage.locate_hand_joints(tracker, time).ok()??;
+    let valid = xr::SpaceLocationFlags::POSITION_VALID;
+    if !joints[super::hands::WRIST].location_flags.contains(valid) {
+        return None;
+    }
+    let mut out = [Vec3::ZERO; super::hands::OPENXR_JOINTS];
+    for (dst, j) in out.iter_mut().zip(joints.iter()) {
+        let p = j.pose.position;
+        *dst = Vec3::new(p.x, p.y, p.z);
+    }
+    Some(out)
 }
 
 /// Pose d'un espace d'action dans `stage`, si le runtime la connaît.

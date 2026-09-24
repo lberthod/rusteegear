@@ -527,3 +527,15 @@ point d'apparition du joueur (0, 0, 0) coïncide avec le **feu communal** —
 invisible en 3ᵉ personne sur desktop, mais en VR 1re personne on démarre dans
 le feu. À corriger dans la scène (point d'apparition décalé) si elle doit être
 jouée en VR.
+
+## 17. Phase 8 — suivi des mains, rééducation Mouvéo en VR (24 septembre 2026)
+
+| Élément | Fichier | Vérifié |
+|---|---|---|
+| **Webcam virtuelle** face au joueur (2 m, champ 70°, image miroir comme une webcam) ; 26 articulations OpenXR → 21 repères MediaPipe (`hand`) ; **corps synthétisé** (`pose`) depuis la tête et les poignets ; main synthétique ; distance de pincement ; rayon de pointage d'une main | `src/xr/hands.rs` | 4 tests (miroir, correspondance, main ouverte / poing / pincement reconnus après projection, décodage `HandFrame`/`PoseFrame`) |
+| **Mouvéo accepte le corps VR** : calibration réussie et séance lancée, scripts inchangés | `app::simulation_tests::reeducation_calibrates_and_plays_with_a_vr_synthesized_body` | test d'intégration |
+| APK : `XR_EXT_hand_tracking` activé si disponible, un traqueur par main, articulations lues dans l'espace de la pièce | `src/xr/actions.rs`, `src/xr/hello.rs` | compile — **à tester au casque** |
+| Session VR : `pose`/`hand` publiés à chaque image (poignets = mains suivies, sinon manettes), squelette des mains dessiné, **pincement = clic** du menu, **pincement gauche tenu 0,8 s = menu** (pas de bouton menu sans manettes) | `src/xr/content.rs` | captures |
+| Scène « reeduc » (`VR_SCENE=reeduc`, `--scene reeduc`) : placée **à la caméra de la démo** (face au mannequin), bouton « Démarrer la séance » dans le menu, consigne au poignet | `xr::content`, `xr::rig::Rig::from_camera` | captures |
+| Mains simulées au simulateur (`QUEST_SIM_HANDS=1`, P/O/L/M) | `src/bin/quest_sim.rs` | captures |
+| Doc Mouvéo | `docs/REEDUCATION.md` | — |

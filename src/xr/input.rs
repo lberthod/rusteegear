@@ -53,10 +53,12 @@ pub struct HandInput {
 pub const LEFT: usize = 0;
 pub const RIGHT: usize = 1;
 
-/// Les deux manettes (`hands[LEFT]`, `hands[RIGHT]`).
+/// Les deux manettes (`hands[LEFT]`, `hands[RIGHT]`) et, en suivi des mains
+/// (phase 8), les 26 articulations de chaque main dans la pièce.
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub struct XrInput {
     pub hands: [HandInput; 2],
+    pub hand_joints: [Option<super::hands::Joints>; 2],
 }
 
 /// Zone morte radiale, rééchelonnée pour repartir de 0 au bord de la zone.

@@ -70,6 +70,18 @@ impl Rig {
         }
     }
 
+    /// Rig « à la place de la caméra de jeu » : la tête (debout, `eye_height`
+    /// au-dessus du sol de la pièce) se trouve à l'œil de la caméra et regarde
+    /// sa cible — pour les scènes sans personnage à incarner, cadrées comme un
+    /// écran (rééducation Mouvéo : on se tient face au miroir, en relief).
+    pub fn from_camera(app: &crate::app::AppState, eye_height: f32) -> Self {
+        let eye = app.camera.eye();
+        Self {
+            origin: Vec3::new(eye.x, eye.y - eye_height, eye.z),
+            yaw: Self::yaw_facing(app.camera.target - eye),
+        }
+    }
+
     /// Pose d'un œil de la pièce vers le monde.
     pub fn to_world(&self, eye: EyeView) -> EyeView {
         let r = Quat::from_rotation_y(self.yaw);

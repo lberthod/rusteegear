@@ -12,6 +12,7 @@
 //!   feature `vr`, produit par `packaging/build_quest.sh`).
 
 pub mod content;
+pub mod hands;
 pub mod input;
 pub mod locomotion;
 pub mod math;

@@ -77,6 +77,8 @@ fn run_inner(app: &AndroidApp) -> Result<(), String> {
     enabled.khr_android_create_instance = true;
     // Fréquence d'affichage (phase 2) : demandée si le runtime la propose.
     enabled.fb_display_refresh_rate = available.fb_display_refresh_rate;
+    // Suivi des mains (phase 8, rééducation Mouvéo) si le runtime le propose.
+    enabled.ext_hand_tracking = available.ext_hand_tracking;
     let instance = entry
         .create_instance(
             &xr::ApplicationInfo {
@@ -179,7 +181,7 @@ fn run_inner(app: &AndroidApp) -> Result<(), String> {
     let choice = SceneChoice::parse(option_env!("RUSTEEGEAR_VR_SCENE").unwrap_or("riviere"));
     log::info!("VR : scène {choice:?}");
     // Manettes Touch (phase 3) : actions OpenXR, lues à chaque image.
-    let actions = super::actions::TouchActions::new(&instance, &session)
+    let actions = super::actions::TouchActions::new(&instance, &session, enabled.ext_hand_tracking)
         .map_err(err("actions des manettes"))?;
     let mut content = XrContent::new(
         choice,

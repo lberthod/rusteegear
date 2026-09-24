@@ -277,3 +277,26 @@ arrêt confirmés. Le mode caméra reste à essayer avec un vrai patient.
 - Le suivi caméra n'a pas été essayé sur un vrai patient dans cette session :
   la page a été vérifiée sans caméra (mode démo) et le mode caméra par des poses
   synthétiques dans les tests.
+
+
+## En réalité virtuelle (Meta Quest, suivi des mains)
+
+Depuis le 24 septembre 2026, la démo tourne aussi **dans un casque VR**, sans
+webcam : le casque suit la tête et les mains (`XR_EXT_hand_tracking`), et
+`src/xr/hands.rs` produit exactement ce que la page web envoie — `pose`
+(corps) et `hand` (21 repères par main) — vus par une **webcam virtuelle**
+posée à 2 m face au patient (même convention miroir que `world_to_pose`).
+Le corps (épaules, coudes, hanches, jambes) est synthétisé depuis la tête et
+les poignets. **Les scripts de la séance ne changent pas** ; le test
+`reeducation_calibrates_and_plays_with_a_vr_synthesized_body` vérifie que la
+calibration passe et que le jeu démarre.
+
+- Essayer sans casque : `QUEST_SIM_HANDS=1 cargo run --release --bin quest_sim -- --scene reeduc`
+  (P / O : pincement / poing droits ; L / M : gauches ; Tab ou pincement
+  gauche tenu 0,8 s : menu, dont **« Démarrer la séance »**).
+- APK : `VR_SCENE=reeduc INSTALL=1 ./packaging/build_quest.sh`.
+- Dans le casque, on se tient à la place de la caméra de la démo, face au
+  mannequin ; la consigne de la séance s'affiche au poignet gauche.
+- Limites : le suivi réel des mains n'a pas encore été essayé sur un casque ;
+  le bas du corps est estimé (pas mesuré) — les exercices des jambes ne sont
+  pas significatifs en VR.

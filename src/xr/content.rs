@@ -26,6 +26,8 @@ pub enum SceneChoice {
     /// La scène du projet embarquée par le panneau Export
     /// (`assets/player_scene.json`, cf. `Scene::embedded_player`).
     Embedded,
+    /// La démo de rééducation Mouvéo (phase 8 : mains suivies en VR).
+    Reeducation,
 }
 
 impl SceneChoice {
@@ -36,6 +38,8 @@ impl SceneChoice {
             Self::Cubes
         } else if name.eq_ignore_ascii_case("embedded") {
             Self::Embedded
+        } else if name.eq_ignore_ascii_case("reeduc") {
+            Self::Reeducation
         } else {
             Self::Riviere
         }
@@ -67,6 +71,8 @@ enum MenuAction {
     CycleSnap,
     ToggleVignette,
     Restart,
+    /// Rééducation : lance la séance (bouton « Démarrer » de la page web).
+    StartSession,
     Quit,
 }
 
@@ -105,6 +111,12 @@ pub struct GameView {
     menu: Option<MenuState>,
     /// Bouton menu tenu à l'image précédente (ouverture sur front).
     menu_was: bool,
+    /// Vue spectateur **à la place de la caméra de jeu** (scènes sans
+    /// personnage à incarner : rééducation) plutôt que derrière le personnage.
+    camera_rig: bool,
+    /// Début du pincement gauche en cours (mode mains : un pincement tenu
+    /// `MENU_PINCH_SECONDS` ouvre/ferme le menu, faute de bouton menu).
+    left_pinch_since: Option<crate::time_compat::Instant>,
 }
 
 impl XrContent {
@@ -121,12 +133,12 @@ impl XrContent {
     ) -> Self {
         match choice {
             SceneChoice::Cubes => Self::Cubes(CubeScene::new(device, format, width, height)),
-            SceneChoice::Riviere | SceneChoice::Embedded => {
+            SceneChoice::Riviere | SceneChoice::Embedded | SceneChoice::Reeducation => {
                 let mut app = AppState::default();
-                if choice == SceneChoice::Embedded {
-                    app.load_embedded_player_scene();
-                } else {
-                    app.load_riviere_demo();
+                match choice {
+                    SceneChoice::Embedded => app.load_embedded_player_scene(),
+                    SceneChoice::Reeducation => app.load_reeducation_demo(),
+                    _ => app.load_riviere_demo(),
                 }
                 app.playing = true;
                 let renderer = Renderer::new_external(
@@ -143,7 +155,14 @@ impl XrContent {
                     rig: None,
                     last_sim_ms: 0.0,
                     last_render_ms: 0.0,
-                    comfort: Comfort::default(),
+                    comfort: Comfort {
+                        view: if choice == SceneChoice::Reeducation {
+                            ViewMode::Spectator
+                        } else {
+                            ViewMode::FirstPerson
+                        },
+                        ..Comfort::default()
+                    },
                     snap: SnapTurn::default(),
                     view_click_was: false,
                     prev_fx: (0.0, 0.0),
@@ -152,6 +171,8 @@ impl XrContent {
                     ui: VrUi::new(device, format),
                     menu: None,
                     menu_was: false,
+                    camera_rig: choice == SceneChoice::Reeducation,
+                    left_pinch_since: None,
                 }))
             }
         }
@@ -234,6 +255,28 @@ impl GameView {
             self.app.vr_camera_yaw = Some(yaw);
         }
 
+        // 3 bis. Rééducation (phase 8) : corps et mains vus par une webcam
+        //    virtuelle face au joueur → tables Lua `pose` et `hand`, comme la
+        //    page web de Mouvéo. Poignets : mains suivies, sinon manettes.
+        {
+            let look_stage = head_rot * Vec3::NEG_Z;
+            let cam = super::hands::VirtualWebcam::facing(head_stage, look_stage);
+            let wrists = [LEFT, RIGHT].map(|i| {
+                input.hand_joints[i]
+                    .map(|j| j[super::hands::WRIST])
+                    .or(input.hands[i].grip.map(|(p, _)| p))
+            });
+            self.app
+                .set_pose(&super::hands::body_flat(&cam, head_stage, wrists));
+            self.app.set_hands(&super::hands::hands_flat(
+                &cam,
+                [
+                    input.hand_joints[LEFT].as_ref(),
+                    input.hand_joints[RIGHT].as_ref(),
+                ],
+            ));
+        }
+
         // 4. Simulation — les scripts voient la tête et les manettes (table
         //    Lua `vr`, phase 6), l'audio s'écoute depuis la tête.
         if let Some(rig) = self.rig {
@@ -249,8 +292,12 @@ impl GameView {
         // 5. Rig : suit le personnage en première personne, fixe en spectateur.
         let feet = player_feet(&self.app);
         let comfort = self.comfort;
+        let camera_rig = self.camera_rig;
         let rig = self.rig.get_or_insert_with(|| {
             let rig = match comfort.view {
+                ViewMode::Spectator if camera_rig => {
+                    Rig::from_camera(&self.app, crate::xr::sim::STANDING_EYE_HEIGHT)
+                }
                 ViewMode::Spectator => Rig::spectator(&self.app),
                 ViewMode::FirstPerson => Rig {
                     origin: Vec3::ZERO,
@@ -298,9 +345,12 @@ impl GameView {
             self.app.scene.objects[i].visible = false;
         }
 
-        // 8. Repères des manettes (P3) : boîte de la poignée et direction.
-        for hand in &input.hands {
-            if let Some((pos, rot)) = hand.grip {
+        // 8. Repères des manettes (P3) : boîte de la poignée et direction —
+        //    ou squelette de la main quand elle est suivie (P8).
+        for (hand, joints) in input.hands.iter().zip(&input.hand_joints) {
+            if let Some(joints) = joints {
+                push_hand_lines(&mut self.app.debug_lines, &rig, joints);
+            } else if let Some((pos, rot)) = hand.grip {
                 let (p, r) = to_world(&rig, pos, rot);
                 push_controller_lines(&mut self.app.debug_lines, p, r);
             }
@@ -310,7 +360,7 @@ impl GameView {
         let eyes_world = eyes.map(|e| rig.to_world(e));
         let head_world = (eyes_world[0].position + eyes_world[1].position) * 0.5;
         let look = rig.look_world(head_rot);
-        let menu_btn = input.hands[LEFT].menu;
+        let menu_btn = input.hands[LEFT].menu || self.long_left_pinch(input);
         if menu_btn && !self.menu_was {
             self.toggle_menu(head_world, look);
         }
@@ -319,8 +369,9 @@ impl GameView {
         if let Some(menu) = self.menu {
             let pointer = self.menu_pointer(&rig, input, menu.pose);
             let comfort = self.comfort;
+            let rehab = self.camera_rig;
             self.ui.paint(device, queue, MENU, pointer, |ui| {
-                menu_ui(ui, comfort, &mut actions);
+                menu_ui(ui, comfort, rehab, &mut actions);
             });
         }
         let wrist = input.hands[LEFT].grip.map(|(pos, rot)| {
@@ -330,9 +381,12 @@ impl GameView {
         if wrist.is_some() {
             let health = self.app.hud_health;
             let kills = self.app.displayed_kill_count();
+            // Rééducation : la consigne de la séance (écrite par les scripts
+            // Mouvéo pour la page web) plutôt que le score.
+            let hint = self.app.hud_texts.get("consigne").cloned();
             self.ui
-                .paint(device, queue, WRIST, Pointer::default(), |ctx| {
-                    wrist_ui(ctx, health, kills);
+                .paint(device, queue, WRIST, Pointer::default(), |ui| {
+                    wrist_ui(ui, health, kills, hint.as_deref());
                 });
         }
 
@@ -377,6 +431,10 @@ impl GameView {
                     self.app.restart_game();
                     self.rig = None;
                 }
+                MenuAction::StartSession => {
+                    self.close_menu();
+                    self.app.push_hud_event("demarrer");
+                }
                 MenuAction::Quit => quit = true,
             }
         }
@@ -393,6 +451,21 @@ impl GameView {
             }
         }
         FrameOut { haptics, quit }
+    }
+
+    /// Mode mains (pas de bouton menu) : pincement gauche tenu
+    /// `MENU_PINCH_SECONDS` → vrai une fois (front), jusqu'au relâchement.
+    fn long_left_pinch(&mut self, input: &XrInput) -> bool {
+        let pinching = input.hand_joints[LEFT]
+            .is_some_and(|j| super::hands::pinch_distance(&j) < super::hands::PINCH_CLICK);
+        if !pinching {
+            self.left_pinch_since = None;
+            return false;
+        }
+        let since = *self
+            .left_pinch_since
+            .get_or_insert_with(crate::time_compat::Instant::now);
+        since.elapsed().as_secs_f32() >= MENU_PINCH_SECONDS
     }
 
     /// Ouvre le menu devant le joueur (jeu en pause) ou le referme.
@@ -418,11 +491,22 @@ impl GameView {
     /// de texture, gâchette ; dessine le rayon (lignes de debug).
     fn menu_pointer(&mut self, rig: &Rig, input: &XrInput, pose: PanelPose) -> Pointer {
         let right = &input.hands[RIGHT];
-        let Some((pos, rot)) = right.aim else {
+        // Manette : pose de visée, gâchette. Main suivie (P8) : rayon depuis la
+        // base de l'index, pincement = clic.
+        let (origin, dir, pressed) = if let Some((pos, rot)) = right.aim {
+            let (origin, rot) = to_world(rig, pos, rot);
+            (origin, rot * Vec3::NEG_Z, right.trigger >= PRESS_THRESHOLD)
+        } else if let Some(joints) = &input.hand_joints[RIGHT] {
+            let (o, d) = super::hands::aim_ray(joints);
+            let r = Quat::from_rotation_y(rig.yaw);
+            (
+                rig.origin + r * o,
+                r * d,
+                super::hands::pinch_distance(joints) < super::hands::PINCH_CLICK,
+            )
+        } else {
             return Pointer::default();
         };
-        let (origin, rot) = to_world(rig, pos, rot);
-        let dir = rot * Vec3::NEG_Z;
         let hit = pose.hit(origin, dir);
         let end = hit.map_or(origin + dir * 3.0, |(_, t)| origin + dir * t);
         let color = if hit.is_some() {
@@ -433,10 +517,13 @@ impl GameView {
         self.app.debug_lines.push((origin, end, color));
         Pointer {
             pos_px: hit.map(|(uv, _)| uv * self.ui.panel_px(MENU)),
-            pressed: right.trigger >= PRESS_THRESHOLD,
+            pressed,
         }
     }
 }
+
+/// Durée d'un pincement gauche qui ouvre le menu en mode mains.
+const MENU_PINCH_SECONDS: f32 = 0.8;
 
 /// Couleurs de l'écran d'accueil (page web et lobby natif, #12141a / #e8763b).
 const BG: egui::Color32 = egui::Color32::from_rgb(18, 20, 26);
@@ -444,7 +531,7 @@ const ACCENT: egui::Color32 = egui::Color32::from_rgb(232, 118, 59);
 const TEXT: egui::Color32 = egui::Color32::from_rgb(230, 232, 227);
 
 /// Menu de pause VR : gros boutons (visés au rayon, cliqués à la gâchette).
-fn menu_ui(root: &mut egui::Ui, comfort: Comfort, actions: &mut Vec<MenuAction>) {
+fn menu_ui(root: &mut egui::Ui, comfort: Comfort, rehab: bool, actions: &mut Vec<MenuAction>) {
     let frame = egui::Frame::NONE
         .fill(BG)
         .corner_radius(24)
@@ -467,6 +554,9 @@ fn menu_ui(root: &mut egui::Ui, comfort: Comfort, actions: &mut Vec<MenuAction>)
                         actions.push(action);
                     }
                 };
+                if rehab {
+                    button("Démarrer la séance".into(), MenuAction::StartSession);
+                }
                 button("Reprendre".into(), MenuAction::Resume);
                 button("Recentrer la vue".into(), MenuAction::Recenter);
                 let view = match comfort.view {
@@ -494,7 +584,7 @@ fn menu_ui(root: &mut egui::Ui, comfort: Comfort, actions: &mut Vec<MenuAction>)
 }
 
 /// Affichage au poignet gauche : vie et score, lisible d'un coup d'œil.
-fn wrist_ui(root: &mut egui::Ui, health: Option<f32>, kills: u32) {
+fn wrist_ui(root: &mut egui::Ui, health: Option<f32>, kills: u32, hint: Option<&str>) {
     let frame = egui::Frame::NONE
         .fill(BG)
         .corner_radius(16)
@@ -510,7 +600,14 @@ fn wrist_ui(root: &mut egui::Ui, health: Option<f32>, kills: u32) {
                 );
                 ui.add(egui::ProgressBar::new(h.clamp(0.0, 1.0)).fill(ACCENT));
             }
-            ui.label(egui::RichText::new(format!("Ennemis vaincus : {kills}")).size(18.0));
+            match hint {
+                Some(hint) if !hint.is_empty() => {
+                    ui.label(egui::RichText::new(hint).size(18.0));
+                }
+                _ => {
+                    ui.label(egui::RichText::new(format!("Ennemis vaincus : {kills}")).size(18.0));
+                }
+            }
         });
 }
 
@@ -552,6 +649,32 @@ fn player_feet(app: &AppState) -> Option<Vec3> {
 fn to_world(rig: &Rig, pos: Vec3, rot: Quat) -> (Vec3, Quat) {
     let r = Quat::from_rotation_y(rig.yaw);
     (rig.origin + r * pos, r * rot)
+}
+
+/// Squelette d'une main suivie (phase 8) : poignet → chaque doigt, en lignes.
+fn push_hand_lines(
+    lines: &mut Vec<(Vec3, Vec3, [f32; 3])>,
+    rig: &Rig,
+    joints: &super::hands::Joints,
+) {
+    const HAND: [f32; 3] = [0.95, 0.85, 0.7];
+    let r = Quat::from_rotation_y(rig.yaw);
+    let w = |i: usize| rig.origin + r * joints[i];
+    // Pouce : 1 → 2..5 ; doigts : 1 → métacarpe → … → bout.
+    for chain in [
+        [1usize, 2, 3, 4, 5],
+        [1, 6, 7, 8, 9],
+        [1, 11, 12, 13, 14],
+        [1, 16, 17, 18, 19],
+        [1, 21, 22, 23, 24],
+    ] {
+        for pair in chain.windows(2) {
+            lines.push((w(pair[0]), w(pair[1]), HAND));
+        }
+    }
+    for (a, b) in [(9usize, 10usize), (14, 15), (19, 20), (24, 25)] {
+        lines.push((w(a), w(b), HAND));
+    }
 }
 
 /// Boîte de 8 cm (la manette) et trait de 12 cm vers l'avant (−Z) — dessinés en
