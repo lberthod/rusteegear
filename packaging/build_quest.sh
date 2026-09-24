@@ -1,0 +1,137 @@
+#!/usr/bin/env bash
+# Construit l'APK VR Meta Quest (feature `vr`, session OpenXR — roadmap
+# docs/roadmapExportVRQuest24septembre.md). APK distinct de build_apk.sh : autre
+# identifiant (com.berthod.rusteegear.vr), s'installe à côté de l'APK téléphone.
+#
+#   ./packaging/build_quest.sh              # APK debug (signé avec la clé debug)
+#   INSTALL=1 ./packaging/build_quest.sh    # + installe et lance sur le casque (adb)
+#   RUSTEEGEAR_KEYSTORE_PASS=… ./packaging/build_quest.sh --release
+#
+# Prérequis : NDK 28.2 (sdkmanager), cargo-apk, casque en mode développeur.
+set -euo pipefail
+cd "$(dirname "$0")/.."
+
+export ANDROID_HOME="${ANDROID_HOME:-$HOME/Library/Android/sdk}"
+export ANDROID_SDK_ROOT="$ANDROID_HOME"
+export ANDROID_NDK_ROOT="${ANDROID_NDK_ROOT:-$ANDROID_HOME/ndk/28.2.13676358}"
+if [ -z "${JAVA_HOME:-}" ]; then
+    for jh in "/Applications/Android Studio.app/Contents/jbr/Contents/Home" \
+              "/opt/homebrew/opt/openjdk@17/libexec/openjdk.jdk/Contents/Home"; do
+        [ -x "$jh/bin/java" ] && export JAVA_HOME="$jh" && break
+    done
+fi
+[ -n "${JAVA_HOME:-}" ] || { echo "❌ JDK introuvable (JAVA_HOME)"; exit 1; }
+ADB="$ANDROID_HOME/platform-tools/adb"
+
+RELEASE=0
+[ "${1:-}" = "--release" ] && RELEASE=1
+
+# --- Loader OpenXR Khronos (libopenxr_loader.so arm64) ---------------------------
+# Le Quest n'embarque pas de loader global : chaque APK apporte le sien, qui
+# trouve ensuite le runtime Meta. Pris dans l'AAR officiel Khronos (Maven Central),
+# téléchargé une seule fois puis mis en cache (non versionné, cf. .gitignore).
+LOADER_VERSION="1.1.63"
+RUNTIME_LIBS="packaging/quest/runtime_libs"
+LOADER="$RUNTIME_LIBS/arm64-v8a/libopenxr_loader.so"
+if [ ! -f "$LOADER" ] || [ "$(cat "$RUNTIME_LIBS/VERSION" 2>/dev/null)" != "$LOADER_VERSION" ]; then
+    echo "▶ Loader OpenXR Khronos $LOADER_VERSION…"
+    TMP="$(mktemp -d)"
+    curl -fsSL -o "$TMP/loader.aar" \
+        "https://repo1.maven.org/maven2/org/khronos/openxr/openxr_loader_for_android/$LOADER_VERSION/openxr_loader_for_android-$LOADER_VERSION.aar"
+    mkdir -p "$RUNTIME_LIBS/arm64-v8a"
+    unzip -p "$TMP/loader.aar" "jni/arm64-v8a/libopenxr_loader.so" > "$LOADER"
+    echo "$LOADER_VERSION" > "$RUNTIME_LIBS/VERSION"
+    rm -rf "$TMP"
+fi
+
+# --- Manifeste Quest, injecté dans Cargo.toml le temps du build ------------------
+# Même mécanique que build_apk.sh (cargo-apk ne lit que Cargo.toml) : copie de
+# sauvegarde restaurée par le trap, quoi qu'il arrive.
+CARGO_BAK="$(mktemp)"
+cp Cargo.toml "$CARGO_BAK"
+restore_cargo() { cp "$CARGO_BAK" Cargo.toml; rm -f "$CARGO_BAK"; }
+trap restore_cargo EXIT
+
+BUNDLE_ID="${BUNDLE_ID:-com.berthod.rusteegear.vr}" \
+APP_NAME="${APP_NAME:-RusteeGear VR}" \
+RUNTIME_LIBS="$RUNTIME_LIBS" \
+KS_PASS="${RUSTEEGEAR_KEYSTORE_PASS:-}" \
+python3 - <<'EOF'
+import os, re
+p = "Cargo.toml"
+s = open(p).read()
+def sub(pattern, repl):
+    global s
+    s, n = re.subn(pattern, repl, s, count=1, flags=re.M)
+    assert n == 1, pattern
+sub(r'^package = "[^"]*"', f'package = "{os.environ["BUNDLE_ID"]}"')
+sub(r'^label = "[^"]*"', f'label = "{os.environ["APP_NAME"]}"')
+# minSdk 29 (Android 10, plancher de Quest OS) ; targetSdk 32 : valeurs attendues
+# par Meta pour le Horizon Store — à re-vérifier au moment d'une soumission.
+sub(r'^min_sdk_version = \d+', 'min_sdk_version = 29')
+sub(r'^target_sdk_version = \d+', 'target_sdk_version = 32')
+sub(r'^(build_targets = .*)$', r'\1' + f'\nruntime_libs = "{os.environ["RUNTIME_LIBS"]}"')
+if os.environ["KS_PASS"]:
+    sub(r'^keystore_password = "[^"]*"', f'keystore_password = "{os.environ["KS_PASS"]}"')
+s += '''
+# --- Injecté par packaging/build_quest.sh (APK VR Meta Quest) ---
+[[package.metadata.android.uses_feature]]
+name = "android.hardware.vr.headtracking"
+required = true
+version = 1
+
+# Hand tracking (phase 8, Mouvéo/PhysioTech) : optionnel, l'app marche aussi aux manettes.
+[[package.metadata.android.uses_feature]]
+name = "oculus.software.handtracking"
+required = false
+
+[[package.metadata.android.uses_permission]]
+name = "com.oculus.permission.HAND_TRACKING"
+
+[package.metadata.android.application.activity]
+orientation = "landscape"
+launch_mode = "singleTask"
+config_changes = "density|keyboard|keyboardHidden|navigation|orientation|screenLayout|screenSize|uiMode"
+resizeable_activity = false
+
+# Catégorie VR : lance l'app en immersif (sans elle, elle s'ouvre en fenêtre 2D).
+[[package.metadata.android.application.activity.intent_filter]]
+actions = ["android.intent.action.MAIN"]
+categories = ["com.oculus.intent.category.VR", "android.intent.category.LAUNCHER"]
+
+[[package.metadata.android.application.meta_data]]
+name = "com.oculus.supportedDevices"
+value = "quest3|quest3s|quest2|questpro"
+
+[[package.metadata.android.application.meta_data]]
+name = "com.oculus.handtracking.version"
+value = "V2.0"
+'''
+open(p, "w").write(s)
+EOF
+
+PROFILE_ARGS=()
+if [ "$RELEASE" = 1 ]; then
+    : "${RUSTEEGEAR_KEYSTORE_PASS:?--release exige RUSTEEGEAR_KEYSTORE_PASS (cf. build_apk.sh)}"
+    [ -f packaging/release.keystore ] || { echo "❌ packaging/release.keystore absent — lancer build_apk.sh une fois pour le générer"; exit 1; }
+    PROFILE_ARGS=(--release)
+    APK="target/release/apk/motor3derust.apk"
+else
+    APK="target/debug/apk/motor3derust.apk"
+    # Build de test sans infos de débogage : ~500 Mo de `.so` sinon (constaté),
+    # interminable à pousser sur le casque en USB. Les journaux `log::` restent.
+    export CARGO_PROFILE_DEV_DEBUG=0 CARGO_PROFILE_DEV_STRIP=symbols
+fi
+
+echo "▶ cargo apk build ${PROFILE_ARGS[*]+"${PROFILE_ARGS[*]}"} --lib --features vr"
+cargo apk build ${PROFILE_ARGS[@]+"${PROFILE_ARGS[@]}"} --lib --features vr
+echo "✅ APK Quest : $APK"
+
+if [ "${INSTALL:-0}" = 1 ]; then
+    BUNDLE="${BUNDLE_ID:-com.berthod.rusteegear.vr}"
+    "$ADB" install -r "$APK"
+    "$ADB" shell am start -n "$BUNDLE/android.app.NativeActivity"
+    # android_logger étiquette chaque ligne avec le chemin du module Rust
+    # (`motor3derust::xr::hello`…) : filtrer par motif, pas par tag exact.
+    echo "▶ Journaux : $ADB logcat | grep -E 'motor3derust|OpenXR|VrApi|panicked'"
+fi

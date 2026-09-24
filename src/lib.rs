@@ -34,6 +34,7 @@ pub mod racing;
 pub mod runtime;
 pub mod scene;
 pub mod time_compat;
+pub mod xr;
 
 use app::input::InputEvent;
 use app::{AppState, GizmoMode};
@@ -2442,12 +2443,23 @@ fn scene_param(search: &str) -> Option<String> {
 /// Point d'entrée Android (appelé par android-activity via la NativeActivity).
 #[cfg(target_os = "android")]
 #[unsafe(no_mangle)]
+// Feature `vr` : `xr::hello::run` prend la main et revient — la suite (winit) est
+// alors du code mort voulu, compilé pour que l'APK VR reste un sur-ensemble.
+#[cfg_attr(feature = "vr", allow(unreachable_code, unused_variables))]
 pub extern "C" fn android_main(android_app: winit::platform::android::activity::AndroidApp) {
     use winit::platform::android::EventLoopBuilderExtAndroid;
 
     android_logger::init_once(
         android_logger::Config::default().with_max_level(log::LevelFilter::Info),
     );
+
+    // APK VR Meta Quest (feature `vr`, `packaging/build_quest.sh`) : session OpenXR
+    // à la place de la fenêtre winit — phase 0 de la roadmap VR, cf. `xr::hello`.
+    #[cfg(feature = "vr")]
+    {
+        crate::xr::hello::run(android_app);
+        return;
+    }
 
     // Sauvegarde de partie : seule façon d'obtenir un dossier écrivable
     // garanti sur Android (`$HOME` n'existe pas) — posé une fois, avant tout accès à
