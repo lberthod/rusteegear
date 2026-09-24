@@ -87,6 +87,16 @@ fn gain_to_db(gain: f32) -> f32 {
     }
 }
 
+/// Gain et panoramique d'une source spatialisée pour un écouteur (position,
+/// regard) : atténuation linéaire jusqu'au silence à 20 m (même loi qu'avant,
+/// cf. `AppState::advance_play`), panoramique selon `camera_panning`.
+pub fn spatial_mix(listener: (Vec3, Vec3), source: Vec3, base_gain: f32) -> (f32, f32) {
+    let (pos, forward) = listener;
+    let dist = (source - pos).length();
+    let gain = (1.0 - dist / 20.0).clamp(0.0, 1.0) * base_gain;
+    (gain, camera_panning(pos, pos + forward, source))
+}
+
 /// Panning stéréo (-1 = gauche, 0 = centre, 1 = droite) d'une source vue
 /// depuis la caméra (Sprint 104) : projette le vecteur caméra→source sur
 /// l'axe « droite » de la caméra (dérivé de son couple œil/cible, pas du
@@ -181,6 +191,11 @@ pub struct Audio {
     /// en mémoire — évite le pic mémoire d'une musique longue entièrement
     /// décodée à l'avance. Absent sur wasm32, cf. `StreamingHandles`.
     streaming_playing: StreamingHandles,
+    /// Sons **spatialisés** en flux (`play_spatial_streaming`) : indice dans
+    /// `streaming_playing`, position de la source, gain de base — re-mixés à
+    /// chaque image par `update_listener` (l'écouteur bouge : caméra de jeu, ou
+    /// tête du joueur en VR). Avant, la spatialisation était figée au lancement.
+    spatial: Vec<(usize, Vec3, f32)>,
     /// Sons déjà décodés (réutilisés sans re-décoder).
     cache: HashMap<String, StaticSoundData>,
     /// Chemins demandés mais pas encore décodés (avec leur gain), à jouer dès l'arrivée.
@@ -259,6 +274,7 @@ impl Audio {
             playing: Vec::new(),
             loops: HashMap::new(),
             streaming_playing: StreamingHandles::default(),
+            spatial: Vec::new(),
             cache: HashMap::new(),
             pending: HashMap::new(),
             tx,
@@ -328,6 +344,48 @@ impl Audio {
     /// porte un état de lecture, pas `Clone`) — sans conséquence : une
     /// musique/ambiance de scène (`AudioSource`) se déclenche une fois à
     /// l'entrée en Play, jamais rejouée depuis un cache.
+    /// Joue un son de scène **spatialisé** en flux (`AudioSource::spatial`) :
+    /// gain selon la distance et panoramique selon l'écouteur, tenus à jour à
+    /// chaque image par `update_listener`. `listener` = (position, regard).
+    pub fn play_spatial_streaming(
+        &mut self,
+        path: &str,
+        base_gain: f32,
+        source: Vec3,
+        listener: (Vec3, Vec3),
+    ) {
+        let (gain, panning) = spatial_mix(listener, source, base_gain);
+        #[cfg(not(target_arch = "wasm32"))]
+        let before = self.streaming_playing.len();
+        self.play_music_streaming_gain(path, gain, panning);
+        #[cfg(not(target_arch = "wasm32"))]
+        if self.streaming_playing.len() > before {
+            self.spatial
+                .push((self.streaming_playing.len() - 1, source, base_gain));
+        }
+    }
+
+    /// Re-spatialise les sons de scène depuis l'écouteur de l'image : caméra
+    /// de jeu, ou tête du joueur en VR (roadmap VR, phase 6). `listener` =
+    /// (position, direction du regard). Transition courte : pas de clic.
+    pub fn update_listener(&mut self, listener: (Vec3, Vec3)) {
+        #[cfg(not(target_arch = "wasm32"))]
+        for &(i, source, base) in &self.spatial {
+            let Some(handle) = self.streaming_playing.get_mut(i) else {
+                continue;
+            };
+            let (gain, panning) = spatial_mix(listener, source, base);
+            let tween = Tween {
+                duration: Duration::from_millis(60),
+                ..Default::default()
+            };
+            handle.set_volume(Decibels(gain_to_db(gain)), tween);
+            handle.set_panning(Panning(panning.clamp(-1.0, 1.0)), tween);
+        }
+        #[cfg(target_arch = "wasm32")]
+        let _ = listener;
+    }
+
     #[cfg(not(target_arch = "wasm32"))]
     pub fn play_music_streaming_gain(&mut self, path: &str, gain: f32, panning: f32) {
         let Some(track) = self.music_track.as_mut() else {
@@ -647,6 +705,7 @@ impl Audio {
             }
             self.streaming_playing.clear();
         }
+        self.spatial.clear();
         self.pending.clear();
     }
 }
@@ -755,6 +814,17 @@ mod tests {
         let eye = Vec3::new(0.0, 0.0, 5.0);
         let target = Vec3::ZERO;
         let right = camera_panning(eye, target, eye + Vec3::new(1.0, 0.0, 0.0));
+        // VR (phase 6) : tourner la tête de 90° vers la droite met à gauche une
+        // source qui était devant — la tête, pas la caméra, fait l'écouteur.
+        let source = eye + Vec3::new(0.0, 0.0, -5.0);
+        let (_, facing) = spatial_mix((eye, Vec3::NEG_Z), source, 1.0);
+        let (gain, turned) = spatial_mix((eye, Vec3::X), source, 1.0);
+        assert!(facing.abs() < 1e-5);
+        assert!(
+            turned < -0.9,
+            "source à gauche après un quart de tour à droite : {turned}"
+        );
+        assert!((gain - 0.75).abs() < 1e-5, "5 m sur 20 : gain 0,75");
         let left = camera_panning(eye, target, eye + Vec3::new(-1.0, 0.0, 0.0));
         assert!(
             right > 0.9,

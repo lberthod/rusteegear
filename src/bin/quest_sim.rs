@@ -344,16 +344,17 @@ impl Gpu {
     }
 
     /// Rend les deux yeux puis les recopie côte à côte, proportions conservées.
-    /// Renvoie `true` si le menu VR a demandé à quitter.
-    fn render(&mut self, head: &SimHead, input: &XrInput) -> bool {
+    /// `None` si rien n'a été rendu (fenêtre masquée, surface à refaire),
+    /// sinon `Some(quitter)` — `true` si le menu VR a demandé à quitter.
+    fn render(&mut self, head: &SimHead, input: &XrInput) -> Option<bool> {
         let frame = match self.surface.get_current_texture() {
             wgpu::CurrentSurfaceTexture::Success(t)
             | wgpu::CurrentSurfaceTexture::Suboptimal(t) => t,
             wgpu::CurrentSurfaceTexture::Outdated | wgpu::CurrentSurfaceTexture::Lost => {
                 self.surface.configure(&self.device, &self.config);
-                return false;
+                return None;
             }
-            _ => return false,
+            _ => return None,
         };
         let p = self.eyes.profile;
         let out = self.content.render(
@@ -407,7 +408,7 @@ impl Gpu {
         }
         self.queue.submit([encoder.finish()]);
         frame.present();
-        out.quit
+        Some(out.quit)
     }
 }
 
@@ -592,9 +593,18 @@ impl ApplicationHandler for Sim {
                 let Some(gpu) = self.gpu.as_mut() else {
                     return;
                 };
-                if gpu.render(&self.head, &input) {
-                    event_loop.exit();
-                    return;
+                match gpu.render(&self.head, &input) {
+                    Some(true) => {
+                        event_loop.exit();
+                        return;
+                    }
+                    Some(false) => {}
+                    None => {
+                        // Fenêtre masquée : rien de rendu, donc rien à mesurer —
+                        // et une courte pause plutôt que de tourner à vide.
+                        std::thread::sleep(std::time::Duration::from_millis(16));
+                        return;
+                    }
                 }
                 // Pas d'attente du GPU : comme dans un casque, CPU (image N+1) et
                 // GPU (image N) travaillent en parallèle, `get_current_texture`

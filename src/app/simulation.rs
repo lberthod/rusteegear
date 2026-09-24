@@ -162,6 +162,14 @@ pub(super) fn camera_relative_axes(mx: f32, my: f32, yaw: f32) -> (f32, f32) {
 /// seul `Renderer::render` (via `OrbitCamera::view_proj_shaken`) l'applique,
 /// la caméra de simulation (suivi joueur, IA, réseau) reste intacte.
 impl AppState {
+    /// Écouteur audio de l'image (position, regard) : la tête du joueur en VR
+    /// (`vr_listener`), sinon la **cible** de la caméra de jeu (le joueur, d'où
+    /// se mesure l'atténuation depuis toujours) regardant dans l'axe caméra.
+    pub(crate) fn audio_listener(&self) -> (Vec3, Vec3) {
+        self.vr_listener
+            .unwrap_or_else(|| (self.camera.target, self.camera.target - self.camera.eye()))
+    }
+
     pub(crate) fn camera_shake_offset(&self) -> Vec3 {
         // PHASE I Sprint 1 (accessibilité, §16.6) : `Settings::reduce_shake`,
         // copié dans `self.reduce_shake` (même patron que `music_volume`) —
@@ -1055,6 +1063,8 @@ impl AppState {
         self.poll_ai();
         self.poll_network();
         self.audio.update();
+        let listener = self.audio_listener();
+        self.audio.update_listener(listener);
 
         let now = Instant::now();
         let dt = (now - self.perf.last_frame).as_secs_f32();
@@ -1131,9 +1141,10 @@ impl AppState {
             // (`play_music_streaming_gain`, `StreamingSoundData`) plutôt que
             // décodés entièrement en mémoire — une musique/ambiance longue ne
             // provoque plus de pic mémoire au démarrage du mode Play.
-            let listener = self.camera.target;
-            let eye = self.camera.eye();
-            let clips: Vec<(String, f32, f32)> = self
+            // Spatialisés : re-mixés à chaque image depuis l'écouteur
+            // (`audio_listener`, `Audio::update_listener`) — plus figés ici.
+            let listener = self.audio_listener();
+            let clips: Vec<(String, f32, Option<Vec3>)> = self
                 .scene
                 .objects
                 .iter()
@@ -1142,26 +1153,17 @@ impl AppState {
                     if !a.autoplay || a.clip.is_empty() {
                         return None;
                     }
-                    let (gain, panning) = if a.spatial {
-                        let dist = (o.transform.position - listener).length();
-                        let gain = (1.0 - dist / 20.0).clamp(0.0, 1.0);
-                        let panning = crate::runtime::audio::camera_panning(
-                            eye,
-                            listener,
-                            o.transform.position,
-                        );
-                        (gain, panning)
-                    } else {
-                        (1.0, 0.0)
-                    };
                     // `a.gain` (Sprint 126) : normalisation de loudness calculée à
                     // l'import, composée avec l'atténuation spatiale plutôt que
                     // l'écraser — les deux sont des facteurs multiplicatifs indépendants.
-                    Some((a.clip.clone(), gain * a.gain, panning))
+                    Some((a.clip.clone(), a.gain, a.spatial.then_some(o.transform.position)))
                 })
                 .collect();
-            for (c, gain, panning) in clips {
-                self.audio.play_music_streaming_gain(&c, gain, panning);
+            for (c, gain, source) in clips {
+                match source {
+                    Some(pos) => self.audio.play_spatial_streaming(&c, gain, pos, listener),
+                    None => self.audio.play_music_streaming_gain(&c, gain, 0.0),
+                }
             }
             // Caméra de suivi : se cale d'emblée sur le joueur + adopte un bon angle de
             // jeu 3ᵉ personne (plongée douce + recul confortable) si aucune caméra de jeu
@@ -2265,6 +2267,7 @@ impl AppState {
         super::script_ctx::set_pose(&self.pose);
         self.hands.tick();
         super::script_ctx::set_hands(&self.hands);
+        super::script_ctx::set_vr(self.vr_script);
         // Calculé une fois : `self.scene.objects` est emprunté mutable par
         // l'itération ci-dessous, `is_online_client()` (méthode sur `&self` entier)
         // n'y serait pas appelable.
@@ -2412,6 +2415,7 @@ impl AppState {
                 super::script_ctx::set_pose_wanted(super::script_ctx::script_reads_pose(
                     &obj.script,
                 ));
+                super::script_ctx::set_vr_wanted(super::script_ctx::script_reads_vr(&obj.script));
                 if let Err(e) = scripting_web::run_script_web(
                     &mut self.scripting.lua_web,
                     &func,
@@ -2516,6 +2520,7 @@ impl AppState {
                 super::script_ctx::set_pose_wanted(super::script_ctx::script_reads_pose(
                     &obj.script,
                 ));
+                super::script_ctx::set_vr_wanted(super::script_ctx::script_reads_vr(&obj.script));
                 if let Err(e) = scripting::run_script(
                     &self.scripting.lua,
                     &func,

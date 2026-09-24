@@ -503,3 +503,12 @@ moteur cassera si elle change encore.
 | Pointage au **rayon de la manette droite** (rayon dessiné, curseur orange), gâchette = clic ; manettes relâchées pour le jeu tant que le menu est ouvert | `xr::ui::PanelPose::hit`, `VrUi::paint` | 3 tests purs + **test GPU** `tests/vr_menu.rs` (viser/appuyer/relâcher = un clic ; hors panneau = aucun) |
 | **Affichage au poignet** gauche : vie (barre) et ennemis vaincus, tourné vers la tête | `xr::ui::PanelPose::facing` | capture |
 | Couleurs de l'écran d'accueil (#12141a / #e8763b) | — | — |
+
+## 15. Phase 6 — son qui suit la tête, API Lua `vr.*` (24 septembre 2026)
+
+| Élément | Fichier | Vérifié |
+|---|---|---|
+| **Sons de scène re-spatialisés à chaque image** (`Audio::play_spatial_streaming`, `update_listener`, `spatial_mix`) : avant, gain et panoramique étaient figés au lancement de la partie. Écouteur = tête du joueur en VR (`AppState::vr_listener`), cible de la caméra sinon (atténuation desktop inchangée) | `src/runtime/audio.rs`, `app::simulation::audio_listener` | test : un quart de tour de tête fait passer à gauche une source qui était devant |
+| **Table Lua `vr`** : `vr.active`, `vr.head {x,y,z,yaw}`, `vr.left`/`vr.right {x,y,z,trigger,grip,a,b}` (monde), `vr.haptic(côté, intensité, durée)` — **les deux backends** (mlua natif, rilua web ; hors VR `vr.active` = faux, un même script marche partout) | `app::script_ctx`, `app::scripting`, `app::scripting_web`, `docs/LUA_API.md` | test mlua (`simulation_tests`) + test rilua (`scripting_web`) |
+| Vibrations demandées par les scripts fusionnées avec celles des effets du jeu (la plus forte l'emporte) | `src/xr/content.rs` | — |
+| Simulateur : fenêtre masquée → pas de fausse mesure « 0,00 ms », pas de boucle à vide | `src/bin/quest_sim.rs` | constaté lors d'une session de jeu (≈2 min 30, profils Quest 3 et 2, vibrations sur coup encaissé, 7,5–14 ms/image) |

@@ -3950,3 +3950,49 @@ fn a_lone_network_player_heals_themself_with_the_ability_bar() {
     app.update_network_heal(1.0);
     assert_eq!(app.network.network_health[&id], 0.5, "monde coopératif : inchangé");
 }
+
+/// Table Lua `vr` (roadmap VR, phase 6) : hors VR `vr.active` est faux ; en
+/// VR, le script lit la tête et les manettes (monde) et `vr.haptic` demande
+/// une vibration, récupérée par la session VR après les scripts.
+#[test]
+fn lua_vr_table_exposes_the_headset_and_requests_haptics() {
+    use crate::app::script_ctx::{VrHandScript, VrScriptState, take_vr_haptics};
+    let mut app = AppState::new();
+    app.scene.objects.clear();
+    app.scene.objects.push(SceneObject {
+        script: r#"
+            if vr.active then
+                obj.x = vr.head.x
+                obj.y = vr.right.trigger
+                obj.z = vr.head.yaw
+                vr.haptic("left", 0.7, 0.1)
+            else
+                obj.x = -1
+            end
+        "#
+        .into(),
+        ..Default::default()
+    });
+    take_vr_haptics();
+    app.sim_step(0.1);
+    assert_eq!(app.scene.objects[0].transform.position.x, -1.0, "hors VR");
+    assert!(take_vr_haptics().is_empty());
+
+    app.vr_script = Some(VrScriptState {
+        head: glam::Vec3::new(3.0, 1.6, 2.0),
+        yaw: 0.5,
+        hands: [
+            None,
+            Some(VrHandScript {
+                trigger: 0.8,
+                ..Default::default()
+            }),
+        ],
+    });
+    app.sim_step(0.1);
+    let p = app.scene.objects[0].transform.position;
+    assert_eq!(p.x, 3.0, "vr.head.x");
+    assert!((p.y - 0.8).abs() < 1e-6, "vr.right.trigger");
+    assert!((p.z - 0.5).abs() < 1e-6, "vr.head.yaw");
+    assert_eq!(take_vr_haptics(), vec![(0, 0.7, 0.1)], "vr.haptic(\"left\", …)");
+}

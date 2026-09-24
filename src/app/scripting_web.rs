@@ -427,6 +427,15 @@ fn host_bone(state: &mut LuaState) -> LuaResult<u32> {
     Ok(0)
 }
 
+/// `vr.haptic(côté, intensité, durée)` — cf. le pendant natif (`scripting.rs`).
+fn host_vr_haptic(state: &mut LuaState) -> LuaResult<u32> {
+    let side = arg_str(state, 0)?;
+    let amplitude = arg_f32(state, 1)?;
+    let seconds = arg_f32(state, 2)?;
+    crate::app::script_ctx::push_vr_haptic(&side, amplitude, seconds);
+    Ok(0)
+}
+
 /// `particles(rate, dx, dy, dz, spread, speed, size, r, g, b)` — cf. la doc du
 /// pendant natif (`scripting::run_script`, Sprint 132).
 fn host_particles(state: &mut LuaState) -> LuaResult<u32> {
@@ -830,6 +839,35 @@ pub(super) fn run_script_web(
         }));
         lua_try!(lua.set_global("hand", hand_tbl));
     }
+    // Table `vr` — même forme que côté mlua (`scripting.rs`, roadmap VR phase 6).
+    if crate::app::script_ctx::vr_wanted() {
+        let vr_tbl = lua.create_table();
+        let state = crate::app::script_ctx::vr_state();
+        lua_try!(set_bool(lua, &vr_tbl, "active", state.is_some()));
+        if let Some(st) = state {
+            let head = lua.create_table();
+            lua_try!(set_num(lua, &head, "x", st.head.x as f64));
+            lua_try!(set_num(lua, &head, "y", st.head.y as f64));
+            lua_try!(set_num(lua, &head, "z", st.head.z as f64));
+            lua_try!(set_num(lua, &head, "yaw", st.yaw as f64));
+            lua_try!(set_table(lua, &vr_tbl, "head", head));
+            for (name, hand) in [("left", st.hands[0]), ("right", st.hands[1])] {
+                if let Some(h) = hand {
+                    let t = lua.create_table();
+                    lua_try!(set_num(lua, &t, "x", h.pos.x as f64));
+                    lua_try!(set_num(lua, &t, "y", h.pos.y as f64));
+                    lua_try!(set_num(lua, &t, "z", h.pos.z as f64));
+                    lua_try!(set_num(lua, &t, "trigger", h.trigger as f64));
+                    lua_try!(set_num(lua, &t, "grip", h.grip as f64));
+                    lua_try!(set_bool(lua, &t, "a", h.primary));
+                    lua_try!(set_bool(lua, &t, "b", h.secondary));
+                    lua_try!(set_table(lua, &vr_tbl, name, t));
+                }
+            }
+        }
+        lua_try!(lua.table_set_function(&vr_tbl, "haptic", host_vr_haptic));
+        lua_try!(lua.set_global("vr", vr_tbl));
+    }
 
     let call_result = lua.call_function(func, &[]).map(|_| ());
 
@@ -1098,6 +1136,63 @@ mod tests {
         .unwrap();
         assert_eq!(t.position.x, 42.0);
         assert_eq!(vars.get("pv_max"), Some(&42.0));
+    }
+
+    /// Table `vr` côté web (même forme que mlua, roadmap VR phase 6) : état
+    /// publié → lu par le script ; `vr.haptic` → demande récupérée.
+    #[test]
+    fn vr_table_reads_the_headset_and_requests_haptics_like_mlua() {
+        use crate::app::script_ctx::{
+            VrHandScript, VrScriptState, set_vr, set_vr_wanted, take_vr_haptics,
+        };
+        let mut lua = Lua::new().unwrap();
+        let src = "if vr.active then obj.x = vr.head.x; obj.y = vr.left.grip; \
+                   vr.haptic('right', 0.4, 0.2) else obj.x = -1 end";
+        let mut t = Transform::from_pos(Vec3::ZERO);
+        let mut col = [1.0; 3];
+        let mut go = |lua: &mut Lua, t: &mut Transform| {
+            run(
+                lua,
+                src,
+                t,
+                &mut col,
+                &PlayerInput::default(),
+                false,
+                false,
+                false,
+                false,
+                false,
+                &[],
+                &mut Vec::new(),
+                &[],
+                &mut HashMap::new(),
+                &mut Vec::new(),
+                false,
+                None,
+            )
+            .unwrap();
+        };
+        set_vr_wanted(true);
+        take_vr_haptics();
+        set_vr(None);
+        go(&mut lua, &mut t);
+        assert_eq!(t.position.x, -1.0, "hors VR");
+        set_vr(Some(VrScriptState {
+            head: Vec3::new(2.5, 1.7, 0.0),
+            yaw: 0.0,
+            hands: [
+                Some(VrHandScript {
+                    grip: 0.6,
+                    ..Default::default()
+                }),
+                None,
+            ],
+        }));
+        go(&mut lua, &mut t);
+        assert_eq!(t.position.x, 2.5);
+        assert!((t.position.y - 0.6).abs() < 1e-6);
+        assert_eq!(take_vr_haptics(), vec![(1, 0.4, 0.2)]);
+        set_vr(None);
     }
 
     #[test]

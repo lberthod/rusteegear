@@ -1208,6 +1208,13 @@ pub struct AppState {
     /// chaque frame) : le déplacement au stick, relatif à la caméra
     /// (`camera_relative_move`), va alors là où l'on regarde. `None` hors VR.
     pub vr_camera_yaw: Option<f32>,
+    /// Session VR : tête et manettes (monde) exposées aux scripts par la table
+    /// Lua `vr` (roadmap VR, phase 6), publiées avant chaque pas de scripts.
+    /// `None` hors VR (`vr.active` = faux).
+    pub vr_script: Option<script_ctx::VrScriptState>,
+    /// Session VR : écouteur audio (position, direction du regard) — la tête,
+    /// pas la caméra de jeu. `None` hors VR (la caméra fait foi).
+    pub vr_listener: Option<(Vec3, Vec3)>,
     /// Temps de jeu (s) auquel tous les collectibles ont été ramassés (figé pour le HUD).
     win_time: Option<f32>,
     /// Partie perdue : le joueur a touché une zone mortelle (fige le jeu jusqu'au Stop).
@@ -1686,6 +1693,8 @@ impl AppState {
             step_requested: false,
             debug_lines: Vec::new(),
             vr_camera_yaw: None,
+            vr_script: None,
+            vr_listener: None,
             win_time: None,
             lost: false,
             score: 0,

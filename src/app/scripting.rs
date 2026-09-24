@@ -520,6 +520,41 @@ pub(super) fn run_script(
         })?;
         g.set("hand", hand_tbl)?;
     }
+    // Table `vr` (roadmap VR, phase 6) : casque et manettes en coordonnées
+    // monde, `vr.active` faux hors VR ; `vr.haptic(côté, intensité, durée)` fait
+    // vibrer une manette. Même forme côté web (`scripting_web.rs`).
+    if super::script_ctx::vr_wanted() {
+        let vr_tbl = lua.create_table()?;
+        let state = super::script_ctx::vr_state();
+        vr_tbl.set("active", state.is_some())?;
+        if let Some(st) = state {
+            let head = lua.create_table()?;
+            head.set("x", st.head.x)?;
+            head.set("y", st.head.y)?;
+            head.set("z", st.head.z)?;
+            head.set("yaw", st.yaw)?;
+            vr_tbl.set("head", head)?;
+            for (name, hand) in [("left", st.hands[0]), ("right", st.hands[1])] {
+                if let Some(h) = hand {
+                    let t = lua.create_table()?;
+                    t.set("x", h.pos.x)?;
+                    t.set("y", h.pos.y)?;
+                    t.set("z", h.pos.z)?;
+                    t.set("trigger", h.trigger)?;
+                    t.set("grip", h.grip)?;
+                    t.set("a", h.primary)?;
+                    t.set("b", h.secondary)?;
+                    vr_tbl.set(name, t)?;
+                }
+            }
+        }
+        let haptic = lua.create_function(|_, (side, amplitude, seconds): (String, f32, f32)| {
+            super::script_ctx::push_vr_haptic(&side, amplitude, seconds);
+            Ok(())
+        })?;
+        vr_tbl.set("haptic", haptic)?;
+        g.set("vr", vr_tbl)?;
+    }
     g.set("spawn", spawn)?;
     g.set("add_item", add_item_fn)?;
     g.set("find_tag", find_tag)?;

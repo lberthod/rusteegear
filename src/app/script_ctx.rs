@@ -27,6 +27,14 @@ thread_local! {
     /// d'après sa source) — sinon les deux tables ne sont pas reconstruites pour
     /// lui : ~70 objets du mannequin par pas n'en ont pas besoin.
     static POSE_WANTED: Cell<bool> = const { Cell::new(true) };
+    /// État VR de l'image (tête, manettes) exposé aux scripts par la table `vr`
+    /// (roadmap VR, phase 6) — `None` hors VR.
+    static VR: Cell<Option<VrScriptState>> = const { Cell::new(None) };
+    /// Le script en cours lit-il `vr` ? (même rôle que `POSE_WANTED`.)
+    static VR_WANTED: Cell<bool> = const { Cell::new(true) };
+    /// Vibrations demandées par `vr.haptic(côté, intensité, durée)` depuis le
+    /// dernier `take_vr_haptics` : (0 = gauche / 1 = droite, intensité, s).
+    static VR_HAPTICS: RefCell<Vec<(usize, f32, f32)>> = const { RefCell::new(Vec::new()) };
     /// Directions d'os poussées par `bone(nom, dx, dy, dz)` pendant le script
     /// courant, reprises dans `SceneObject::bone_dirs` juste après.
     static BONES: RefCell<Vec<(String, glam::Vec3)>> = const { RefCell::new(Vec::new()) };
@@ -154,6 +162,64 @@ pub(crate) fn set_pose_wanted(wanted: bool) {
 
 pub(crate) fn pose_wanted() -> bool {
     POSE_WANTED.with(|c| c.get())
+}
+
+/// Une manette vue par les scripts (`vr.left`/`vr.right`), coordonnées monde.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct VrHandScript {
+    pub pos: glam::Vec3,
+    pub trigger: f32,
+    pub grip: f32,
+    /// A (droite) / X (gauche).
+    pub primary: bool,
+    /// B (droite) / Y (gauche).
+    pub secondary: bool,
+}
+
+/// État VR d'une image vu par les scripts (table `vr`), coordonnées monde.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct VrScriptState {
+    pub head: glam::Vec3,
+    /// Lacet du regard (rad, même convention que `obj.ry`).
+    pub yaw: f32,
+    pub hands: [Option<VrHandScript>; 2],
+}
+
+/// Publie l'état VR de l'image pour les scripts (`None` hors VR).
+pub(crate) fn set_vr(state: Option<VrScriptState>) {
+    VR.with(|c| c.set(state));
+}
+
+pub(crate) fn vr_state() -> Option<VrScriptState> {
+    VR.with(|c| c.get())
+}
+
+pub(crate) fn set_vr_wanted(wanted: bool) {
+    VR_WANTED.with(|c| c.set(wanted));
+}
+
+pub(crate) fn vr_wanted() -> bool {
+    VR_WANTED.with(|c| c.get())
+}
+
+/// Vrai si la source du script peut lire la table `vr`.
+pub(crate) fn script_reads_vr(src: &str) -> bool {
+    src.contains("vr")
+}
+
+/// `vr.haptic(côté, intensité, durée)` côté script (les deux backends) :
+/// `side` = `"left"` ou autre (droite).
+pub(crate) fn push_vr_haptic(side: &str, amplitude: f32, seconds: f32) {
+    let hand = usize::from(side != "left");
+    VR_HAPTICS.with(|h| {
+        h.borrow_mut()
+            .push((hand, amplitude.clamp(0.0, 1.0), seconds.clamp(0.0, 2.0)));
+    });
+}
+
+/// Consomme les vibrations demandées par les scripts depuis le dernier appel.
+pub(crate) fn take_vr_haptics() -> Vec<(usize, f32, f32)> {
+    VR_HAPTICS.with(|h| std::mem::take(&mut *h.borrow_mut()))
 }
 
 /// Vrai si la source du script peut lire `pose` ou `hand`.

@@ -224,7 +224,14 @@ impl GameView {
             self.app.vr_camera_yaw = Some(yaw);
         }
 
-        // 4. Simulation.
+        // 4. Simulation — les scripts voient la tête et les manettes (table
+        //    Lua `vr`, phase 6), l'audio s'écoute depuis la tête.
+        if let Some(rig) = self.rig {
+            let head_world = rig.origin + Quat::from_rotation_y(rig.yaw) * head_stage;
+            let look = rig.look_world(head_rot);
+            self.app.vr_listener = Some((head_world, look));
+            self.app.vr_script = Some(script_state(&rig, head_world, look, input));
+        }
         let t0 = crate::time_compat::Instant::now();
         self.app.advance_play();
         self.last_sim_ms = t0.elapsed().as_secs_f32() * 1000.0;
@@ -366,8 +373,15 @@ impl GameView {
 
         // 11. Vibrations sur les fronts montants des effets du jeu.
         let fx = (self.app.fx.damage_flash, self.app.fx.attack_flash);
-        let haptics = haptics_from_fx(self.prev_fx, fx);
+        let mut haptics = haptics_from_fx(self.prev_fx, fx);
         self.prev_fx = fx;
+        // … et celles demandées par les scripts (`vr.haptic`), la plus forte gagne.
+        for (hand, amplitude, seconds) in crate::app::script_ctx::take_vr_haptics() {
+            let h = &mut haptics[hand.min(1)];
+            if h.is_none_or(|h| h.amplitude < amplitude) {
+                *h = Some(Haptic { amplitude, seconds });
+            }
+        }
         FrameOut { haptics, quit }
     }
 
@@ -488,6 +502,31 @@ fn wrist_ui(root: &mut egui::Ui, health: Option<f32>, kills: u32) {
             }
             ui.label(egui::RichText::new(format!("Ennemis vaincus : {kills}")).size(18.0));
         });
+}
+
+/// État VR publié aux scripts (table Lua `vr`) : tête et manettes en monde.
+fn script_state(
+    rig: &Rig,
+    head_world: Vec3,
+    look: Vec3,
+    input: &XrInput,
+) -> crate::app::script_ctx::VrScriptState {
+    let hand = |h: &super::input::HandInput| {
+        h.grip
+            .map(|(pos, rot)| crate::app::script_ctx::VrHandScript {
+                pos: to_world(rig, pos, rot).0,
+                trigger: h.trigger,
+                grip: h.squeeze,
+                primary: h.primary,
+                secondary: h.secondary,
+            })
+    };
+    crate::app::script_ctx::VrScriptState {
+        head: head_world,
+        // Même convention que `obj.ry` : regard −Z à 0, positif vers la gauche.
+        yaw: (-look.x).atan2(-look.z),
+        hands: [hand(&input.hands[LEFT]), hand(&input.hands[RIGHT])],
+    }
 }
 
 /// Pieds du personnage local dans le monde (bas de sa boîte englobante).
