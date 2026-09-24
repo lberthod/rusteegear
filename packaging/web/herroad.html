@@ -1,0 +1,342 @@
+<!doctype html>
+<html lang="fr">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>HerRoad — course arcade</title>
+    <!--
+      Page dédiée HerRoad (herroad.loicberthod.ch), dérivée de index.html : même moteur (pkg/),
+      scène `?scene=herroad` forcée. Le déploiement la publie sous le nom index.html.
+
+      Page hôte de la démo web (roadmap post-audit UX 2026-09-04, 0.3).
+      Avant : un canvas nu et `init()` — 23 Mo à télécharger sans aucun retour,
+      et une page noire à vie si WebGPU manquait ou si le .wasm était refusé.
+      Maintenant : détection WebGPU avant tout téléchargement, barre de
+      progression, message d'erreur lisible avec la marche à suivre, rappel des
+      touches, plein écran, et redimensionnement du rendu avec la fenêtre.
+      Le moteur cherche le canvas par son id `rustee-canvas` (cf. src/lib.rs).
+      Roadmap post-audit UX v2 2026-09-04, 6.6 : le voile se retire sur la
+      première frame réellement présentée (`window.__rusteegear_ready`, posé
+      par src/lib.rs) et non après un délai ; `fail()` le réaffiche ; le bouton
+      plein écran est en bas à droite pour ne pas recouvrir le « ? » du HUD ;
+      clic droit sans menu contextuel ; téléchargement surveillé (« Réessayer »
+      s'il ne progresse plus) ; orientation et clavier virtuel suivis.
+    -->
+    <style>
+      html, body { margin: 0; height: 100%; background: #12141a; color: #e6e8e3;
+        font: 15px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; overflow: hidden; }
+      #rustee-canvas { display: block; width: 100%; height: 100%; outline: none; touch-action: none; }
+      #boot { position: fixed; inset: 0; display: flex; flex-direction: column; align-items: center;
+        justify-content: center; gap: 12px; padding: 24px; text-align: center; background: #12141a;
+        transition: opacity .35s ease; }
+      #boot.hidden { opacity: 0; pointer-events: none; }
+      #boot .logo { font-size: 30px; font-weight: 700; letter-spacing: -.01em; }
+      #boot .logo span { color: #e8763b; }
+      #boot .sub { margin: 0; color: #b4bac3; }
+      #bar { width: min(420px, 80vw); height: 6px; background: #262b33; border-radius: 3px; overflow: hidden; }
+      #fill { height: 100%; width: 0; background: #e8763b; transition: width .15s linear; }
+      #status { margin: 0; color: #b4bac3; font-variant-numeric: tabular-nums; }
+      #keys { margin: 18px 0 0; max-width: 60ch; color: #848c98; font-size: 13.5px; }
+      #keys b { color: #e6e8e3; font-weight: 600; }
+      #err { display: none; max-width: 60ch; margin-top: 8px; padding: 14px 18px; text-align: left;
+        background: #3e1f1d; border-left: 4px solid #f0736a; border-radius: 4px; }
+      #err h2 { margin: 0 0 6px; font-size: 17px; }
+      #err p { margin: 0 0 6px; }
+      #err code { font-family: ui-monospace, Menlo, monospace; font-size: 12.5px; word-break: break-all; color: #f0b3ad; }
+      #err a { color: #e8763b; }
+      #boot.failed #bar { display: none; }
+      #boot.failed #err { display: block; }
+      #retry { display: none; margin-top: 10px; padding: 8px 18px; border: 0; border-radius: 6px;
+        background: #e8763b; color: #12141a; font: inherit; font-weight: 600; cursor: pointer; }
+      #retry:hover, #retry:focus-visible { background: #f0925f; outline: none; }
+      #boot.stalled #retry { display: inline-block; }
+      /* Bas-droite (roadmap 6.6) : le HUD du moteur place ses boutons « ? » et
+         pause en haut à droite, un bouton HTML au même endroit les recouvrait. */
+      #fs { position: fixed; bottom: max(8px, env(safe-area-inset-bottom)); right: max(8px, env(safe-area-inset-right));
+        width: 30px; height: 30px; border: 0; border-radius: 6px;
+        background: rgba(18, 20, 26, .55); color: #e6e8e3; font-size: 16px; cursor: pointer; display: none; }
+      #fs:hover, #fs:focus-visible { background: rgba(232, 118, 59, .8); outline: none; }
+      body.running #fs { display: block; }
+      /* Bandeau discret "onglet inactif" PENDANT UNE PARTIE DÉJÀ LANCÉE — le
+         chargement initial reste géré par #boot seul (visibilitychange plus bas
+         ne l'affiche que si body.running). Pas de blocage : pointer-events:none
+         comme #boot.hidden, le jeu reste visible et jouable au retour. */
+      #bg-pause { position: fixed; top: max(10px, env(safe-area-inset-top)); left: 50%;
+        transform: translateX(-50%); z-index: 10; display: flex; align-items: center;
+        gap: 8px; padding: 8px 16px; max-width: min(420px, 86vw); text-align: center;
+        background: rgba(18, 20, 26, .9); border-left: 4px solid #e8763b; border-radius: 6px;
+        color: #e6e8e3; font-size: 13.5px; opacity: 0; pointer-events: none;
+        transition: opacity .35s ease; }
+      #bg-pause.shown { opacity: 1; }
+      @media (prefers-reduced-motion: reduce) { #boot, #fill, #bg-pause { transition: none; } }
+    </style>
+  </head>
+  <body>
+    <canvas id="rustee-canvas" tabindex="0" aria-label="Zone de jeu HerRoad"></canvas>
+    <button id="fs" type="button" title="Plein écran">⛶</button>
+    <div id="bg-pause" role="status" aria-live="polite">⏸ Jeu en pause — onglet inactif</div>
+    <div id="boot" role="status" aria-live="polite">
+      <div class="logo">🏁 Her<span>Road</span></div>
+      <p class="sub">Course arcade en 3 tours, directement dans le navigateur</p>
+      <div id="bar"><div id="fill"></div></div>
+      <p id="status">Vérification du navigateur…</p>
+      <div id="err">
+        <h2 id="err-title"></h2>
+        <p id="err-body"></p>
+        <p><code id="err-detail"></code></p>
+        <button id="retry" type="button">Réessayer</button>
+        <p>Sans navigateur compatible, la version macOS se télécharge sur
+          <a href="https://github.com/lberthod/rusteegear" rel="noopener">github.com/lberthod/rusteegear</a>.</p>
+      </div>
+      <p id="keys"><b>↑ / W</b> : accélérer · <b>↓ / S</b> : freiner, marche arrière · <b>← →</b> ou <b>A D</b> : diriger ·
+        <b>Espace</b> : frein à main · <b>Retour arrière</b> : dernier point de passage · <b>Entrée</b> ou <b>R</b> : recommencer ·
+        <b>C</b> : caméra. Manette Switch Pro, Xbox ou PlayStation reconnue (ZR/ZL, stick).</p>
+      <!-- Commit affiché en clair (14 septembre 2026, roadmap post-incident
+           « je ne sais pas si le site a bien été redéployé ») : substitué au
+           build (`packaging/build_web.sh`, `.github/workflows/pages.yml`) par
+           le hash court de HEAD — un `cargo build` local sans substitution
+           garde le placeholder tel quel, jamais un faux commit. Volontaire :
+           visible dès le chargement de la page HTML, AVANT même que le .wasm
+           ne télécharge — sert justement à vérifier qu'un déploiement a pris
+           sans dépendre du jeu qui a pu échouer à charger.
+      -->
+      <p id="build" style="margin-top:10px;color:#4b515a;font-size:11px">Build __RUSTEEGEAR_COMMIT__</p>
+    </div>
+    <script type="module">
+      import init from "./pkg/motor3derust.js";
+
+      const $ = (id) => document.getElementById(id);
+      const canvas = $("rustee-canvas");
+      // Page dédiée HerRoad : le moteur choisit sa scène par l'URL (src/lib.rs,
+      // `web_requested_scene`) — on la fixe avant `init()` sans recharger la page.
+      if (new URLSearchParams(location.search).get("scene") !== "herroad") {
+        const url = new URL(location.href);
+        url.searchParams.set("scene", "herroad");
+        history.replaceState(null, "", url);
+      }
+      const boot = $("boot");
+      const statusEl = $("status");
+      const fill = $("fill");
+      const bgPause = $("bg-pause");
+      let failed = false;
+
+      function setStatus(text) { statusEl.textContent = text; }
+      // Réaffiche le voile même s'il a déjà été retiré du flux (`display:none`
+      // après le fondu) : un échec tardif du GPU ne doit pas laisser un canvas
+      // noir sans explication (roadmap 6.6).
+      function showBoot() {
+        boot.style.display = "flex";
+        boot.classList.remove("hidden");
+        document.body.classList.remove("running");
+      }
+      function fail(title, body, detail, retryable) {
+        if (failed) return;
+        failed = true;
+        showBoot();
+        bgPauseHide();
+        boot.classList.add("failed");
+        if (retryable) boot.classList.add("stalled");
+        $("err-title").textContent = title;
+        $("err-body").textContent = body;
+        $("err-detail").textContent = detail ? String(detail) : "";
+        setStatus("");
+      }
+      $("retry").addEventListener("click", () => location.reload());
+
+      // Le moteur signale ses échecs d'initialisation par `log::error!` (console) :
+      // on les relaie à l'écran plutôt que de laisser une page noire.
+      const origError = console.error.bind(console);
+      console.error = (...args) => {
+        origError(...args);
+        const text = args.map(String).join(" ");
+        if (/renderer impossible|adaptateur|Création de la fenêtre impossible/i.test(text)) {
+          fail("Le rendu 3D n'a pas pu démarrer",
+            "Le navigateur a bien WebGPU, mais aucune carte graphique compatible n'a répondu. Sur Chrome, vérifier chrome://gpu ; sur une machine virtuelle ou en accès distant, WebGPU est souvent désactivé.",
+            text);
+        }
+      };
+      window.addEventListener("unhandledrejection", (e) => {
+        const r = e.reason;
+        const msg = r && (r.message || String(r));
+        if (/CompileError|LinkError|instantiate/i.test(msg || "")) {
+          fail("Ce navigateur ne peut pas charger le jeu",
+            "Le module WebAssembly a été refusé. Mettre le navigateur à jour (Chrome ou Edge récent) suffit en général.",
+            msg);
+        }
+      });
+
+      // Chien de garde du téléchargement (roadmap 6.6) : sans aucun octet
+      // reçu pendant STALL_MS, on le dit et on propose de recharger — avant, une
+      // connexion tombée laissait la barre figée pour toujours.
+      const STALL_MS = 20_000;
+      let stallTimer = null;
+      function armStallWatchdog() {
+        clearTimeout(stallTimer);
+        stallTimer = setTimeout(() => {
+          fail("Le téléchargement semble bloqué",
+            "Aucune donnée reçue depuis 20 secondes. Vérifier la connexion, puis réessayer.",
+            "", true);
+        }, STALL_MS);
+      }
+
+      async function fetchWithProgress(url) {
+        armStallWatchdog();
+        const res = await fetch(url);
+        if (!res.ok) throw new Error(`HTTP ${res.status} sur ${url}`);
+        // Servi compressé (GitHub Pages : gzip) : Content-Length est la taille
+        // compressée alors que les octets lus sont décompressés — la barre ne
+        // peut pas être exacte, on n'affiche alors que le volume reçu.
+        const compressed = !!res.headers.get("content-encoding");
+        const total = compressed ? 0 : Number(res.headers.get("content-length")) || 0;
+        const reader = res.body.getReader();
+        const chunks = [];
+        let got = 0;
+        for (;;) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          if (failed) throw new Error("téléchargement interrompu");
+          armStallWatchdog();
+          chunks.push(value);
+          got += value.length;
+          const mb = (got / 1048576).toFixed(1);
+          if (total) {
+            fill.style.width = `${Math.min(100, (got / total) * 100).toFixed(1)}%`;
+            setStatus(`Téléchargement du jeu… ${mb} / ${(total / 1048576).toFixed(1)} Mo`);
+          } else {
+            // Progression indéterminée : ~23 Mo décompressés attendus.
+            fill.style.width = `${Math.min(95, (got / 24_000_000) * 100).toFixed(1)}%`;
+            setStatus(`Téléchargement du jeu… ${mb} Mo`);
+          }
+        }
+        clearTimeout(stallTimer);
+        const bytes = new Uint8Array(got);
+        let offset = 0;
+        for (const c of chunks) { bytes.set(c, offset); offset += c.length; }
+        return bytes;
+      }
+
+      // Le rendu suit la fenêtre : winit fige la taille du canvas en style inline
+      // à la création ; on la réécrit à chaque redimensionnement et winit
+      // (ResizeObserver) reconfigure la surface GPU.
+      function fitCanvas() {
+        canvas.style.width = `${window.innerWidth}px`;
+        canvas.style.height = `${window.innerHeight}px`;
+      }
+      window.addEventListener("resize", fitCanvas);
+      // Rotation du téléphone et clavier virtuel (roadmap 6.6) : `resize` seul
+      // arrive parfois avant que les dimensions ne soient à jour.
+      window.addEventListener("orientationchange", () => setTimeout(fitCanvas, 100));
+      if (window.visualViewport) window.visualViewport.addEventListener("resize", fitCanvas);
+      // Le clic droit pilote la caméra dans le jeu : pas de menu contextuel du
+      // navigateur par-dessus (roadmap 6.6).
+      canvas.addEventListener("contextmenu", (e) => e.preventDefault());
+
+      $("fs").addEventListener("click", () => {
+        const el = document.documentElement;
+        if (document.fullscreenElement) document.exitFullscreen();
+        else if (el.requestFullscreen) el.requestFullscreen();
+        canvas.focus();
+      });
+      canvas.addEventListener("pointerdown", () => canvas.focus());
+
+      // Écran maintenu allumé pendant la partie (mobile) — meilleur effort,
+      // l'API peut manquer ou être refusée (roadmap post-audit UX 2026-09-04, 2.6).
+      let wakeLock = null;
+      async function keepScreenOn() {
+        try {
+          if ("wakeLock" in navigator) wakeLock = await navigator.wakeLock.request("screen");
+        } catch (_) { /* refusé ou non supporté : sans conséquence */ }
+      }
+      // Bandeau "en pause" (#bg-pause) : deux délais pour rester lisible sans
+      // clignoter sur un aller-retour d'onglet insignifiant (mesuré : sans
+      // eux, un survol de 120ms flashe le bandeau, et il retombe à opacité 0
+      // ~350ms après le retour — quasi illisible au moment où il sert le plus).
+      const BG_PAUSE_SHOW_DELAY_MS = 500; // onglet caché depuis au moins ça avant d'afficher
+      const BG_PAUSE_MIN_HOLD_MS = 1200; // durée minimale affichée une fois montré
+      let bgPauseShowTimer = null;
+      let bgPauseShownAt = 0;
+      function bgPauseHide() {
+        clearTimeout(bgPauseShowTimer);
+        bgPauseShowTimer = null;
+        bgPause.classList.remove("shown");
+      }
+      document.addEventListener("visibilitychange", () => {
+        if (document.visibilityState === "visible") {
+          if (wakeLock === null) keepScreenOn();
+          clearTimeout(bgPauseShowTimer);
+          bgPauseShowTimer = null;
+          if (bgPause.classList.contains("shown")) {
+            // Déjà affiché : garde-le au moins BG_PAUSE_MIN_HOLD_MS depuis son
+            // apparition, pour laisser au joueur le temps de le lire au retour.
+            const remaining = BG_PAUSE_MIN_HOLD_MS - (performance.now() - bgPauseShownAt);
+            if (remaining > 0) setTimeout(bgPauseHide, remaining);
+            else bgPauseHide();
+          }
+        } else if (!failed && document.body.classList.contains("running")) {
+          // Uniquement pendant une partie déjà lancée (classe posée par reveal()) :
+          // au chargement initial #boot suffit, pas de doublon de message.
+          // Débounce : un aller-retour d'onglet plus bref que le délai ne doit
+          // jamais afficher le bandeau (annulé si visible revient avant).
+          bgPauseShowTimer = setTimeout(() => {
+            bgPauseShowTimer = null;
+            bgPauseShownAt = performance.now();
+            bgPause.classList.add("shown");
+          }, BG_PAUSE_SHOW_DELAY_MS);
+        }
+      });
+
+      async function main() {
+        if (!navigator.gpu) {
+          fail("WebGPU n'est pas disponible dans ce navigateur",
+            "La démo a besoin de WebGPU : Chrome ou Edge 113+, Safari 18+, Firefox 141+. Sur un navigateur récent, vérifier que l'accélération matérielle est activée.");
+          return;
+        }
+        setStatus("Téléchargement du jeu…");
+        const bytes = await fetchWithProgress(new URL("./pkg/motor3derust_bg.wasm", import.meta.url));
+        fill.style.width = "100%";
+        setStatus("Compilation et démarrage du moteur…");
+        await init({ module_or_path: bytes });
+        if (failed) return;
+        setStatus("Initialisation du GPU…");
+        // Le renderer s'initialise de façon asynchrone après `init` ; un échec
+        // arrive par console.error (relayé ci-dessus). Le moteur pose
+        // `window.__rusteegear_ready` à sa première frame présentée (src/lib.rs,
+        // roadmap 6.6) : c'est ce signal qui retire le voile — le délai fixe
+        // reste un repli (ancien moteur, ou signal perdu) pour ne jamais laisser
+        // le voile sur un jeu qui tourne.
+        const READY_FALLBACK_MS = 6000;
+        const start = performance.now();
+        function reveal() {
+          if (failed) return;
+          fitCanvas();
+          boot.classList.add("hidden");
+          document.body.classList.add("running");
+          canvas.focus();
+          keepScreenOn();
+          // Après le fondu, retirer l'overlay du flux : un onglet en arrière-plan
+          // peut geler la transition CSS et laisser un voile sur le jeu.
+          setTimeout(() => { if (!failed) boot.style.display = "none"; }, 500);
+        }
+        function pollReady() {
+          if (failed) return;
+          if (window.__rusteegear_ready || performance.now() - start > READY_FALLBACK_MS) reveal();
+          else setTimeout(pollReady, 50);
+        }
+        pollReady();
+      }
+
+      main().catch((e) => {
+        const msg = (e && (e.message || String(e))) || "";
+        if (/CompileError|LinkError|Invalid import|instantiate/i.test(msg)) {
+          fail("Ce navigateur ne peut pas charger le jeu",
+            "Le module WebAssembly a été refusé. Mettre le navigateur à jour (Chrome ou Edge récent) suffit en général.",
+            msg);
+        } else {
+          fail("Le jeu n'a pas pu se charger",
+            "Le téléchargement ou le démarrage a échoué. Recharger la page ; si le problème persiste, vérifier la connexion.",
+            msg);
+        }
+      });
+    </script>
+  </body>
+</html>

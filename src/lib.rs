@@ -800,6 +800,19 @@ impl App {
             || !near(right, self.gamepad_axes_right)
             || (trig.0 - self.gamepad_triggers.0).abs() > 0.01
             || (trig.1 - self.gamepad_triggers.1).abs() > 0.01;
+        // Journal de diagnostic (`HERROAD_PADLOG=1`) : ce que GameController rend, à chaque
+        // changement — sert à vérifier le mapping des boutons sur une vraie manette.
+        if changed && std::env::var_os("HERROAD_PADLOG").is_some() {
+            let mut names: Vec<String> = held.iter().map(|b| format!("{b:?}")).collect();
+            names.sort();
+            log::info!(
+                "PAD boutons={names:?} stickG=({:.2},{:.2}) stickD=({:.2},{:.2}) ZL={:.2} ZR={:.2} | course : gaz={:.2} frein={:.2} volant={:.2}",
+                axes.0, axes.1, right.0, right.1, trig.0, trig.1,
+                self.state.input_state.race.throttle,
+                self.state.input_state.race.brake,
+                self.state.input_state.race.steer
+            );
+        }
         let start_pressed = held.contains(&gilrs::Button::Start)
             && !self.gamepad_held.contains(&gilrs::Button::Start);
         self.gamepad_held = held;
