@@ -71,9 +71,18 @@ jobs:
         # (`./packaging/build_apk.sh` avec RUSTEEGEAR_KEYSTORE_PASS positionné).
         # Secret absent (première release) : build_apk.sh en génère un et cette
         # étape ne fait rien — penser à sauvegarder ce premier keystore.
-        if: ${{ secrets.RUSTEEGEAR_KEYSTORE_B64 != '' }}
+        # Le contexte `secrets` est interdit dans un `if:` de step : l'ancien
+        # `if: ${{ secrets.… != '' }}` rendait tout le fichier invalide, et GitHub
+        # créait un run « failure » en 0 s à CHAQUE push (même hors tag v*). Le
+        # test se fait donc dans le shell, via une variable d'env.
+        env:
+          KEYSTORE_B64: ${{ secrets.RUSTEEGEAR_KEYSTORE_B64 }}
         run: |
-          echo "${{ secrets.RUSTEEGEAR_KEYSTORE_B64 }}" | base64 -d > packaging/release.keystore
+          if [ -n "$KEYSTORE_B64" ]; then
+            printf '%s' "$KEYSTORE_B64" | base64 -d > packaging/release.keystore
+          else
+            echo "RUSTEEGEAR_KEYSTORE_B64 absent : build_apk.sh générera un keystore."
+          fi
       - name: Build .apk
         env:
           ANDROID_NDK_ROOT: ${{ steps.ndk.outputs.ndk-path }}
