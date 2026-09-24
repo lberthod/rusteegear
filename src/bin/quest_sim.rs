@@ -1,0 +1,657 @@
+//! Simulateur de Meta Quest 3 sur desktop — `cargo run --release --bin quest_sim`.
+//!
+//! Rend la scène VR **en stéréo, à la résolution réelle par œil du casque**
+//! (2064×2208), avec les FOV asymétriques et l'écart interpupillaire du
+//! profil (`xr::sim::QuestProfile`), exactement comme l'APK le fait dans la
+//! swapchain OpenXR ; puis affiche les deux yeux côte à côte. Même code de
+//! projection (`xr::math::EyeView`) et de scène (`xr::test_scene`) que l'APK :
+//! on développe et on vérifie les phases 1 à 6 de la roadmap VR ici, le casque
+//! ne sert plus qu'aux tests de validation.
+//!
+//! Commandes : clic gauche glissé = tourner la tête · ZQSD / WASD = marcher dans
+//! la pièce · Espace / C = se lever / s'accroupir · R = recentrer ·
+//! 2 = profil Quest 2 / 3 · Échap = quitter.
+//! Titre de la fenêtre : temps CPU+GPU par image comparé au budget du casque —
+//! indicatif seulement (GPU du Mac ≠ Adreno du Quest).
+
+use std::collections::HashSet;
+use std::sync::Arc;
+
+use motor3derust::time_compat::Instant;
+use motor3derust::xr::sim::{QuestProfile, SimHead};
+use motor3derust::xr::test_scene::CubeScene;
+use winit::application::ApplicationHandler;
+use winit::event::{ElementState, MouseButton, WindowEvent};
+use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
+use winit::keyboard::{KeyCode, PhysicalKey};
+use winit::window::{Window, WindowId};
+
+/// Format des « swapchains » simulées : celui que l'APK choisit en priorité.
+const EYE_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
+/// Sensibilité du regard à la souris (rad / pixel).
+const LOOK_SENSITIVITY: f32 = 0.004;
+
+const BLIT_SHADER: &str = r#"
+@group(0) @binding(0) var eye: texture_2d<f32>;
+@group(0) @binding(1) var samp: sampler;
+
+struct Out {
+    @builtin(position) pos: vec4<f32>,
+    @location(0) uv: vec2<f32>,
+};
+
+@vertex
+fn vs(@builtin(vertex_index) i: u32) -> Out {
+    // Triangle plein écran (3 sommets, pas de tampon).
+    let p = vec2<f32>(f32((i << 1u) & 2u), f32(i & 2u));
+    var out: Out;
+    out.pos = vec4<f32>(p * 2.0 - 1.0, 0.0, 1.0);
+    out.uv = vec2<f32>(p.x, 1.0 - p.y);
+    return out;
+}
+
+@fragment
+fn fs(in: Out) -> @location(0) vec4<f32> {
+    return textureSample(eye, samp, in.uv);
+}
+"#;
+
+/// Les deux « swapchains » d'œil simulées (une texture à 2 couches, comme
+/// celle du runtime XR) et ce qu'il faut pour les recopier dans la fenêtre.
+struct Eyes {
+    profile: QuestProfile,
+    views: [wgpu::TextureView; 2],
+    blit_groups: [wgpu::BindGroup; 2],
+    scene: CubeScene,
+}
+
+impl Eyes {
+    fn new(
+        device: &wgpu::Device,
+        profile: QuestProfile,
+        blit_layout: &wgpu::BindGroupLayout,
+        sampler: &wgpu::Sampler,
+    ) -> Self {
+        let texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("quest_sim_eyes"),
+            size: wgpu::Extent3d {
+                width: profile.eye_width,
+                height: profile.eye_height,
+                depth_or_array_layers: 2,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: EYE_FORMAT,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+            view_formats: &[],
+        });
+        let views = [0, 1].map(|layer| {
+            texture.create_view(&wgpu::TextureViewDescriptor {
+                label: Some("quest_sim_eye"),
+                dimension: Some(wgpu::TextureViewDimension::D2),
+                base_array_layer: layer,
+                array_layer_count: Some(1),
+                ..Default::default()
+            })
+        });
+        let blit_groups = [0, 1].map(|i| {
+            device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("quest_sim_blit"),
+                layout: blit_layout,
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: wgpu::BindingResource::TextureView(&views[i]),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: wgpu::BindingResource::Sampler(sampler),
+                    },
+                ],
+            })
+        });
+        let scene = CubeScene::new(device, EYE_FORMAT, profile.eye_width, profile.eye_height);
+        Self {
+            profile,
+            views,
+            blit_groups,
+            scene,
+        }
+    }
+}
+
+struct Gpu {
+    window: Arc<Window>,
+    device: wgpu::Device,
+    queue: wgpu::Queue,
+    surface: wgpu::Surface<'static>,
+    config: wgpu::SurfaceConfiguration,
+    blit_pipeline: wgpu::RenderPipeline,
+    blit_layout: wgpu::BindGroupLayout,
+    sampler: wgpu::Sampler,
+    eyes: Eyes,
+}
+
+impl Gpu {
+    async fn new(window: Arc<Window>, profile: QuestProfile) -> Result<Self, String> {
+        let size = window.inner_size();
+        let instance = wgpu::Instance::default();
+        let surface = instance
+            .create_surface(window.clone())
+            .map_err(|e| format!("surface : {e}"))?;
+        let adapter = instance
+            .request_adapter(&wgpu::RequestAdapterOptions {
+                power_preference: wgpu::PowerPreference::HighPerformance,
+                compatible_surface: Some(&surface),
+                force_fallback_adapter: false,
+            })
+            .await
+            .map_err(|e| format!("adaptateur GPU : {e}"))?;
+        let (device, queue) = adapter
+            .request_device(&wgpu::DeviceDescriptor {
+                label: Some("quest_sim"),
+                required_features: wgpu::Features::empty(),
+                required_limits: adapter.limits(),
+                experimental_features: wgpu::ExperimentalFeatures::disabled(),
+                memory_hints: wgpu::MemoryHints::Performance,
+                trace: wgpu::Trace::Off,
+            })
+            .await
+            .map_err(|e| format!("device : {e}"))?;
+        let caps = surface.get_capabilities(&adapter);
+        // Surface sRGB : les yeux sont en sRGB, l'échantillonnage les rend
+        // linéaires, l'écriture les ré-encode — couleurs identiques au casque.
+        let format = caps
+            .formats
+            .iter()
+            .copied()
+            .find(|f| f.is_srgb())
+            .or_else(|| caps.formats.first().copied())
+            .ok_or("aucun format de surface")?;
+        let config = wgpu::SurfaceConfiguration {
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+            format,
+            width: size.width.max(1),
+            height: size.height.max(1),
+            // Pas de vsync : le titre mesure alors le vrai coût d'une image.
+            present_mode: wgpu::PresentMode::AutoNoVsync,
+            alpha_mode: caps.alpha_modes.first().copied().unwrap_or_default(),
+            view_formats: vec![],
+            desired_maximum_frame_latency: 2,
+        };
+        surface.configure(&device, &config);
+
+        let blit_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("quest_sim_blit"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    count: None,
+                },
+            ],
+        });
+        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("quest_sim_blit"),
+            source: wgpu::ShaderSource::Wgsl(BLIT_SHADER.into()),
+        });
+        let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("quest_sim_blit"),
+            bind_group_layouts: &[Some(&blit_layout)],
+            immediate_size: 0,
+        });
+        let blit_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("quest_sim_blit"),
+            layout: Some(&pipeline_layout),
+            vertex: wgpu::VertexState {
+                module: &shader,
+                entry_point: Some("vs"),
+                compilation_options: Default::default(),
+                buffers: &[],
+            },
+            primitive: Default::default(),
+            depth_stencil: None,
+            multisample: Default::default(),
+            fragment: Some(wgpu::FragmentState {
+                module: &shader,
+                entry_point: Some("fs"),
+                compilation_options: Default::default(),
+                targets: &[Some(format.into())],
+            }),
+            multiview_mask: None,
+            cache: None,
+        });
+        let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("quest_sim_blit"),
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            ..Default::default()
+        });
+        let eyes = Eyes::new(&device, profile, &blit_layout, &sampler);
+        Ok(Self {
+            window,
+            device,
+            queue,
+            surface,
+            config,
+            blit_pipeline,
+            blit_layout,
+            sampler,
+            eyes,
+        })
+    }
+
+    fn set_profile(&mut self, profile: QuestProfile) {
+        self.eyes = Eyes::new(&self.device, profile, &self.blit_layout, &self.sampler);
+    }
+
+    fn resize(&mut self, width: u32, height: u32) {
+        if width > 0 && height > 0 {
+            self.config.width = width;
+            self.config.height = height;
+            self.surface.configure(&self.device, &self.config);
+        }
+    }
+
+    /// Rend les deux yeux puis les recopie côte à côte, proportions conservées.
+    fn render(&mut self, head: &SimHead) {
+        let frame = match self.surface.get_current_texture() {
+            wgpu::CurrentSurfaceTexture::Success(t)
+            | wgpu::CurrentSurfaceTexture::Suboptimal(t) => t,
+            wgpu::CurrentSurfaceTexture::Outdated | wgpu::CurrentSurfaceTexture::Lost => {
+                self.surface.configure(&self.device, &self.config);
+                return;
+            }
+            _ => return,
+        };
+        let eyes = head.eye_views(&self.eyes.profile);
+        self.eyes.scene.render(
+            &self.device,
+            &self.queue,
+            &self.eyes.views,
+            eyes.map(|e| e.view_proj()),
+        );
+
+        let target = frame.texture.create_view(&Default::default());
+        let mut encoder = self.device.create_command_encoder(&Default::default());
+        {
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("quest_sim_blit"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &target,
+                    depth_slice: None,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+            pass.set_pipeline(&self.blit_pipeline);
+            let (w, h) = (self.config.width as f32, self.config.height as f32);
+            let p = &self.eyes.profile;
+            let rects = side_by_side(w, h, p.eye_width as f32 / p.eye_height as f32);
+            for (group, (x, y, vw, vh)) in self.eyes.blit_groups.iter().zip(rects) {
+                pass.set_viewport(x, y, vw, vh, 0.0, 1.0);
+                pass.set_bind_group(0, group, &[]);
+                pass.draw(0..3, 0..1);
+            }
+        }
+        self.queue.submit([encoder.finish()]);
+        frame.present();
+    }
+}
+
+/// Deux rectangles (x, y, largeur, hauteur) côte à côte, chacun au format
+/// `eye_aspect` (largeur / hauteur) et centré dans sa moitié de fenêtre.
+fn side_by_side(w: f32, h: f32, eye_aspect: f32) -> [(f32, f32, f32, f32); 2] {
+    let half = w / 2.0;
+    let (vw, vh) = if half / h > eye_aspect {
+        (h * eye_aspect, h)
+    } else {
+        (half, half / eye_aspect)
+    };
+    let y = (h - vh) / 2.0;
+    [0.0, 1.0].map(|i| (i * half + (half - vw) / 2.0, y, vw, vh))
+}
+
+#[derive(Default)]
+struct Sim {
+    gpu: Option<Gpu>,
+    head: SimHead,
+    keys: HashSet<KeyCode>,
+    dragging: bool,
+    last_cursor: Option<(f64, f64)>,
+    last_frame: Option<Instant>,
+    /// Somme des durées d'image et nombre d'images depuis la dernière mise à
+    /// jour du titre (moyenne sur ~0,5 s, lisible).
+    acc_ms: f32,
+    acc_frames: u32,
+    quest2: bool,
+}
+
+impl Sim {
+    fn profile(&self) -> QuestProfile {
+        if self.quest2 {
+            QuestProfile::QUEST2
+        } else {
+            QuestProfile::QUEST3
+        }
+    }
+
+    fn axis(&self, pos: &[KeyCode], neg: &[KeyCode]) -> f32 {
+        let held = |ks: &[KeyCode]| ks.iter().any(|k| self.keys.contains(k));
+        (held(pos) as i32 - held(neg) as i32) as f32
+    }
+}
+
+impl ApplicationHandler for Sim {
+    fn resumed(&mut self, event_loop: &ActiveEventLoop) {
+        if self.gpu.is_some() {
+            return;
+        }
+        let attrs = Window::default_attributes()
+            .with_title("RusteeGear — simulateur Meta Quest 3")
+            .with_inner_size(winit::dpi::LogicalSize::new(1400.0, 760.0));
+        let window = match event_loop.create_window(attrs) {
+            Ok(w) => Arc::new(w),
+            Err(e) => {
+                log::error!("fenêtre : {e}");
+                event_loop.exit();
+                return;
+            }
+        };
+        match pollster::block_on(Gpu::new(window, self.profile())) {
+            Ok(gpu) => {
+                log::info!(
+                    "Simulateur {} : {}×{} px par œil, budget {:.1} ms",
+                    gpu.eyes.profile.name,
+                    gpu.eyes.profile.eye_width,
+                    gpu.eyes.profile.eye_height,
+                    gpu.eyes.profile.frame_budget_ms()
+                );
+                gpu.window.request_redraw();
+                self.gpu = Some(gpu);
+            }
+            Err(e) => {
+                log::error!("GPU : {e}");
+                event_loop.exit();
+            }
+        }
+    }
+
+    fn window_event(&mut self, event_loop: &ActiveEventLoop, _id: WindowId, event: WindowEvent) {
+        match event {
+            WindowEvent::CloseRequested => event_loop.exit(),
+            WindowEvent::Resized(size) => {
+                if let Some(gpu) = self.gpu.as_mut() {
+                    gpu.resize(size.width, size.height);
+                }
+            }
+            WindowEvent::KeyboardInput { event, .. } => {
+                let PhysicalKey::Code(code) = event.physical_key else {
+                    return;
+                };
+                if event.state == ElementState::Pressed {
+                    match code {
+                        KeyCode::Escape => event_loop.exit(),
+                        KeyCode::KeyR => self.head = SimHead::default(),
+                        KeyCode::Digit2 if !event.repeat => {
+                            self.quest2 = !self.quest2;
+                            let profile = self.profile();
+                            if let Some(gpu) = self.gpu.as_mut() {
+                                gpu.set_profile(profile);
+                                gpu.window.set_title(&format!(
+                                    "RusteeGear — simulateur {}",
+                                    profile.name
+                                ));
+                            }
+                        }
+                        _ => {}
+                    }
+                    self.keys.insert(code);
+                } else {
+                    self.keys.remove(&code);
+                }
+            }
+            WindowEvent::MouseInput {
+                button: MouseButton::Left,
+                state,
+                ..
+            } => {
+                self.dragging = state == ElementState::Pressed;
+            }
+            WindowEvent::CursorMoved { position, .. } => {
+                if let (true, Some((x, y))) = (self.dragging, self.last_cursor) {
+                    // Glisser vers la droite = tourner la tête à droite (lacet −).
+                    self.head.look(
+                        -((position.x - x) as f32) * LOOK_SENSITIVITY,
+                        -((position.y - y) as f32) * LOOK_SENSITIVITY,
+                    );
+                }
+                self.last_cursor = Some((position.x, position.y));
+            }
+            WindowEvent::RedrawRequested => {
+                let now = Instant::now();
+                let dt = self
+                    .last_frame
+                    .map(|t| now.duration_since(t).as_secs_f32())
+                    .unwrap_or(0.0)
+                    .min(0.1);
+                self.last_frame = Some(now);
+                // ZQSD (AZERTY) et WASD (QWERTY) : codes physiques, donc les
+                // deux dispositions tombent sur les mêmes touches.
+                let forward = self.axis(
+                    &[KeyCode::KeyW, KeyCode::ArrowUp],
+                    &[KeyCode::KeyS, KeyCode::ArrowDown],
+                );
+                let strafe = self.axis(
+                    &[KeyCode::KeyD, KeyCode::ArrowRight],
+                    &[KeyCode::KeyA, KeyCode::ArrowLeft],
+                );
+                let rise = self.axis(&[KeyCode::Space], &[KeyCode::KeyC]);
+                self.head.walk(forward, strafe, rise, dt);
+
+                let Some(gpu) = self.gpu.as_mut() else {
+                    return;
+                };
+                gpu.render(&self.head);
+                // Attend la fin du GPU : la mesure couvre CPU + GPU de l'image.
+                let _ = gpu.device.poll(wgpu::PollType::wait_indefinitely());
+                self.acc_ms += now.elapsed().as_secs_f32() * 1000.0;
+                self.acc_frames += 1;
+                if self.acc_ms >= 500.0 {
+                    let avg = self.acc_ms / self.acc_frames as f32;
+                    let p = gpu.eyes.profile;
+                    gpu.window.set_title(&format!(
+                        "RusteeGear — simulateur {} · {avg:.2} ms/image (budget {:.1} ms à {} Hz, GPU du Mac) · tête ({:.2}, {:.2}, {:.2})",
+                        p.name,
+                        p.frame_budget_ms(),
+                        p.refresh_hz,
+                        self.head.position.x,
+                        self.head.position.y,
+                        self.head.position.z,
+                    ));
+                    self.acc_ms = 0.0;
+                    self.acc_frames = 0;
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn about_to_wait(&mut self, _event_loop: &ActiveEventLoop) {
+        if let Some(gpu) = &self.gpu {
+            gpu.window.request_redraw();
+        }
+    }
+}
+
+/// `--snapshot <fichier.png> [--quest2]` : une image stéréo rendue hors écran
+/// (sans fenêtre), les deux yeux côte à côte réduits de moitié — vérification
+/// scriptable (CI, agent) de ce que verrait le casque depuis la pose de départ.
+async fn snapshot(path: &str, profile: QuestProfile) -> Result<(), String> {
+    let instance = wgpu::Instance::default();
+    let adapter = instance
+        .request_adapter(&wgpu::RequestAdapterOptions {
+            power_preference: wgpu::PowerPreference::HighPerformance,
+            compatible_surface: None,
+            force_fallback_adapter: false,
+        })
+        .await
+        .map_err(|e| format!("adaptateur GPU : {e}"))?;
+    let (device, queue) = adapter
+        .request_device(&wgpu::DeviceDescriptor::default())
+        .await
+        .map_err(|e| format!("device : {e}"))?;
+    let (w, h) = (profile.eye_width, profile.eye_height);
+    let texture = device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("quest_sim_snapshot"),
+        size: wgpu::Extent3d {
+            width: w,
+            height: h,
+            depth_or_array_layers: 2,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: EYE_FORMAT,
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+        view_formats: &[],
+    });
+    let views = [0, 1].map(|layer| {
+        texture.create_view(&wgpu::TextureViewDescriptor {
+            dimension: Some(wgpu::TextureViewDimension::D2),
+            base_array_layer: layer,
+            array_layer_count: Some(1),
+            ..Default::default()
+        })
+    });
+    let scene = CubeScene::new(&device, EYE_FORMAT, w, h);
+    let eyes = SimHead::default().eye_views(&profile);
+    scene.render(&device, &queue, &views, eyes.map(|e| e.view_proj()));
+
+    // Relecture des deux couches (lignes alignées sur 256 octets, contrainte wgpu).
+    let row = w * 4;
+    let padded =
+        row.div_ceil(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT) * wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
+    let buffer = device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("quest_sim_snapshot"),
+        size: u64::from(padded) * u64::from(h) * 2,
+        usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+        mapped_at_creation: false,
+    });
+    let mut encoder = device.create_command_encoder(&Default::default());
+    encoder.copy_texture_to_buffer(
+        wgpu::TexelCopyTextureInfo {
+            texture: &texture,
+            mip_level: 0,
+            origin: wgpu::Origin3d::ZERO,
+            aspect: wgpu::TextureAspect::All,
+        },
+        wgpu::TexelCopyBufferInfo {
+            buffer: &buffer,
+            layout: wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(padded),
+                rows_per_image: Some(h),
+            },
+        },
+        wgpu::Extent3d {
+            width: w,
+            height: h,
+            depth_or_array_layers: 2,
+        },
+    );
+    queue.submit([encoder.finish()]);
+    buffer.slice(..).map_async(wgpu::MapMode::Read, |_| {});
+    device
+        .poll(wgpu::PollType::wait_indefinitely())
+        .map_err(|e| format!("GPU : {e}"))?;
+    let data = buffer.slice(..).get_mapped_range();
+
+    // Côte à côte, réduit de moitié (un pixel sur deux) : ~2064×1104.
+    let (ow, oh) = (w, h / 2);
+    let mut out = vec![0u8; (ow * oh * 4) as usize];
+    for eye in 0..2u32 {
+        for y in 0..oh {
+            for x in 0..w / 2 {
+                let src = (eye * padded * h + (y * 2) * padded + (x * 2) * 4) as usize;
+                let dst = ((y * ow + eye * (w / 2) + x) * 4) as usize;
+                out[dst..dst + 4].copy_from_slice(&data[src..src + 4]);
+            }
+        }
+    }
+    image::save_buffer(path, &out, ow, oh, image::ColorType::Rgba8)
+        .map_err(|e| format!("écriture de {path} : {e}"))
+}
+
+fn main() {
+    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
+    let args: Vec<String> = std::env::args().collect();
+    if let Some(i) = args.iter().position(|a| a == "--snapshot") {
+        let Some(path) = args.get(i + 1) else {
+            eprintln!("usage : quest_sim --snapshot <fichier.png> [--quest2]");
+            std::process::exit(2);
+        };
+        let profile = if args.iter().any(|a| a == "--quest2") {
+            QuestProfile::QUEST2
+        } else {
+            QuestProfile::QUEST3
+        };
+        match pollster::block_on(snapshot(path, profile)) {
+            Ok(()) => println!("{path} ({} — les deux yeux côte à côte)", profile.name),
+            Err(e) => {
+                eprintln!("simulateur : {e}");
+                std::process::exit(1);
+            }
+        }
+        return;
+    }
+    let event_loop = match EventLoop::new() {
+        Ok(el) => el,
+        Err(e) => {
+            eprintln!("boucle d'événements : {e}");
+            return;
+        }
+    };
+    event_loop.set_control_flow(ControlFlow::Poll);
+    let mut sim = Sim::default();
+    if let Err(e) = event_loop.run_app(&mut sim) {
+        eprintln!("simulateur : {e}");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::side_by_side;
+
+    #[test]
+    fn eyes_fill_their_half_without_distortion() {
+        let aspect = 2064.0 / 2208.0;
+        for (w, h) in [(1400.0, 760.0), (800.0, 1200.0), (3000.0, 800.0)] {
+            let [l, r] = side_by_side(w, h, aspect);
+            for (x, y, vw, vh) in [l, r] {
+                assert!((vw / vh - aspect).abs() < 1e-4);
+                assert!(x >= 0.0 && y >= 0.0 && x + vw <= w + 1e-3 && y + vh <= h + 1e-3);
+            }
+            assert!(l.0 + l.2 <= r.0 + 1e-3, "l'œil gauche reste à gauche");
+        }
+    }
+}

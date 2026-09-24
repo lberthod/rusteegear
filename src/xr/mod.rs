@@ -1,11 +1,16 @@
 //! Export réalité virtuelle (Meta Quest et casques OpenXR Android) — roadmap
 //! `docs/roadmapExportVRQuest24septembre.md`.
 //!
-//! `math` (projections stéréo) compile partout et se teste sur le poste de dev ;
-//! la session OpenXR elle-même n'existe que dans l'APK VR (Android + feature `vr`,
-//! produit par `packaging/build_quest.sh`).
+//! - `math` : projections stéréo (partout, testé sur le poste de dev) ;
+//! - `sim` : casque simulé (profil Quest 3, tête/manettes au clavier-souris),
+//!   utilisé par le simulateur desktop `cargo run --bin quest_sim` ;
+//! - `test_scene` : scène de test commune au simulateur et à l'APK ;
+//! - `hello` : session OpenXR réelle, seulement dans l'APK VR (Android +
+//!   feature `vr`, produit par `packaging/build_quest.sh`).
 
 pub mod math;
+pub mod sim;
+pub mod test_scene;
 
 #[cfg(all(target_os = "android", feature = "vr"))]
 pub mod hello;

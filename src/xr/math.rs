@@ -45,12 +45,30 @@ pub fn view_from_pose(orientation: Quat, position: Vec3) -> Mat4 {
     Mat4::from_rotation_translation(orientation.normalize(), position).inverse()
 }
 
+/// Plans de coupe des vues VR : 5 cm (la main tendue près du visage reste
+/// visible), 100 m (même `FAR` que `OrbitCamera`).
+pub const NEAR: f32 = 0.05;
+pub const FAR: f32 = 100.0;
+
+/// Un œil pour une image : pose dans l'espace de référence + champ de vision.
+/// Produit par `xrLocateViews` sur le casque, par `sim::SimHead` sur desktop.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct EyeView {
+    pub orientation: Quat,
+    pub position: Vec3,
+    pub fov: Fov,
+}
+
+impl EyeView {
+    /// Matrice vue-projection wgpu de cet œil.
+    pub fn view_proj(&self) -> Mat4 {
+        projection_from_fov(self.fov, NEAR, FAR) * view_from_pose(self.orientation, self.position)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    const NEAR: f32 = 0.05;
-    const FAR: f32 = 100.0;
 
     fn project(m: Mat4, p: Vec3) -> Vec3 {
         let c = m * p.extend(1.0);

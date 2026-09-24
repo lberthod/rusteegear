@@ -275,6 +275,9 @@ Code du spike écrit, compilé et empaqueté ; **reste le test dans le casque**.
 | Instance/device Vulkan créés par OpenXR puis importés dans wgpu, swapchain 2 couches, boucle de frame, 5 cubes + sol en espace `STAGE` | `src/xr/hello.rs` | ✅ compile (`clippy` propre), **à tester** |
 | `android_main` bascule vers `xr::hello::run` si `vr` | `src/lib.rs` | ✅ APK téléphone inchangé |
 | Manifeste Quest (catégorie VR, headtracking, mains, `supportedDevices`), loader Khronos 1.1.63 | `packaging/build_quest.sh` | ✅ APK debug 9,2 Mo |
+| Scène de test partagée APK / simulateur | `src/xr/test_scene.rs` | ✅ |
+| **Simulateur Meta Quest 3** (profil Quest 3/2, tête et manettes simulées, 6 tests) | `src/xr/sim.rs`, `src/bin/quest_sim.rs` | ✅ stéréo vérifiée (capture) |
+| Job CI `cargo build --lib --target aarch64-linux-android --features vr` | `.github/workflows/ci.yml` | ✅ |
 
 ### Procédure de test (Quest 3)
 
@@ -300,3 +303,43 @@ proprement`).
 
 En cas d'échec : conserver la sortie `logcat` complète — elle suffit à diagnostiquer
 les étapes (loader, instance XR, Vulkan, session, swapchain).
+
+## 9. Développer sans casque : le simulateur Quest (24 septembre 2026)
+
+macOS n'a aucun runtime OpenXR ; pour ne pas bloquer chaque phase sur un test
+casque, RusteeGear embarque son propre simulateur :
+
+```bash
+cargo run --release --bin quest_sim                     # fenêtre interactive
+cargo run --release --bin quest_sim -- --snapshot s.png  # image stéréo hors écran (CI, agent)
+```
+
+- **Même code que l'APK** : `xr::math::EyeView` (projection asymétrique) et
+  `xr::test_scene` sont appelés à l'identique par `xr::hello` (casque) et par
+  `quest_sim` (desktop). Seule la source des poses change : `xrLocateViews` d'un
+  côté, `xr::sim::SimHead` de l'autre.
+- **Profil matériel réel** (`QuestProfile::QUEST3`) : 2064×2208 px par œil,
+  FOV asymétriques, IPD 63 mm, 90 Hz (budget 11,1 ms). `2` bascule sur le
+  profil Quest 2 (1832×1920, 72 Hz). Les FOV sont approximatifs : les remplacer
+  par ceux que journalise l'APK au premier test.
+- **Commandes** : clic gauche glissé = tête · ZQSD/WASD = marcher dans la pièce
+  · Espace/C = se lever/s'accroupir · R = recentrer · Échap = quitter. Le titre
+  affiche le temps par image comparé au budget (indicatif : GPU du Mac).
+- **Manettes simulées** : `SimHead::controller_pose` (mains à hauteur de
+  taille, suivant le lacet) — base de la phase 3.
+
+### Ce que le simulateur remplace, ce qu'il ne remplace pas
+
+| Vérification | Simulateur | Casque |
+|---|---|---|
+| Stéréo, parallaxe, FOV asymétriques, échelle 1 u = 1 m | ✅ (tests + capture) | confirmation |
+| Rendu de Rivière en stéréo (P1), UI VR (P5), entrées (P3), confort de locomotion (P4), audio spatial et Lua (P6) | ✅ | confirmation finale |
+| Interop OpenXR ↔ Vulkan ↔ wgpu (`xr::hello`) | ❌ | **obligatoire** (P0) |
+| Performances Adreno 740 à 90 Hz (P2) | ordre de grandeur | **obligatoire** |
+| Suivi des mains réel (P8), Guardian, exigences Horizon Store | ❌ | **obligatoire** |
+
+**Décision (24 sept.)** : les phases 1 à 6 se développent et se vérifient sur le
+simulateur ; le casque sert de validation par jalon (P0, puis fin de P2 et P8).
+Prochaine étape technique : un trait `XrBackend` (poses d'yeux, cibles de rendu,
+entrées) implémenté par `xr::hello` et par `quest_sim`, pour que le
+`Renderer::render_views` de la phase 1 soit écrit une fois et tourne des deux côtés.
