@@ -837,6 +837,15 @@ async fn snapshot(path: &str, profile: QuestProfile, choice: SceneChoice) -> Res
     if let Ok(level) = std::env::var("QUEST_SIM_SWITCH") {
         content.load_level(SceneChoice::parse(&level));
     }
+    // Ball : `QUEST_SIM_BALL=2.3` démarre au 3e trou du 2e parcours.
+    if let (Ok(spec), XrContent::Balls(game)) = (std::env::var("QUEST_SIM_BALL"), &mut content)
+        && let Some((c, h)) = spec.split_once('.')
+    {
+        game.start_at(
+            c.parse::<usize>().unwrap_or(1).saturating_sub(1),
+            h.parse::<usize>().unwrap_or(1).saturating_sub(1),
+        );
+    }
     // Touches tenues pendant la seconde de jeu (`QUEST_SIM_HOLD=W,F`) :
     // vérifie déplacement, rotation, actions sans fenêtre.
     let head = SimHead::default();

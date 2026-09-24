@@ -37,7 +37,7 @@ pub enum SceneChoice {
     RageQuit,
     /// Sélecteur de niveaux : Rivière en fond, menu « Choisir un niveau » ouvert.
     Launcher,
-    /// « Balles & cubes » : bac à sable léger aux mains (`xr::balls`), sans le
+    /// Ball : jeu de lancer aux mains façon mini-golf (`xr::ball`), sans le
     /// `Renderer` du moteur — tient la fréquence du casque.
     Balls,
 }
@@ -92,7 +92,7 @@ impl SceneChoice {
             Self::Hameau => "Hameau",
             Self::HerRoad => "HerRoad · course",
             Self::RageQuit => "RageQuit · plateformer",
-            Self::Balls => "Balles & cubes",
+            Self::Balls => "Ball",
         }
     }
 
@@ -199,7 +199,7 @@ enum MenuAction {
 
 pub enum XrContent {
     Cubes(CubeScene),
-    Balls(Box<super::balls::BallScene>),
+    Balls(Box<super::ball::BallGame>),
     Game(Box<GameView>),
 }
 
@@ -263,7 +263,7 @@ impl XrContent {
     ) -> Self {
         match choice {
             SceneChoice::Cubes => Self::Cubes(CubeScene::new(device, format, width, height)),
-            SceneChoice::Balls => Self::Balls(Box::new(super::balls::BallScene::new(
+            SceneChoice::Balls => Self::Balls(Box::new(super::ball::BallGame::new(
                 device, format, width, height,
             ))),
             _ => {

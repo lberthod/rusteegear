@@ -2468,8 +2468,12 @@ pub extern "C" fn android_main(android_app: winit::platform::android::activity::
 
     // APK VR Meta Quest (feature `vr`, `packaging/build_quest.sh`) : session OpenXR
     // à la place de la fenêtre winit — phase 0 de la roadmap VR, cf. `xr::hello`.
+    // Dossier de données posé avant : records (HerRoad, Ball) aussi en VR.
     #[cfg(feature = "vr")]
     {
+        if let Some(path) = android_app.internal_data_path() {
+            crate::assets::set_android_data_dir(path);
+        }
         crate::xr::hello::run(android_app);
         return;
     }
