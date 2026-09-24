@@ -961,6 +961,10 @@ impl AppState {
         if !self.was_playing {
             self.advance_play();
         }
+        // Même règle que `advance_play` : le regard VR dirige la caméra.
+        if let Some(yaw) = self.vr_camera_yaw {
+            self.camera.yaw = yaw;
+        }
         for _ in 0..n {
             self.sim_step(1.0 / 60.0);
         }
@@ -1306,6 +1310,10 @@ impl AppState {
             // du joueur, notamment, est intégrée depuis `transform.rotation`).
             if steps > 0 {
                 self.restore_sim_poses();
+            }
+            // VR : le regard dirige la caméra (cf. `vr_camera_yaw`), en dernier.
+            if let Some(yaw) = self.vr_camera_yaw {
+                self.camera.yaw = yaw;
             }
             for _ in 0..steps {
                 self.sim_step(FIXED_DT);

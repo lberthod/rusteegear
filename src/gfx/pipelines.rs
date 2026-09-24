@@ -406,6 +406,8 @@ pub(crate) struct MultiviewSet {
     pub(super) sky_pipeline: wgpu::RenderPipeline,
     pub(super) particle_pipeline: wgpu::RenderPipeline,
     pub(super) skinned_pipeline: wgpu::RenderPipeline,
+    /// Lignes de debug / repères de manettes VR.
+    pub(super) gizmo_pipeline: wgpu::RenderPipeline,
     /// Deux `CameraUniform` consécutifs (œil gauche puis droit).
     pub(super) camera_buf: wgpu::Buffer,
     pub(super) camera_bind_group: wgpu::BindGroup,
@@ -1417,7 +1419,7 @@ pub(super) fn build(
         bind_group_layouts: &[Some(&camera_layout)],
         immediate_size: 0,
     });
-    let gizmo_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+    let gizmo_pipeline_desc = wgpu::RenderPipelineDescriptor {
         label: Some("gizmo_pipeline"),
         layout: Some(&gizmo_layout),
         vertex: wgpu::VertexState {
@@ -1456,7 +1458,8 @@ pub(super) fn build(
         multisample,
         multiview_mask: None,
         cache: None,
-    });
+    };
+    let gizmo_pipeline = device.create_render_pipeline(&gizmo_pipeline_desc);
     // capacité : 3 axes × RING_SEGMENTS segments × 2 sommets (anneaux de rotation)
     // + un marqueur 3 axes (6 sommets) par lumière ponctuelle + 6 pour la caméra de jeu.
     // 3 axes×anneaux + (croix 6 + ligne spot 2) par lumière + marqueur caméra 6
@@ -1556,6 +1559,7 @@ pub(super) fn build(
         let sky_mv = module("sky_shader_mv", include_str!("shaders/sky.wgsl"));
         let particle_mv = module("particle_shader_mv", include_str!("shaders/particles.wgsl"));
         let skinned_mv = module("skinned_shader_mv", include_str!("shaders/skinned.wgsl"));
+        let gizmo_mv = module("gizmo_shader_mv", include_str!("shaders/gizmo.wgsl"));
         let variant = |desc: &wgpu::RenderPipelineDescriptor,
                        vs: &wgpu::ShaderModule,
                        fs: &wgpu::ShaderModule| {
@@ -1589,6 +1593,7 @@ pub(super) fn build(
             sky_pipeline: variant(&sky_pipeline_desc, &sky_mv, &sky_mv),
             particle_pipeline: variant(&particle_pipeline_desc, &particle_mv, &particle_mv),
             skinned_pipeline: variant(&skinned_pipeline_desc, &skinned_mv, &main_mv),
+            gizmo_pipeline: variant(&gizmo_pipeline_desc, &gizmo_mv, &gizmo_mv),
             camera_buf,
             camera_bind_group,
         }

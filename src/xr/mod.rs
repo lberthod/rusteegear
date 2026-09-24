@@ -12,11 +12,15 @@
 //!   feature `vr`, produit par `packaging/build_quest.sh`).
 
 pub mod content;
+pub mod input;
+pub mod locomotion;
 pub mod math;
 pub mod quality;
 pub mod rig;
 pub mod sim;
 pub mod test_scene;
 
+#[cfg(all(target_os = "android", feature = "vr"))]
+pub mod actions;
 #[cfg(all(target_os = "android", feature = "vr"))]
 pub mod hello;

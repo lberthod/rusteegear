@@ -463,3 +463,31 @@ résolution (8,3 ms à × 0,7).
 **Reste pour le casque** (non mesurable sur Mac) : foveation fixe
 (`XR_FB_foveation`), textures ASTC, choix final 72/90 Hz et de la résolution
 selon l'OVR Metrics Tool.
+
+## 13. Phases 3 et 4 — manettes, déplacement, confort (24 septembre 2026)
+
+Même code pour les vraies manettes (APK) et le simulateur.
+
+| Élément | Fichier | Vérifié |
+|---|---|---|
+| État des manettes Touch (`XrInput`, poses poignée/visée, gâchettes, grips, sticks, A/B/X/Y, menu), correspondance vers les commandes du jeu, zone morte, vibrations sur fronts montants (coup encaissé : deux mains ; coup porté : main droite) | `src/xr/input.rs` | 4 tests |
+| Actions OpenXR (APK) : jeu d'actions, correspondances Touch + profil générique de repli, poses via espaces d'action, vibrations `xrApplyHapticFeedback` | `src/xr/actions.rs`, `src/xr/hello.rs` | compile (Android, clippy) — **à tester au casque** |
+| Manettes simulées au clavier/souris (ZQSD = stick gauche, A/E = crans, Espace = A, F/clic droit = gâchette…), `QUEST_SIM_HOLD=W,F` pour les captures | `src/bin/quest_sim.rs` | captures |
+| Vue **première personne** (la pièce suit le personnage, personnage masqué) ⇄ **spectateur** (clic stick droit / V) | `src/xr/content.rs`, `src/xr/locomotion.rs` | captures |
+| **Rotation par crans** 30° autour de la tête (hystérésis : un cran par poussée) | `xr::locomotion::SnapTurn` | 2 tests |
+| **Vignette** de confort selon la vitesse (lissée), pipeline dédié | `src/gfx/renderer/xr.rs` | test naga + capture |
+| Repères des manettes (boîtes filaires + pointeur) : lignes de debug, variante multiview du pipeline `gizmo` | `gfx::pipelines`, `gfx::multiview` | capture |
+| Déplacement relatif au **regard** : `engine_move` + `AppState::vr_camera_yaw` (appliqué après la caméra de jeu, qui réimpose son lacet) | `xr::locomotion`, `app::simulation` | **test d'intégration sur le vrai moteur** (4 regards × avant/droite) |
+
+Mesures dans le simulateur (1 s de jeu, `QUEST_SIM_HOLD`) : W → le personnage
+avance vers le regard (z 24 → 14,2) ; D → vers la droite (x 3,5 → 9,3) ;
+Q puis W → cran de 30° à gauche puis avance dans la nouvelle direction ; V →
+vue spectateur. Performance inchangée (~10 ms/image stéréo sur Mac).
+
+**Bug du jeu trouvé au passage (hors VR)** : dans Rivière, au clavier (W) et
+à la manette, « avant » fait marcher le personnage **vers la caméra** quand
+elle est alignée sur Z (`camera_relative_move` renvoie des coordonnées monde,
+puis `vz = −my` inverse Z une seconde fois : réflexion du repère caméra ;
+vérifié par rendu avant/après). Le tactile n'est pas touché. Tâche séparée
+proposée ; la VR compense via `engine_move` et son test d'intégration cassera
+si la convention du moteur change.

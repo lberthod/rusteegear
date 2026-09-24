@@ -178,6 +178,9 @@ fn run_inner(app: &AndroidApp) -> Result<(), String> {
     // pour le test pur de la phase 0) ; Rivière par défaut depuis la phase 1.
     let choice = SceneChoice::parse(option_env!("RUSTEEGEAR_VR_SCENE").unwrap_or("riviere"));
     log::info!("VR : scène {choice:?}");
+    // Manettes Touch (phase 3) : actions OpenXR, lues à chaque image.
+    let actions = super::actions::TouchActions::new(&instance, &session)
+        .map_err(err("actions des manettes"))?;
     let mut content = XrContent::new(
         choice,
         &gpu.adapter,
@@ -282,7 +285,17 @@ fn run_inner(app: &AndroidApp) -> Result<(), String> {
             }
         });
         let [left, right] = &eye_views[image_index];
-        content.render(&gpu.device, &gpu.queue, eyes, [left, right], width, height);
+        let input = actions.read(&session, &stage, frame_state.predicted_display_time);
+        let haptics = content.render(
+            &gpu.device,
+            &gpu.queue,
+            eyes,
+            &input,
+            [left, right],
+            width,
+            height,
+        );
+        actions.vibrate(&session, haptics);
 
         swapchain.release_image().map_err(err("release"))?;
         let rect = xr::Rect2Di {

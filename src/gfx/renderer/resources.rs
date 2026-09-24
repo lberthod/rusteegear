@@ -346,6 +346,8 @@ impl Renderer {
             mv,
             mv_active: false,
             mesh_classes: Vec::new(),
+            vr_vignette: 0.0,
+            vignette: None,
             draw_distance_scale: 1.0,
             planar_reflections: true,
         }

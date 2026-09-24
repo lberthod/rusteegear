@@ -101,6 +101,7 @@ mod tests {
             ("sky.wgsl", include_str!("shaders/sky.wgsl")),
             ("particles.wgsl", include_str!("shaders/particles.wgsl")),
             ("skinned.wgsl", include_str!("shaders/skinned.wgsl")),
+            ("gizmo.wgsl", include_str!("shaders/gizmo.wgsl")),
         ] {
             validate(name, src);
             let mv = multiview_wgsl(src, CAMERA_SIZE);

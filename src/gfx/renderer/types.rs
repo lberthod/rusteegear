@@ -563,6 +563,11 @@ pub struct Renderer {
     /// indexé comme `scene.imported` avec son chemin pour revalidation — cf.
     /// `Renderer::refresh_mesh_classes`.
     pub(super) mesh_classes: Vec<(String, MeshClass)>,
+    /// Vignette de confort VR (bords assombris pendant le déplacement au stick,
+    /// phase 4) : intensité 0..1 posée par l'appelant avant `render_views`.
+    pub vr_vignette: f32,
+    /// Pipeline de la vignette, créé au premier besoin (`xr.rs`).
+    pub(super) vignette: Option<(wgpu::RenderPipeline, wgpu::Buffer, wgpu::BindGroup)>,
 }
 
 /// Classement d'un modèle importé, dérivé une fois de son nom de fichier.

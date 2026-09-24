@@ -16,9 +16,10 @@
 //! Scène : `--scene riviere` (défaut, phase 1 : la vraie partie Rivière rendue
 //! par le `Renderer` du moteur) ou `--scene cubes` (scène de test de la phase 0).
 //!
-//! Commandes : clic gauche glissé = tourner la tête · ZQSD / WASD = marcher dans
-//! la pièce · Espace / C = se lever / s'accroupir · R = recentrer ·
-//! 2 = profil Quest 2 / 3 · Échap = quitter.
+//! Commandes : clic gauche glissé = tourner la tête · flèches = marcher dans la
+//! pièce · Page↑ / Page↓ = se lever / s'accroupir · R = recentrer · 2 = profil
+//! Quest 2 / 3 · Échap = quitter. Manettes Touch simulées (ZQSD/WASD = stick
+//! gauche, Espace = A, F ou clic droit = gâchette…) : cf. `Sim::sim_input`.
 //! Titre de la fenêtre : temps CPU+GPU par image comparé au budget du casque —
 //! indicatif seulement (GPU du Mac ≠ Adreno du Quest).
 
@@ -27,6 +28,7 @@ use std::sync::Arc;
 
 use motor3derust::time_compat::Instant;
 use motor3derust::xr::content::{SceneChoice, XrContent};
+use motor3derust::xr::input::{HandInput, LEFT, RIGHT, XrInput};
 use motor3derust::xr::sim::{QuestProfile, SimHead};
 use winit::application::ApplicationHandler;
 use winit::event::{ElementState, MouseButton, WindowEvent};
@@ -342,7 +344,7 @@ impl Gpu {
     }
 
     /// Rend les deux yeux puis les recopie côte à côte, proportions conservées.
-    fn render(&mut self, head: &SimHead) {
+    fn render(&mut self, head: &SimHead, input: &XrInput) {
         let frame = match self.surface.get_current_texture() {
             wgpu::CurrentSurfaceTexture::Success(t)
             | wgpu::CurrentSurfaceTexture::Suboptimal(t) => t,
@@ -353,14 +355,25 @@ impl Gpu {
             _ => return,
         };
         let p = self.eyes.profile;
-        self.content.render(
+        let haptics = self.content.render(
             &self.device,
             &self.queue,
             head.eye_views(&p),
+            input,
             [&self.eyes.views[0], &self.eyes.views[1]],
             p.eye_width,
             p.eye_height,
         );
+        // Pas de moteur de vibration sur un Mac : on le dit.
+        for (hand, h) in ["gauche", "droite"].iter().zip(haptics) {
+            if let Some(h) = h {
+                log::info!(
+                    "Vibration manette {hand} : {:.0} % pendant {:.0} ms",
+                    h.amplitude * 100.0,
+                    h.seconds * 1000.0
+                );
+            }
+        }
 
         let target = frame.texture.create_view(&Default::default());
         let mut encoder = self.device.create_command_encoder(&Default::default());
@@ -424,6 +437,7 @@ struct Sim {
     quest2: bool,
     choice: Option<SceneChoice>,
     title_updates: u32,
+    right_trigger_mouse: bool,
 }
 
 impl Sim {
@@ -434,6 +448,23 @@ impl Sim {
             QuestProfile::QUEST3
         };
         p.scaled(render_scale())
+    }
+
+    /// Manettes Touch simulées (phase 3) : poses devant le corps
+    /// (`SimHead::controller_pose`), boutons et sticks au clavier :
+    ///
+    /// | Touche | Manette |
+    /// |---|---|
+    /// | ZQSD / WASD | stick gauche (déplacement du personnage) |
+    /// | A / E (Q / E en QWERTY) | stick droit ← → (rotation par crans) |
+    /// | Espace | A (saut) · Maj : B (ruée) |
+    /// | F ou clic droit | gâchette droite (attaque) |
+    /// | T | gâchette gauche (boule de feu) · G : grip gauche (bouclier) |
+    /// | H | X (soin) · Y : Y (arme) |
+    /// | V | clic du stick droit (vue 1re personne ⇄ spectateur) |
+    /// | Tab | menu |
+    fn sim_input(&self) -> XrInput {
+        input_from_keys(&self.keys, &self.head, self.right_trigger_mouse)
     }
 
     fn axis(&self, pos: &[KeyCode], neg: &[KeyCode]) -> f32 {
@@ -519,6 +550,14 @@ impl ApplicationHandler for Sim {
             } => {
                 self.dragging = state == ElementState::Pressed;
             }
+            WindowEvent::MouseInput {
+                button: MouseButton::Right,
+                state,
+                ..
+            } => {
+                // Clic droit = gâchette droite (attaque), comme F.
+                self.right_trigger_mouse = state == ElementState::Pressed;
+            }
             WindowEvent::CursorMoved { position, .. } => {
                 if let (true, Some((x, y))) = (self.dragging, self.last_cursor) {
                     // Glisser vers la droite = tourner la tête à droite (lacet −).
@@ -539,21 +578,19 @@ impl ApplicationHandler for Sim {
                 self.last_frame = Some(now);
                 // ZQSD (AZERTY) et WASD (QWERTY) : codes physiques, donc les
                 // deux dispositions tombent sur les mêmes touches.
-                let forward = self.axis(
-                    &[KeyCode::KeyW, KeyCode::ArrowUp],
-                    &[KeyCode::KeyS, KeyCode::ArrowDown],
-                );
-                let strafe = self.axis(
-                    &[KeyCode::KeyD, KeyCode::ArrowRight],
-                    &[KeyCode::KeyA, KeyCode::ArrowLeft],
-                );
-                let rise = self.axis(&[KeyCode::Space], &[KeyCode::KeyC]);
+                // Marche **physique** dans la pièce (flèches) et hauteur de la
+                // tête (Page↑/Page↓) — le déplacement du personnage, lui, est au
+                // stick gauche simulé (ZQSD/WASD), cf. `sim_input`.
+                let forward = self.axis(&[KeyCode::ArrowUp], &[KeyCode::ArrowDown]);
+                let strafe = self.axis(&[KeyCode::ArrowRight], &[KeyCode::ArrowLeft]);
+                let rise = self.axis(&[KeyCode::PageUp], &[KeyCode::PageDown]);
                 self.head.walk(forward, strafe, rise, dt);
+                let input = self.sim_input();
 
                 let Some(gpu) = self.gpu.as_mut() else {
                     return;
                 };
-                gpu.render(&self.head);
+                gpu.render(&self.head, &input);
                 // Pas d'attente du GPU : comme dans un casque, CPU (image N+1) et
                 // GPU (image N) travaillent en parallèle, `get_current_texture`
                 // freine quand le GPU prend du retard. Le temps par image est donc
@@ -607,6 +644,78 @@ impl ApplicationHandler for Sim {
             gpu.window.request_redraw();
         }
     }
+}
+
+/// Manettes simulées depuis les touches tenues (cf. la table de `Sim::sim_input`).
+fn input_from_keys(keys: &HashSet<KeyCode>, head: &SimHead, right_mouse: bool) -> XrInput {
+    let held = |k: KeyCode| keys.contains(&k);
+    let axis = |pos: KeyCode, neg: KeyCode| (held(pos) as i32 - held(neg) as i32) as f32;
+    let pose = |hand: usize| Some(head.controller_pose(hand));
+    let left = HandInput {
+        grip: pose(LEFT),
+        aim: pose(LEFT),
+        trigger: if held(KeyCode::KeyT) { 1.0 } else { 0.0 },
+        squeeze: if held(KeyCode::KeyG) { 1.0 } else { 0.0 },
+        stick: (
+            axis(KeyCode::KeyD, KeyCode::KeyA),
+            axis(KeyCode::KeyW, KeyCode::KeyS),
+        ),
+        stick_click: false,
+        primary: held(KeyCode::KeyH),
+        secondary: held(KeyCode::KeyY),
+        menu: held(KeyCode::Tab),
+    };
+    let right = HandInput {
+        grip: pose(RIGHT),
+        aim: pose(RIGHT),
+        trigger: if held(KeyCode::KeyF) || right_mouse {
+            1.0
+        } else {
+            0.0
+        },
+        squeeze: 0.0,
+        stick: (axis(KeyCode::KeyE, KeyCode::KeyQ), 0.0),
+        stick_click: held(KeyCode::KeyV),
+        primary: held(KeyCode::Space),
+        secondary: held(KeyCode::ShiftLeft) || held(KeyCode::ShiftRight),
+        menu: false,
+    };
+    XrInput {
+        hands: [left, right],
+    }
+}
+
+/// Touches tenues pendant une capture (`QUEST_SIM_HOLD=W,F`) : noms des
+/// touches de la table de `Sim::sim_input` (lettres, `Space`, `Shift`, `Tab`).
+fn held_keys_from_env() -> HashSet<KeyCode> {
+    let Ok(list) = std::env::var("QUEST_SIM_HOLD") else {
+        return HashSet::new();
+    };
+    list.split(',')
+        .filter_map(|k| {
+            Some(match k.trim().to_ascii_uppercase().as_str() {
+                "W" => KeyCode::KeyW,
+                "A" => KeyCode::KeyA,
+                "S" => KeyCode::KeyS,
+                "D" => KeyCode::KeyD,
+                "Q" => KeyCode::KeyQ,
+                "E" => KeyCode::KeyE,
+                "F" => KeyCode::KeyF,
+                "T" => KeyCode::KeyT,
+                "G" => KeyCode::KeyG,
+                "H" => KeyCode::KeyH,
+                "Y" => KeyCode::KeyY,
+                "V" => KeyCode::KeyV,
+                "SPACE" => KeyCode::Space,
+                "SHIFT" => KeyCode::ShiftLeft,
+                "TAB" => KeyCode::Tab,
+                other => {
+                    eprintln!("QUEST_SIM_HOLD : touche inconnue « {other} »");
+                    return None;
+                }
+            })
+        })
+        .collect()
 }
 
 /// `--snapshot <fichier.png> [--quest2]` : une image stéréo rendue hors écran
@@ -666,17 +775,38 @@ async fn snapshot(path: &str, profile: QuestProfile, choice: SceneChoice) -> Res
     // Une partie : ~1 s de jeu avant la capture (physique posée, créatures en
     // mouvement, rig placé sur le terrain), rendue à chaque pas comme en direct.
     let frames = if choice == SceneChoice::Cubes { 1 } else { 60 };
+    // Touches tenues pendant la seconde de jeu (`QUEST_SIM_HOLD=W,F`) :
+    // vérifie déplacement, rotation, actions sans fenêtre.
+    let head = SimHead::default();
+    let input = input_from_keys(&held_keys_from_env(), &head, false);
     for _ in 0..frames {
         content.render(
             &device,
             &queue,
-            SimHead::default().eye_views(&profile),
+            head.eye_views(&profile),
+            &input,
             [&views[0], &views[1]],
             w,
             h,
         );
         let _ = device.poll(wgpu::PollType::wait_indefinitely());
         std::thread::sleep(std::time::Duration::from_millis(16));
+    }
+    if let XrContent::Game(g) = &content
+        && let (Some(i), Some(rig)) = (g.app.player_index(), g.rig)
+    {
+        let p = g.app.scene.objects[i].transform.position;
+        println!(
+            "Personnage en ({:.2}, {:.2}, {:.2}) · rig ({:.2}, {:.2}, {:.2}), lacet {:.0}° · vue {:?}",
+            p.x,
+            p.y,
+            p.z,
+            rig.origin.x,
+            rig.origin.y,
+            rig.origin.z,
+            rig.yaw.to_degrees(),
+            g.comfort.view
+        );
     }
 
     // Relecture des deux couches (lignes alignées sur 256 octets, contrainte wgpu).
@@ -793,7 +923,15 @@ async fn bench(seconds: f32, profile: QuestProfile, choice: SceneChoice) -> Resu
     let eyes = SimHead::default().eye_views(&profile);
     // Échauffement : pipelines compilés, rig posé, caches remplis.
     for _ in 0..30 {
-        content.render(&device, &queue, eyes, [&views[0], &views[1]], w, h);
+        content.render(
+            &device,
+            &queue,
+            eyes,
+            &XrInput::default(),
+            [&views[0], &views[1]],
+            w,
+            h,
+        );
         let _ = device.poll(wgpu::PollType::wait_indefinitely());
     }
     let started = Instant::now();
@@ -801,7 +939,15 @@ async fn bench(seconds: f32, profile: QuestProfile, choice: SceneChoice) -> Resu
     let mut previous: Option<wgpu::SubmissionIndex> = None;
     while started.elapsed().as_secs_f32() < seconds {
         let t = Instant::now();
-        content.render(&device, &queue, eyes, [&views[0], &views[1]], w, h);
+        content.render(
+            &device,
+            &queue,
+            eyes,
+            &XrInput::default(),
+            [&views[0], &views[1]],
+            w,
+            h,
+        );
         cpu_ms += t.elapsed().as_secs_f32() * 1000.0;
         if let XrContent::Game(g) = &content {
             sim_ms += g.last_sim_ms;

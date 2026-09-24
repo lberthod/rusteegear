@@ -1202,6 +1202,12 @@ pub struct AppState {
     /// frame par le picking et le gameplay (`debug_line`/`debug_box`/`debug_sphere`), lus et
     /// vidés par `Renderer::render` après dessin — jamais persistants au-delà d'une frame.
     pub debug_lines: Vec<(Vec3, Vec3, [f32; 3])>,
+    /// Session VR (roadmap VR, phase 4) : lacet de caméra imposé par le regard
+    /// du joueur, appliqué juste avant les pas de simulation — **après** la
+    /// caméra de jeu de la scène (`scene.game_camera`, qui réimpose son lacet à
+    /// chaque frame) : le déplacement au stick, relatif à la caméra
+    /// (`camera_relative_move`), va alors là où l'on regarde. `None` hors VR.
+    pub vr_camera_yaw: Option<f32>,
     /// Temps de jeu (s) auquel tous les collectibles ont été ramassés (figé pour le HUD).
     win_time: Option<f32>,
     /// Partie perdue : le joueur a touché une zone mortelle (fige le jeu jusqu'au Stop).
@@ -1679,6 +1685,7 @@ impl AppState {
             time_scale: 1.0,
             step_requested: false,
             debug_lines: Vec::new(),
+            vr_camera_yaw: None,
             win_time: None,
             lost: false,
             score: 0,

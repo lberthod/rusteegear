@@ -79,31 +79,7 @@ impl Renderer {
 
         // Debug drawing : même logique que `render()` (préparer + vider avant
         // les passes, dessiner après les meshes texturés dans la passe principale).
-        let debug_count = {
-            let verts: Vec<GizmoVertex> = app
-                .debug_lines
-                .iter()
-                .flat_map(|&(a, b, color)| {
-                    [
-                        GizmoVertex {
-                            position: a.to_array(),
-                            color,
-                        },
-                        GizmoVertex {
-                            position: b.to_array(),
-                            color,
-                        },
-                    ]
-                })
-                .collect();
-            app.debug_lines.clear();
-            if !verts.is_empty() {
-                self.ensure_debug_capacity(verts.len());
-                self.queue
-                    .write_buffer(&self.debug_vbuf, 0, bytemuck::cast_slice(&verts));
-            }
-            verts.len() as u32
-        };
+        let debug_count = self.upload_debug_lines(app);
 
         let mut encoder = self
             .device
@@ -331,10 +307,10 @@ impl Renderer {
 
         draw_calls += self.draw_static_instanced(&mut pass, app);
 
-        // Debug drawing.
+        // Debug drawing (et repères de manettes en VR).
         if debug_count > 0 {
-            pass.set_pipeline(&self.gizmo_pipeline);
-            pass.set_bind_group(0, &self.camera_bind_group, &[]);
+            pass.set_pipeline(self.mv_or(|m| &m.gizmo_pipeline, &self.gizmo_pipeline));
+            pass.set_bind_group(0, self.scene_camera_bg(), &[]);
             pass.set_vertex_buffer(0, self.debug_vbuf.slice(..));
             pass.draw(0..debug_count, 0..1);
         }
@@ -351,5 +327,34 @@ impl Renderer {
         // Particules tout en dernier, comme dans `render()`.
         draw_calls += self.draw_particles(&mut pass);
         draw_calls
+    }
+
+    /// Envoie au GPU les lignes de debug de la frame (`app.debug_lines`, vidées)
+    /// et renvoie leur nombre de sommets — partagé par le rendu headless et le
+    /// rendu VR (repères des manettes, rayon de pointage).
+    pub(super) fn upload_debug_lines(&mut self, app: &mut AppState) -> u32 {
+        let verts: Vec<GizmoVertex> = app
+            .debug_lines
+            .iter()
+            .flat_map(|&(a, b, color)| {
+                [
+                    GizmoVertex {
+                        position: a.to_array(),
+                        color,
+                    },
+                    GizmoVertex {
+                        position: b.to_array(),
+                        color,
+                    },
+                ]
+            })
+            .collect();
+        app.debug_lines.clear();
+        if !verts.is_empty() {
+            self.ensure_debug_capacity(verts.len());
+            self.queue
+                .write_buffer(&self.debug_vbuf, 0, bytemuck::cast_slice(&verts));
+        }
+        verts.len() as u32
     }
 }

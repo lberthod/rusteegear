@@ -18,6 +18,36 @@ use crate::xr::math::{EyeView, NEAR, projection_from_fov, view_from_pose};
 pub const VR_DRAW_DISTANCE_SCALE: f32 = 0.6;
 const VR_SHADOW_SIZE: u32 = 1024;
 
+/// Vignette de confort : noir transparent au centre, opaque aux bords, selon
+/// l'intensité (phase 4 — réduit la cinétose du déplacement au stick).
+const VIGNETTE_WGSL: &str = r#"
+// 16 octets tout rond (tampon de 16) : pas de `vec3` de bourrage, aligné sur 16.
+struct Vignette { strength: f32, _p0: f32, _p1: f32, _p2: f32 };
+@group(0) @binding(0) var<uniform> vignette: Vignette;
+
+struct Out {
+    @builtin(position) pos: vec4<f32>,
+    @location(0) uv: vec2<f32>,
+};
+
+@vertex
+fn vs(@builtin(vertex_index) i: u32) -> Out {
+    let p = vec2<f32>(f32((i << 1u) & 2u), f32(i & 2u));
+    var out: Out;
+    out.pos = vec4<f32>(p * 2.0 - 1.0, 0.0, 1.0);
+    out.uv = p * 2.0 - 1.0;
+    return out;
+}
+
+@fragment
+fn fs(in: Out) -> @location(0) vec4<f32> {
+    // Zone dégagée plus large quand l'intensité est faible.
+    let inner = mix(0.95, 0.35, vignette.strength);
+    let a = smoothstep(inner, 1.05, length(in.uv)) * vignette.strength;
+    return vec4<f32>(0.0, 0.0, 0.0, a);
+}
+"#;
+
 impl Renderer {
     /// Renderer sur un device **déjà créé** par l'appelant (instance Vulkan du
     /// runtime OpenXR, ou device de la fenêtre du simulateur) : ni fenêtre, ni
@@ -130,6 +160,16 @@ impl Renderer {
         self.write_uniforms(app);
         self.prepare_skinned_draws(&app.scene);
         self.ensure_xr_targets(w, h);
+        // Lignes de debug de la frame (repères des manettes, rayon de pointage).
+        let debug_count = self.upload_debug_lines(app);
+        let vignette = self.vr_vignette.clamp(0.0, 1.0);
+        if vignette > 0.01 {
+            self.ensure_vignette();
+            if let Some((_, buf, _)) = &self.vignette {
+                self.queue
+                    .write_buffer(buf, 0, bytemuck::cast_slice(&[vignette, 0.0, 0.0, 0.0]));
+            }
+        }
 
         // Ombres : une seule carte pour les deux yeux.
         let mut encoder = self.device.create_command_encoder(&Default::default());
@@ -155,8 +195,15 @@ impl Renderer {
             let mut encoder = self.device.create_command_encoder(&Default::default());
             self.mv_active = true;
             if let Some(t) = self.xr_targets.as_ref() {
-                draw_calls +=
-                    self.encode_scene_pass(&mut encoder, app, &t.hdr, None, &t.depth, (w, h), 0);
+                draw_calls += self.encode_scene_pass(
+                    &mut encoder,
+                    app,
+                    &t.hdr,
+                    None,
+                    &t.depth,
+                    (w, h),
+                    debug_count,
+                );
                 for (hdr_eye, target) in t.hdr_eyes.iter().zip(targets) {
                     if bloom_intensity > 0.0 {
                         self.render_bloom(&mut encoder, hdr_eye, &t.bloom_mips);
@@ -168,6 +215,9 @@ impl Renderer {
                         bloom_intensity,
                         target,
                     );
+                    if vignette > 0.01 {
+                        self.draw_vignette(&mut encoder, target);
+                    }
                 }
             }
             self.mv_active = false;
@@ -187,7 +237,7 @@ impl Renderer {
                     t.msaa.as_ref(),
                     &t.depth,
                     (w, h),
-                    0,
+                    debug_count,
                 );
                 if bloom_intensity > 0.0 {
                     self.render_bloom(&mut encoder, &t.hdr, &t.bloom_mips);
@@ -199,6 +249,9 @@ impl Renderer {
                     bloom_intensity,
                     target,
                 );
+                if vignette > 0.01 {
+                    self.draw_vignette(&mut encoder, target);
+                }
                 self.queue.submit([encoder.finish()]);
             }
         }
@@ -333,6 +386,109 @@ impl Renderer {
         });
     }
 
+    /// Crée le pipeline de la vignette de confort (au format des cibles VR).
+    fn ensure_vignette(&mut self) {
+        if self.vignette.is_some() {
+            return;
+        }
+        let shader = self
+            .device
+            .create_shader_module(wgpu::ShaderModuleDescriptor {
+                label: Some("vr_vignette"),
+                source: wgpu::ShaderSource::Wgsl(VIGNETTE_WGSL.into()),
+            });
+        let layout = self
+            .device
+            .create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("vr_vignette"),
+                entries: &[wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                }],
+            });
+        let buf = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("vr_vignette"),
+            size: 16,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let bg = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("vr_vignette"),
+            layout: &layout,
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: buf.as_entire_binding(),
+            }],
+        });
+        let pl = self
+            .device
+            .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("vr_vignette"),
+                bind_group_layouts: &[Some(&layout)],
+                immediate_size: 0,
+            });
+        let pipeline = self
+            .device
+            .create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some("vr_vignette"),
+                layout: Some(&pl),
+                vertex: wgpu::VertexState {
+                    module: &shader,
+                    entry_point: Some("vs"),
+                    buffers: &[],
+                    compilation_options: Default::default(),
+                },
+                fragment: Some(wgpu::FragmentState {
+                    module: &shader,
+                    entry_point: Some("fs"),
+                    targets: &[Some(wgpu::ColorTargetState {
+                        format: self.config.format,
+                        blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                        write_mask: wgpu::ColorWrites::ALL,
+                    })],
+                    compilation_options: Default::default(),
+                }),
+                primitive: Default::default(),
+                depth_stencil: None,
+                multisample: Default::default(),
+                multiview_mask: None,
+                cache: None,
+            });
+        self.vignette = Some((pipeline, buf, bg));
+    }
+
+    /// Assombrit les bords d'un œil (`vr_vignette`), par-dessus l'image finale.
+    fn draw_vignette(&self, encoder: &mut wgpu::CommandEncoder, target: &wgpu::TextureView) {
+        let Some((pipeline, _, bg)) = &self.vignette else {
+            return;
+        };
+        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("vr_vignette"),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view: target,
+                depth_slice: None,
+                resolve_target: None,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Load,
+                    store: wgpu::StoreOp::Store,
+                },
+            })],
+            depth_stencil_attachment: None,
+            timestamp_writes: None,
+            occlusion_query_set: None,
+            multiview_mask: None,
+        });
+        pass.set_pipeline(pipeline);
+        pass.set_bind_group(0, bg, &[]);
+        pass.draw(0..3, 0..1);
+    }
+
     /// Pipeline à utiliser : variante multiview pendant une passe VR
     /// multiview, sinon le pipeline normal.
     pub(super) fn mv_or<'a>(
@@ -352,5 +508,27 @@ impl Renderer {
             (Some(m), true) => &m.camera_bind_group,
             _ => &self.camera_bind_group,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn vignette_shader_is_valid_and_its_uniform_is_16_bytes() {
+        let module = naga::front::wgsl::parse_str(super::VIGNETTE_WGSL).expect("WGSL");
+        let info = naga::valid::Validator::new(
+            naga::valid::ValidationFlags::all(),
+            naga::valid::Capabilities::empty(),
+        )
+        .validate(&module)
+        .expect("validation");
+        drop(info);
+        let size = module
+            .types
+            .iter()
+            .find(|(_, t)| t.name.as_deref() == Some("Vignette"))
+            .map(|(_, t)| t.inner.size(module.to_ctx()))
+            .expect("struct Vignette");
+        assert_eq!(size, 16, "doit tenir dans le tampon de 16 octets");
     }
 }
