@@ -119,7 +119,7 @@ mod tests {
             down: -half,
         };
         let ours = projection_from_fov(fov, NEAR, FAR);
-        let glam = Mat4::perspective_rh(2.0 * half, 1.0, NEAR, FAR);
+        let glam = glam::camera::rh::proj::directx::perspective(2.0 * half, 1.0, NEAR, FAR);
         assert!(ours.abs_diff_eq(glam, 1e-5), "{ours:?}\n{glam:?}");
     }
 
