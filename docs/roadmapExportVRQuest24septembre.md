@@ -539,3 +539,59 @@ jouée en VR.
 | Scène « reeduc » (`VR_SCENE=reeduc`, `--scene reeduc`) : placée **à la caméra de la démo** (face au mannequin), bouton « Démarrer la séance » dans le menu, consigne au poignet | `xr::content`, `xr::rig::Rig::from_camera` | captures |
 | Mains simulées au simulateur (`QUEST_SIM_HANDS=1`, P/O/L/M) | `src/bin/quest_sim.rs` | captures |
 | Doc Mouvéo | `docs/REEDUCATION.md` | — |
+
+## 18. Phase 9 — publication et autres casques (24 septembre 2026)
+
+| Élément | Fichier | Vérifié |
+|---|---|---|
+| **Pause automatique sans focus** (menu système, casque retiré) et reprise au retour, sans lever une pause du joueur — exigence du Horizon Store | `xr::content::FocusPause`, `xr::hello` | test |
+| Version / `versionCode` repris du panneau Export (`APP_VERSION`) | `packaging/build_quest.sh` | manifeste : `versionName="1.2.3"` |
+| Catégorie d'intent standard Khronos `IMMERSIVE_HMD` pour tous les casques ; `VR_TARGET=quest|pico|androidxr` (métadonnées propres, Pico / Android XR **non vérifiés**) | `packaging/build_quest.sh` | 3 manifestes générés |
+| Guide de publication : sideload, build signé, liste de contrôle du Store (fait / à vérifier au casque / à produire), autres casques, PC VR | `docs/VR_PUBLICATION.md` | — |
+
+Non fait : **PC VR** (point d'entrée desktop OpenXR ; invérifiable sur Mac),
+**politique de confidentialité** et **visuels de la fiche Store**, secret
+`RUSTEEGEAR_KEYSTORE_PASS` de la CI de release.
+
+## 19. Phase 10 — WebXR (exploration, non implémentée)
+
+Recherche du 24 septembre 2026 : depuis **avril 2026, le navigateur du Quest
+propose WebGPU et la liaison WebXR–WebGPU (`XRGPUBinding`) en expérimental** ;
+le player web RusteeGear tourne déjà sur WebGPU (wgpu, water.loicberthod.ch).
+La piste est donc techniquement ouverte, mais :
+
+- `web-sys` n'expose pas encore `XRGPUBinding` : il faut des liaisons
+  `wasm-bindgen` écrites à la main (session `immersive-vr`, espace
+  `local-floor`, vues, projection layer WebGPU) ;
+- les textures de la couche XR viennent du navigateur : il faut les importer
+  dans wgpu côté web (équivalent de `texture_from_raw`), point le plus
+  incertain ;
+- **invérifiable sans le navigateur d'un Quest** (ni Safari ni Chrome desktop
+  ne font de WebXR immersif sur Mac).
+
+Tout le reste est réutilisable tel quel : `xr::content`, `render_views`,
+multiview, `xr::input` (manettes via `XRInputSource`), interface VR, mains
+(`XRHand` → `xr::hands`). Estimation : spike de 3 à 5 jours **avec un Quest**,
+après validation de la phase 0 native. Intérêt : jouer à water.loicberthod.ch
+en VR sans installer d'APK.
+
+## 20. Récapitulatif (24 septembre 2026, fin de journée)
+
+| Phase | Simulateur / tests | Casque réel |
+|---|---|---|
+| P0 OpenXR + wgpu | — | **à tester** (go / no-go) |
+| P1 Rivière en stéréo | ✅ | à valider |
+| P2 Performance | ✅ Mac : ~10 ms/image stéréo, CPU 2,6 ms (multiview, cache, corps au repos) | **mesure OVR Metrics Tool** ; foveation, ASTC restent |
+| P3 Manettes | ✅ (simulées, test d'intégration) | à valider (actions OpenXR) |
+| P4 Déplacement, confort | ✅ | à valider (cinétose : testeurs) |
+| P5 Interface VR | ✅ (test GPU du clic) | à valider |
+| P6 Son, API Lua `vr` | ✅ (tests mlua + rilua) | à valider |
+| P7 Export éditeur | ✅ (build réel depuis le contrat du panneau) | à valider |
+| P8 Mains, Mouvéo | ✅ (Mouvéo calibre et joue avec le corps VR) | **à valider** (suivi réel des mains) |
+| P9 Publication | ✅ focus, versions, variantes, guide | soumission : visuels, confidentialité |
+| P10 WebXR | exploration documentée | nécessite un Quest |
+
+Tout le code est écrit, compilé (desktop, Android `vr`, web, serveur) et testé
+autant que possible sans casque. **La prochaine étape décisive est le test P0
+sur le Quest 3** (`VR_SCENE=cubes INSTALL=1 ./packaging/build_quest.sh`) : il
+valide l'hypothèse technique dont dépend tout le reste.

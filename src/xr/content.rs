@@ -117,6 +117,7 @@ pub struct GameView {
     /// Début du pincement gauche en cours (mode mains : un pincement tenu
     /// `MENU_PINCH_SECONDS` ouvre/ferme le menu, faute de bouton menu).
     left_pinch_since: Option<crate::time_compat::Instant>,
+    focus_pause: FocusPause,
 }
 
 impl XrContent {
@@ -173,8 +174,20 @@ impl XrContent {
                     menu_was: false,
                     camera_rig: choice == SceneChoice::Reeducation,
                     left_pinch_since: None,
+                    focus_pause: FocusPause::default(),
                 }))
             }
+        }
+    }
+
+    /// Le casque a (`true`) ou n'a plus le focus : menu système Meta ouvert,
+    /// casque retiré, notification… Sans focus, le jeu est mis en pause (et
+    /// les manettes ne répondent plus, le runtime les rend inactives) ; il
+    /// reprend au retour du focus — sauf si le joueur l'avait mis en pause
+    /// lui-même. Exigence du Horizon Store.
+    pub fn set_focused(&mut self, focused: bool) {
+        if let Self::Game(game) = self {
+            game.set_focused(focused);
         }
     }
 
@@ -453,6 +466,11 @@ impl GameView {
         FrameOut { haptics, quit }
     }
 
+    /// Focus du casque (cf. `XrContent::set_focused`).
+    fn set_focused(&mut self, focused: bool) {
+        self.focus_pause.update(focused, &mut self.app.paused);
+    }
+
     /// Mode mains (pas de bouton menu) : pincement gauche tenu
     /// `MENU_PINCH_SECONDS` → vrai une fois (front), jusqu'au relâchement.
     fn long_left_pinch(&mut self, input: &XrInput) -> bool {
@@ -518,6 +536,26 @@ impl GameView {
         Pointer {
             pos_px: hit.map(|(uv, _)| uv * self.ui.panel_px(MENU)),
             pressed,
+        }
+    }
+}
+
+/// Pause automatique à la perte du focus du casque (cf. `XrContent::set_focused`).
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+struct FocusPause {
+    /// Vrai si c'est la perte de focus qui a mis le jeu en pause (à lever au
+    /// retour du focus) ; faux si le joueur était déjà en pause.
+    paused_by_focus: bool,
+}
+
+impl FocusPause {
+    fn update(&mut self, focused: bool, paused: &mut bool) {
+        if !focused && !*paused {
+            *paused = true;
+            self.paused_by_focus = true;
+        } else if focused && self.paused_by_focus {
+            *paused = false;
+            self.paused_by_focus = false;
         }
     }
 }
@@ -701,4 +739,25 @@ fn push_controller_lines(lines: &mut Vec<(Vec3, Vec3, [f32; 3])>, pos: Vec3, rot
         lines.push((c(a.0, a.1, a.2), c(b.0, b.1, b.2), BODY));
     }
     lines.push((pos, pos + rot * Vec3::new(0.0, 0.0, -0.12), POINTER));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::FocusPause;
+
+    #[test]
+    fn losing_focus_pauses_and_regaining_it_resumes_only_what_it_paused() {
+        let mut f = FocusPause::default();
+        let mut paused = false;
+        f.update(false, &mut paused);
+        assert!(paused, "menu système ouvert : pause");
+        f.update(false, &mut paused);
+        f.update(true, &mut paused);
+        assert!(!paused, "focus revenu : reprise");
+        // Déjà en pause (menu du jeu) : la perte de focus ne la lèvera pas au retour.
+        paused = true;
+        f.update(false, &mut paused);
+        f.update(true, &mut paused);
+        assert!(paused, "la pause du joueur est respectée");
+    }
 }

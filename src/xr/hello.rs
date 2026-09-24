@@ -228,6 +228,9 @@ fn run_inner(app: &AndroidApp) -> Result<(), String> {
             match event {
                 xr::Event::SessionStateChanged(e) => {
                     log::info!("VR : état de session {:?}", e.state());
+                    // Focus (exigence du Horizon Store) : menu système ouvert,
+                    // casque retiré… → le jeu se fige et ignore les entrées.
+                    content.set_focused(e.state() == xr::SessionState::FOCUSED);
                     match e.state() {
                         xr::SessionState::READY => {
                             session.begin(VIEW_TYPE).map_err(err("début de session"))?;

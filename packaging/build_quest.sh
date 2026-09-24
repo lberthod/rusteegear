@@ -8,6 +8,7 @@
 #   RUSTEEGEAR_KEYSTORE_PASS=… ./packaging/build_quest.sh --release
 #   VR_SCENE=cubes ./packaging/build_quest.sh   # scène de test de la phase 0 (défaut : Rivière)
 #   VR_HZ=90 VR_RENDER_SCALE=0.8 ./packaging/build_quest.sh   # fréquence, résolution de rendu
+#   VR_TARGET=pico ./packaging/build_quest.sh     # autre famille de casques (quest, pico, androidxr)
 #
 # Prérequis : NDK 28.2 (sdkmanager), cargo-apk, casque en mode développeur.
 set -euo pipefail
@@ -79,6 +80,8 @@ APP_NAME="${APP_NAME:-RusteeGear VR}" \
 RUNTIME_LIBS="$RUNTIME_LIBS" \
 DEBUG_KEYSTORE="$HOME/.android/debug.keystore" \
 KS_PASS="${RUSTEEGEAR_KEYSTORE_PASS:-}" \
+APP_VERSION="${APP_VERSION:-}" \
+VR_TARGET="${VR_TARGET:-quest}" \
 python3 - <<'EOF'
 import os, re
 p = "Cargo.toml"
@@ -94,6 +97,10 @@ sub(r'^label = "[^"]*"', f'label = "{os.environ["APP_NAME"]}"')
 sub(r'^min_sdk_version = \d+', 'min_sdk_version = 29')
 sub(r'^target_sdk_version = \d+', 'target_sdk_version = 32')
 sub(r'^(build_targets = .*)$', r'\1' + f'\nruntime_libs = "{os.environ["RUNTIME_LIBS"]}"')
+# Version (panneau Export) : cargo-apk en dérive aussi le versionCode, qui doit
+# croître à chaque envoi sur le Horizon Store.
+if os.environ["APP_VERSION"]:
+    sub(r'^version = "[^"]*"', f'version = "{os.environ["APP_VERSION"]}"')
 if os.environ["KS_PASS"]:
     sub(r'^keystore_password = "[^"]*"', f'keystore_password = "{os.environ["KS_PASS"]}"')
 # APK de test (profil `dev-fast`) : cargo-apk exige une clé pour tout profil
@@ -125,11 +132,19 @@ launch_mode = "singleTask"
 config_changes = "density|keyboard|keyboardHidden|navigation|orientation|screenLayout|screenSize|uiMode"
 resizeable_activity = false
 
-# Catégorie VR : lance l'app en immersif (sans elle, elle s'ouvre en fenêtre 2D).
+# Catégories VR : lancement en immersif (sans elles, l'app s'ouvre en fenêtre
+# 2D) — celle de Meta et la catégorie standard OpenXR de Khronos (Pico,
+# Android XR et autres casques OpenXR Android la reconnaissent).
 [[package.metadata.android.application.activity.intent_filter]]
 actions = ["android.intent.action.MAIN"]
-categories = ["com.oculus.intent.category.VR", "android.intent.category.LAUNCHER"]
-
+categories = ["com.oculus.intent.category.VR", "org.khronos.openxr.intent.category.IMMERSIVE_HMD", "android.intent.category.LAUNCHER"]
+'''
+# Métadonnées propres à chaque famille de casques (VR_TARGET, défaut quest).
+# Pico / Android XR : non vérifiées sur casque — à confirmer avec la doc du
+# constructeur avant toute publication (cf. docs/VR_PUBLICATION.md).
+target = os.environ["VR_TARGET"]
+if target == "quest":
+    s += '''
 [[package.metadata.android.application.meta_data]]
 name = "com.oculus.supportedDevices"
 value = "quest3|quest3s|quest2|questpro"
@@ -138,6 +153,20 @@ value = "quest3|quest3s|quest2|questpro"
 name = "com.oculus.handtracking.version"
 value = "V2.0"
 '''
+elif target == "pico":
+    s += '''
+[[package.metadata.android.application.meta_data]]
+name = "pvr.app.type"
+value = "vr"
+'''
+elif target == "androidxr":
+    s += '''
+[[package.metadata.android.uses_feature]]
+name = "android.software.xr.api.openxr"
+required = true
+'''
+else:
+    raise SystemExit(f"VR_TARGET inconnu : {target} (quest, pico, androidxr)")
 open(p, "w").write(s)
 EOF
 
