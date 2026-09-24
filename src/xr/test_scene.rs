@@ -177,14 +177,14 @@ impl CubeScene {
         &self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
-        targets: &[wgpu::TextureView; 2],
+        targets: [&wgpu::TextureView; 2],
         view_projs: [Mat4; 2],
     ) {
         for (buffer, vp) in self.eye_buffers.iter().zip(view_projs) {
             queue.write_buffer(buffer, 0, bytemuck::cast_slice(&vp.to_cols_array()));
         }
         let mut encoder = device.create_command_encoder(&Default::default());
-        for (target, group) in targets.iter().zip(&self.eye_groups) {
+        for (target, group) in targets.into_iter().zip(&self.eye_groups) {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("xr-eye"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {

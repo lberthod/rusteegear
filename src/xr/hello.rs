@@ -25,8 +25,8 @@ use openxr as xr;
 use wgpu::hal;
 use winit::platform::android::activity::{AndroidApp, MainEvent, PollEvent};
 
+use super::content::{SceneChoice, XrContent};
 use super::math::{EyeView, Fov};
-use super::test_scene::CubeScene;
 
 const VIEW_TYPE: xr::ViewConfigurationType = xr::ViewConfigurationType::PRIMARY_STEREO;
 const VIEW_COUNT: u32 = 2;
@@ -46,6 +46,7 @@ fn err<E: std::fmt::Display>(ctx: &'static str) -> impl Fn(E) -> String {
 }
 
 struct Gpu {
+    adapter: wgpu::Adapter,
     device: wgpu::Device,
     queue: wgpu::Queue,
     session_info: xr::vulkan::SessionCreateInfo,
@@ -157,7 +158,19 @@ fn run_inner(app: &AndroidApp) -> Result<(), String> {
         .map(|&raw| unsafe { wrap_swapchain_image(&gpu.device, raw, width, height, color_format) })
         .collect();
 
-    let scene = CubeScene::new(&gpu.device, color_format, width, height);
+    // Scène fixée à la compilation (`VR_SCENE=cubes ./packaging/build_quest.sh`
+    // pour le test pur de la phase 0) ; Rivière par défaut depuis la phase 1.
+    let choice = SceneChoice::parse(option_env!("RUSTEEGEAR_VR_SCENE").unwrap_or("riviere"));
+    log::info!("VR : scène {choice:?}");
+    let mut content = XrContent::new(
+        choice,
+        &gpu.adapter,
+        &gpu.device,
+        &gpu.queue,
+        color_format,
+        width,
+        height,
+    );
 
     // --- 4. Boucle -----------------------------------------------------------------
     let mut events = xr::EventDataBuffer::new();
@@ -249,8 +262,8 @@ fn run_inner(app: &AndroidApp) -> Result<(), String> {
                 },
             }
         });
-        let view_projs = eyes.map(|e| e.view_proj());
-        scene.render(&gpu.device, &gpu.queue, &eye_views[image_index], view_projs);
+        let [left, right] = &eye_views[image_index];
+        content.render(&gpu.device, &gpu.queue, eyes, [left, right], width, height);
 
         swapchain.release_image().map_err(err("release"))?;
         let rect = xr::Rect2Di {
@@ -437,6 +450,7 @@ unsafe fn create_gpu(
     .map_err(err("device wgpu"))?;
 
     Ok(Gpu {
+        adapter,
         device,
         queue,
         session_info: xr::vulkan::SessionCreateInfo {

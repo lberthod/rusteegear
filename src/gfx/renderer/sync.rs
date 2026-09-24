@@ -10,7 +10,7 @@ impl Renderer {
     /// plus proche de la cible caméra, échantillonnée au sommet le plus proche
     /// (une rivière en pente n'a pas une altitude unique — on prend celle qui
     /// est sous les yeux du joueur). `None` sans surface d'eau.
-    fn reflection_plane_y(&self, app: &AppState) -> Option<f32> {
+    pub(super) fn reflection_plane_y(&self, app: &AppState) -> Option<f32> {
         let target = app.camera.target;
         let mut best: Option<(f32, f32)> = None; // (distance² en xz, altitude)
         for obj in &app.scene.objects {

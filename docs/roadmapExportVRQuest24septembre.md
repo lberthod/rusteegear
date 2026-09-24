@@ -278,6 +278,7 @@ Code du spike écrit, compilé et empaqueté ; **reste le test dans le casque**.
 | Scène de test partagée APK / simulateur | `src/xr/test_scene.rs` | ✅ |
 | **Simulateur Meta Quest 3** (profil Quest 3/2, tête et manettes simulées, 6 tests) | `src/xr/sim.rs`, `src/bin/quest_sim.rs` | ✅ stéréo vérifiée (capture) |
 | Job CI `cargo build --lib --target aarch64-linux-android --features vr` | `.github/workflows/ci.yml` | ✅ |
+| **Phase 1 : Rivière en stéréo** (moteur complet, simulateur + APK) | cf. §10 | ✅ simulateur, casque à valider |
 
 ### Procédure de test (Quest 3)
 
@@ -343,3 +344,53 @@ simulateur ; le casque sert de validation par jalon (P0, puis fin de P2 et P8).
 Prochaine étape technique : un trait `XrBackend` (poses d'yeux, cibles de rendu,
 entrées) implémenté par `xr::hello` et par `quest_sim`, pour que le
 `Renderer::render_views` de la phase 1 soit écrit une fois et tourne des deux côtés.
+
+## 10. Phase 1 — Rivière en stéréo (24 septembre 2026) : ✅ sur simulateur
+
+`cargo run --release --bin quest_sim` affiche désormais **la vraie partie
+Rivière** (défaut ; `--scene cubes` pour la scène de test), et l'APK aussi
+(`./packaging/build_quest.sh`, `VR_SCENE=cubes` pour le test pur de la phase 0).
+
+| Élément | Fichier |
+|---|---|
+| `Renderer::new_external` : renderer sur un device fourni (runtime XR, simulateur) ; constructeur scindé (`assemble`) | `src/gfx/renderer/resources.rs`, `xr.rs` |
+| `Renderer::render_views` : pipeline complet (ombres en cascade, ciel, eau + réflexion, skinning, translucides, particules, bloom, tone mapping) par œil ; ombres, culling, lumières calculés une fois depuis une caméra centrale englobante (`xr::rig::cull_camera`) ; caméra de jeu restaurée ; pas de *camera shake* | `src/gfx/renderer/xr.rs` |
+| Passe principale partagée headless / VR (`encode_scene_pass`) — goldens inchangés | `src/gfx/renderer/headless.rs` |
+| Rig : pièce du joueur posée 2,5 m derrière le personnage, sol sur le terrain (`AppState::ground_height_at`, rayon physique) | `src/xr/rig.rs` |
+| Contenu VR commun APK / simulateur (`XrContent` : cubes ou partie) | `src/xr/content.rs` |
+| APK de test en profil `dev-fast` (opt-level 1), 21,5 Mo | `packaging/build_quest.sh` |
+
+Vérifié : 1 030 tests lib + goldens de rendu identiques, clippy (desktop et
+Android `vr`), captures stéréo de Rivière contrôlées (parallaxe, ombres, eau).
+
+### Mesures qui orientent la phase 2 (simulateur, Mac M5 Pro)
+
+| Configuration | Temps par image (2 yeux) |
+|---|---|
+| Scène de cubes, 2064×2208 par œil | **1,8 ms** — la plomberie VR ne coûte rien |
+| Rivière, 2064×2208 par œil | **37–39 ms** (budget 11,1 ms à 90 Hz) |
+| Rivière, résolution × 0,7 | 33 ms |
+| Rivière, résolution × 0,5 | 32 ms |
+| Détail d'une image Rivière | simulation `advance_play` **16–24 ms**, préparation du rendu CPU 4,7 ms, scripts Lua 0,2 ms |
+
+**Diagnostic** (profil `sample` de macOS) : le coût n'est pas le GPU mais
+`Physics::resolve_scripted_moves` — le contrôleur de personnage cinématique de
+rapier (détection de sol + *shape casts* contre le maillage du terrain) pour
+chaque créature scriptée : ~15 ms par image. La mesure « physique » existante
+(`sim_perf_ms`, 0,06 ms) ne l'inclut pas. Ce coût pèse aussi sur le jeu
+desktop et web, pas seulement en VR.
+
+**Phase 2 — priorités révisées** :
+1. CPU d'abord : `resolve_scripted_moves` (créatures lointaines ou hors champ
+   en mouvement simplifié, pas de détection de sol à chaque pas, budget de
+   créatures actives) et l'inclure dans la mesure `sim_perf_ms`.
+2. Découpler la simulation du rendu (simulation à 30–60 Hz, rendu à 90 Hz avec
+   interpolation), comme sur un casque tout jeu doit le faire.
+3. Seulement ensuite le GPU : multiview, MSAA 4× + tonemap dans la passe
+   principale, ASTC, foveation, résolution de rendu (déjà mesurable :
+   `QUEST_SIM_SCALE=0.7 cargo run --release --bin quest_sim`).
+
+Dans le casque, l'APK Rivière actuel tournera donc bien en dessous de 72 Hz :
+c'est attendu à ce stade (P1 = justesse du rendu, P2 = vitesse). Pour ce soir,
+le test go / no-go de la phase 0 reste `VR_SCENE=cubes INSTALL=1
+./packaging/build_quest.sh` ; l'APK Rivière est un aperçu.

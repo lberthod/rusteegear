@@ -3,6 +3,7 @@
 use glam::camera::rh::{proj::directx, view::look_at_mat4};
 use glam::{Mat4, Vec3};
 
+#[derive(Clone, Debug)]
 pub struct OrbitCamera {
     pub target: Vec3,
     pub distance: f32,

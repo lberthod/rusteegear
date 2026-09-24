@@ -2391,6 +2391,17 @@ impl AppState {
         self.player_object().map(|o| o.transform.position)
     }
 
+    /// Altitude du sol (collider physique le plus haut) à la verticale de
+    /// `(x, z)`, par un rayon lancé depuis 200 m au-dessus — pose le sol de la
+    /// pièce VR sur le terrain (`xr::rig`, phase 1 de la roadmap VR). `None` hors
+    /// Play (pas de monde physique) ou sans rien sous le point.
+    pub fn ground_height_at(&self, x: f32, z: f32) -> Option<f32> {
+        let physics = self.physics.as_ref()?;
+        physics
+            .raycast(Vec3::new(x, 200.0, z), Vec3::NEG_Y, 400.0, u32::MAX)
+            .map(|hit| hit.point.y)
+    }
+
     /// Durées (ms) scripts Lua / physique rapier3d du dernier pas fixe
     /// (`sim_step`) — diagnostic pour les bancs d'essai headless
     /// (`examples/bench_sim_riviere.rs`), sans exposer `PerfState` en entier.

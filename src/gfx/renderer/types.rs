@@ -538,4 +538,20 @@ pub struct Renderer {
     /// comptée sur chaque site d'appel réel (bloom/tonemap/UI ajoutent quelques
     /// draws fixes non comptés ici, negligibles face au coût de la scène).
     pub(super) last_frame_draw_calls: u32,
+
+    // --- VR (roadmap docs/roadmapExportVRQuest24septembre.md, phase 1) ---
+    /// Cibles intermédiaires (profondeur, HDR, bloom) à la taille d'un œil,
+    /// créées au premier `render_views` puis réutilisées tant que la taille ne
+    /// change pas — cf. `xr.rs`.
+    pub(super) xr_targets: Option<XrTargets>,
+}
+
+/// Cibles de rendu d'un œil VR (partagées par les deux yeux, rendus l'un après
+/// l'autre) — cf. `Renderer::render_views`.
+pub(crate) struct XrTargets {
+    pub(super) size: (u32, u32),
+    pub(super) depth: wgpu::TextureView,
+    pub(super) hdr: wgpu::TextureView,
+    pub(super) msaa: Option<wgpu::TextureView>,
+    pub(super) bloom_mips: Vec<wgpu::TextureView>,
 }

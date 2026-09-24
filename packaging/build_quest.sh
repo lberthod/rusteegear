@@ -3,9 +3,10 @@
 # docs/roadmapExportVRQuest24septembre.md). APK distinct de build_apk.sh : autre
 # identifiant (com.berthod.rusteegear.vr), s'installe à côté de l'APK téléphone.
 #
-#   ./packaging/build_quest.sh              # APK debug (signé avec la clé debug)
+#   ./packaging/build_quest.sh              # APK de test (profil dev-fast, clé debug)
 #   INSTALL=1 ./packaging/build_quest.sh    # + installe et lance sur le casque (adb)
 #   RUSTEEGEAR_KEYSTORE_PASS=… ./packaging/build_quest.sh --release
+#   VR_SCENE=cubes ./packaging/build_quest.sh   # scène de test de la phase 0 (défaut : Rivière)
 #
 # Prérequis : NDK 28.2 (sdkmanager), cargo-apk, casque en mode développeur.
 set -euo pipefail
@@ -44,6 +45,14 @@ if [ ! -f "$LOADER" ] || [ "$(cat "$RUNTIME_LIBS/VERSION" 2>/dev/null)" != "$LOA
     rm -rf "$TMP"
 fi
 
+# Clé debug Android (APK de test) : créée comme le ferait Android Studio si absente.
+if [ ! -f "$HOME/.android/debug.keystore" ]; then
+    mkdir -p "$HOME/.android"
+    "$JAVA_HOME/bin/keytool" -genkeypair -keystore "$HOME/.android/debug.keystore" \
+        -alias androiddebugkey -keyalg RSA -keysize 2048 -validity 10000 \
+        -storepass android -keypass android -dname "CN=Android Debug,O=Android,C=US"
+fi
+
 # --- Manifeste Quest, injecté dans Cargo.toml le temps du build ------------------
 # Même mécanique que build_apk.sh (cargo-apk ne lit que Cargo.toml) : copie de
 # sauvegarde restaurée par le trap, quoi qu'il arrive.
@@ -55,6 +64,7 @@ trap restore_cargo EXIT
 BUNDLE_ID="${BUNDLE_ID:-com.berthod.rusteegear.vr}" \
 APP_NAME="${APP_NAME:-RusteeGear VR}" \
 RUNTIME_LIBS="$RUNTIME_LIBS" \
+DEBUG_KEYSTORE="$HOME/.android/debug.keystore" \
 KS_PASS="${RUSTEEGEAR_KEYSTORE_PASS:-}" \
 python3 - <<'EOF'
 import os, re
@@ -73,6 +83,14 @@ sub(r'^target_sdk_version = \d+', 'target_sdk_version = 32')
 sub(r'^(build_targets = .*)$', r'\1' + f'\nruntime_libs = "{os.environ["RUNTIME_LIBS"]}"')
 if os.environ["KS_PASS"]:
     sub(r'^keystore_password = "[^"]*"', f'keystore_password = "{os.environ["KS_PASS"]}"')
+# APK de test (profil `dev-fast`) : cargo-apk exige une clé pour tout profil
+# personnalisé ; on lui donne la clé debug standard d'Android (créée par
+# cargo-apk au premier build debug, mot de passe public « android »).
+s += f'''
+[package.metadata.android.signing.dev-fast]
+path = "{os.environ["DEBUG_KEYSTORE"]}"
+keystore_password = "android"
+'''
 s += '''
 # --- Injecté par packaging/build_quest.sh (APK VR Meta Quest) ---
 [[package.metadata.android.uses_feature]]
@@ -117,12 +135,19 @@ if [ "$RELEASE" = 1 ]; then
     PROFILE_ARGS=(--release)
     APK="target/release/apk/motor3derust.apk"
 else
-    APK="target/debug/apk/motor3derust.apk"
-    # Build de test sans infos de débogage : ~500 Mo de `.so` sinon (constaté),
-    # interminable à pousser sur le casque en USB. Les journaux `log::` restent.
-    export CARGO_PROFILE_DEV_DEBUG=0 CARGO_PROFILE_DEV_STRIP=symbols
+    # Profil `dev-fast` (opt-level 1, cf. Cargo.toml) plutôt que `dev` : le code
+    # du moteur non optimisé (scène Rivière : 3 104 objets parcourus à chaque
+    # image) ne tiendrait pas 72-90 Hz dans le casque. Sans infos de débogage :
+    # ~500 Mo de `.so` sinon (constaté), interminable à pousser en USB. Les
+    # journaux `log::` restent.
+    PROFILE_ARGS=(--profile dev-fast)
+    APK="target/dev-fast/apk/motor3derust.apk"
+    export CARGO_PROFILE_DEV_FAST_DEBUG=0 CARGO_PROFILE_DEV_FAST_STRIP=symbols
 fi
 
+# Scène affichée par l'APK, lue à la compilation par `xr::hello` (option_env!).
+export RUSTEEGEAR_VR_SCENE="${VR_SCENE:-riviere}"
+echo "▶ Scène VR : $RUSTEEGEAR_VR_SCENE"
 echo "▶ cargo apk build ${PROFILE_ARGS[*]+"${PROFILE_ARGS[*]}"} --lib --features vr"
 cargo apk build ${PROFILE_ARGS[@]+"${PROFILE_ARGS[@]}"} --lib --features vr
 echo "✅ APK Quest : $APK"

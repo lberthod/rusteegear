@@ -129,8 +129,7 @@ impl Renderer {
         // ce nombre d'échantillons pour les deux formats de la passe principale (repli
         // silencieux à 1 sinon, ex. certains backends GLES/WebGL).
         let msaa_samples = if window.is_some() {
-            let wanted =
-                crate::app::build_config::effective_render_quality(player).msaa_samples();
+            let wanted = crate::app::build_config::effective_render_quality(player).msaa_samples();
             let supported = wanted <= 1
                 || (adapter
                     .get_texture_format_features(HDR_FORMAT)
@@ -152,6 +151,36 @@ impl Renderer {
         } else {
             SHADOW_SIZE
         };
+        Ok(Self::assemble(
+            window,
+            surface,
+            device,
+            queue,
+            config,
+            size,
+            msaa_samples,
+            shadow_size,
+            backend,
+            gpu_profiler,
+        ))
+    }
+
+    /// Construit le `Renderer` (pipelines, cibles, état) sur un device déjà
+    /// créé — partagé par `new_impl` (fenêtre/headless) et `new_external`
+    /// (device fourni par l'appelant : runtime OpenXR du casque, simulateur).
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn assemble(
+        window: Option<Arc<Window>>,
+        surface: Option<wgpu::Surface<'static>>,
+        device: wgpu::Device,
+        queue: wgpu::Queue,
+        config: wgpu::SurfaceConfiguration,
+        size: winit::dpi::PhysicalSize<u32>,
+        msaa_samples: u32,
+        shadow_size: u32,
+        backend: String,
+        gpu_profiler: Option<GpuProfiler>,
+    ) -> Renderer {
         let bundle = pipelines::build(
             &device,
             &queue,
@@ -218,7 +247,7 @@ impl Renderer {
             skinned_models_bind_group,
         } = bundle;
 
-        Ok(Renderer {
+        Renderer {
             window,
             surface,
             device,
@@ -309,7 +338,8 @@ impl Renderer {
             gpu_profiler,
             gpu_pass_timings_ms: Vec::new(),
             last_frame_draw_calls: 0,
-        })
+            xr_targets: None,
+        }
     }
 
     pub fn resize(&mut self, new_size: winit::dpi::PhysicalSize<u32>) {

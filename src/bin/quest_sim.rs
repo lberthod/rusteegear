@@ -8,6 +8,12 @@
 //! on développe et on vérifie les phases 1 à 6 de la roadmap VR ici, le casque
 //! ne sert plus qu'aux tests de validation.
 //!
+//! `QUEST_SIM_SCALE=0.7` : résolution de rendu par œil × 0,7 (mesure de la
+//! phase 2).
+//!
+//! Scène : `--scene riviere` (défaut, phase 1 : la vraie partie Rivière rendue
+//! par le `Renderer` du moteur) ou `--scene cubes` (scène de test de la phase 0).
+//!
 //! Commandes : clic gauche glissé = tourner la tête · ZQSD / WASD = marcher dans
 //! la pièce · Espace / C = se lever / s'accroupir · R = recentrer ·
 //! 2 = profil Quest 2 / 3 · Échap = quitter.
@@ -18,8 +24,8 @@ use std::collections::HashSet;
 use std::sync::Arc;
 
 use motor3derust::time_compat::Instant;
+use motor3derust::xr::content::{SceneChoice, XrContent};
 use motor3derust::xr::sim::{QuestProfile, SimHead};
-use motor3derust::xr::test_scene::CubeScene;
 use winit::application::ApplicationHandler;
 use winit::event::{ElementState, MouseButton, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
@@ -56,13 +62,29 @@ fn fs(in: Out) -> @location(0) vec4<f32> {
 }
 "#;
 
+/// Échelle de la résolution de rendu par œil (`QUEST_SIM_SCALE=0.7`, défaut 1) :
+/// mesure ce que rapporte un rendu sous la résolution recommandée (phase 2).
+fn render_scale() -> f32 {
+    std::env::var("QUEST_SIM_SCALE")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(1.0)
+}
+
+/// Scène depuis la ligne de commande : `--scene cubes|riviere` (défaut Rivière).
+fn scene_from_args(args: &[String]) -> SceneChoice {
+    args.iter()
+        .position(|a| a == "--scene")
+        .and_then(|i| args.get(i + 1))
+        .map_or(SceneChoice::Riviere, |s| SceneChoice::parse(s))
+}
+
 /// Les deux « swapchains » d'œil simulées (une texture à 2 couches, comme
 /// celle du runtime XR) et ce qu'il faut pour les recopier dans la fenêtre.
 struct Eyes {
     profile: QuestProfile,
     views: [wgpu::TextureView; 2],
     blit_groups: [wgpu::BindGroup; 2],
-    scene: CubeScene,
 }
 
 impl Eyes {
@@ -111,12 +133,10 @@ impl Eyes {
                 ],
             })
         });
-        let scene = CubeScene::new(device, EYE_FORMAT, profile.eye_width, profile.eye_height);
         Self {
             profile,
             views,
             blit_groups,
-            scene,
         }
     }
 }
@@ -131,10 +151,17 @@ struct Gpu {
     blit_layout: wgpu::BindGroupLayout,
     sampler: wgpu::Sampler,
     eyes: Eyes,
+    adapter: wgpu::Adapter,
+    choice: SceneChoice,
+    content: XrContent,
 }
 
 impl Gpu {
-    async fn new(window: Arc<Window>, profile: QuestProfile) -> Result<Self, String> {
+    async fn new(
+        window: Arc<Window>,
+        profile: QuestProfile,
+        choice: SceneChoice,
+    ) -> Result<Self, String> {
         let size = window.inner_size();
         let instance = wgpu::Instance::default();
         let surface = instance
@@ -240,6 +267,15 @@ impl Gpu {
             ..Default::default()
         });
         let eyes = Eyes::new(&device, profile, &blit_layout, &sampler);
+        let content = XrContent::new(
+            choice,
+            &adapter,
+            &device,
+            &queue,
+            EYE_FORMAT,
+            profile.eye_width,
+            profile.eye_height,
+        );
         Ok(Self {
             window,
             device,
@@ -250,11 +286,27 @@ impl Gpu {
             blit_layout,
             sampler,
             eyes,
+            adapter,
+            choice,
+            content,
         })
     }
 
     fn set_profile(&mut self, profile: QuestProfile) {
         self.eyes = Eyes::new(&self.device, profile, &self.blit_layout, &self.sampler);
+        // La scène de cubes a une profondeur à la taille de l'œil ; le renderer
+        // du jeu, lui, suit la taille à chaque `render_views`.
+        if self.choice == SceneChoice::Cubes {
+            self.content = XrContent::new(
+                self.choice,
+                &self.adapter,
+                &self.device,
+                &self.queue,
+                EYE_FORMAT,
+                profile.eye_width,
+                profile.eye_height,
+            );
+        }
     }
 
     fn resize(&mut self, width: u32, height: u32) {
@@ -276,12 +328,14 @@ impl Gpu {
             }
             _ => return,
         };
-        let eyes = head.eye_views(&self.eyes.profile);
-        self.eyes.scene.render(
+        let p = self.eyes.profile;
+        self.content.render(
             &self.device,
             &self.queue,
-            &self.eyes.views,
-            eyes.map(|e| e.view_proj()),
+            head.eye_views(&p),
+            [&self.eyes.views[0], &self.eyes.views[1]],
+            p.eye_width,
+            p.eye_height,
         );
 
         let target = frame.texture.create_view(&Default::default());
@@ -344,15 +398,18 @@ struct Sim {
     acc_ms: f32,
     acc_frames: u32,
     quest2: bool,
+    choice: Option<SceneChoice>,
+    title_updates: u32,
 }
 
 impl Sim {
     fn profile(&self) -> QuestProfile {
-        if self.quest2 {
+        let p = if self.quest2 {
             QuestProfile::QUEST2
         } else {
             QuestProfile::QUEST3
-        }
+        };
+        p.scaled(render_scale())
     }
 
     fn axis(&self, pos: &[KeyCode], neg: &[KeyCode]) -> f32 {
@@ -377,7 +434,8 @@ impl ApplicationHandler for Sim {
                 return;
             }
         };
-        match pollster::block_on(Gpu::new(window, self.profile())) {
+        let choice = self.choice.unwrap_or(SceneChoice::Riviere);
+        match pollster::block_on(Gpu::new(window, self.profile(), choice)) {
             Ok(gpu) => {
                 log::info!(
                     "Simulateur {} : {}×{} px par œil, budget {:.1} ms",
@@ -488,6 +546,26 @@ impl ApplicationHandler for Sim {
                         self.head.position.y,
                         self.head.position.z,
                     ));
+                    // Aussi dans le journal toutes les ~5 s : lisible par un script
+                    // ou un agent, qui ne voit pas le titre de la fenêtre.
+                    self.title_updates += 1;
+                    if self.title_updates % 10 == 0 {
+                        let detail = match &gpu.content {
+                            XrContent::Game(g) => format!(
+                                " · dernière image : simulation {:.2} ms, rendu CPU {:.2} ms, scripts {:.2} ms, physique {:.2} ms",
+                                g.last_sim_ms,
+                                g.last_render_ms,
+                                g.app.sim_perf_ms().0,
+                                g.app.sim_perf_ms().1
+                            ),
+                            XrContent::Cubes(_) => String::new(),
+                        };
+                        log::info!(
+                            "{avg:.2} ms/image (CPU+GPU, 2 yeux) — budget {:.1} ms ({} Hz){detail}",
+                            p.frame_budget_ms(),
+                            p.refresh_hz
+                        );
+                    }
                     self.acc_ms = 0.0;
                     self.acc_frames = 0;
                 }
@@ -506,7 +584,7 @@ impl ApplicationHandler for Sim {
 /// `--snapshot <fichier.png> [--quest2]` : une image stéréo rendue hors écran
 /// (sans fenêtre), les deux yeux côte à côte réduits de moitié — vérification
 /// scriptable (CI, agent) de ce que verrait le casque depuis la pose de départ.
-async fn snapshot(path: &str, profile: QuestProfile) -> Result<(), String> {
+async fn snapshot(path: &str, profile: QuestProfile, choice: SceneChoice) -> Result<(), String> {
     let instance = wgpu::Instance::default();
     let adapter = instance
         .request_adapter(&wgpu::RequestAdapterOptions {
@@ -517,7 +595,11 @@ async fn snapshot(path: &str, profile: QuestProfile) -> Result<(), String> {
         .await
         .map_err(|e| format!("adaptateur GPU : {e}"))?;
     let (device, queue) = adapter
-        .request_device(&wgpu::DeviceDescriptor::default())
+        .request_device(&wgpu::DeviceDescriptor {
+            label: Some("quest_sim_snapshot"),
+            required_limits: adapter.limits(),
+            ..Default::default()
+        })
         .await
         .map_err(|e| format!("device : {e}"))?;
     let (w, h) = (profile.eye_width, profile.eye_height);
@@ -543,9 +625,30 @@ async fn snapshot(path: &str, profile: QuestProfile) -> Result<(), String> {
             ..Default::default()
         })
     });
-    let scene = CubeScene::new(&device, EYE_FORMAT, w, h);
-    let eyes = SimHead::default().eye_views(&profile);
-    scene.render(&device, &queue, &views, eyes.map(|e| e.view_proj()));
+    let mut content = XrContent::new(
+        choice,
+        &adapter,
+        &device,
+        &queue,
+        EYE_FORMAT,
+        profile.eye_width,
+        profile.eye_height,
+    );
+    // Une partie : ~1 s de jeu avant la capture (physique posée, créatures en
+    // mouvement, rig placé sur le terrain), rendue à chaque pas comme en direct.
+    let frames = if choice == SceneChoice::Cubes { 1 } else { 60 };
+    for _ in 0..frames {
+        content.render(
+            &device,
+            &queue,
+            SimHead::default().eye_views(&profile),
+            [&views[0], &views[1]],
+            w,
+            h,
+        );
+        let _ = device.poll(wgpu::PollType::wait_indefinitely());
+        std::thread::sleep(std::time::Duration::from_millis(16));
+    }
 
     // Relecture des deux couches (lignes alignées sur 256 octets, contrainte wgpu).
     let row = w * 4;
@@ -607,15 +710,18 @@ fn main() {
     let args: Vec<String> = std::env::args().collect();
     if let Some(i) = args.iter().position(|a| a == "--snapshot") {
         let Some(path) = args.get(i + 1) else {
-            eprintln!("usage : quest_sim --snapshot <fichier.png> [--quest2]");
+            eprintln!(
+                "usage : quest_sim --snapshot <fichier.png> [--quest2] [--scene riviere|cubes]"
+            );
             std::process::exit(2);
         };
         let profile = if args.iter().any(|a| a == "--quest2") {
             QuestProfile::QUEST2
         } else {
             QuestProfile::QUEST3
-        };
-        match pollster::block_on(snapshot(path, profile)) {
+        }
+        .scaled(render_scale());
+        match pollster::block_on(snapshot(path, profile, scene_from_args(&args))) {
             Ok(()) => println!("{path} ({} — les deux yeux côte à côte)", profile.name),
             Err(e) => {
                 eprintln!("simulateur : {e}");
@@ -632,7 +738,10 @@ fn main() {
         }
     };
     event_loop.set_control_flow(ControlFlow::Poll);
-    let mut sim = Sim::default();
+    let mut sim = Sim {
+        choice: Some(scene_from_args(&args)),
+        ..Default::default()
+    };
     if let Err(e) = event_loop.run_app(&mut sim) {
         eprintln!("simulateur : {e}");
     }

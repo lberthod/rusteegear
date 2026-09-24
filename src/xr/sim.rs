@@ -79,6 +79,18 @@ impl QuestProfile {
         }
     }
 
+    /// Même casque, résolution de rendu par œil multipliée par `scale`
+    /// (bornée à 0,25..1,5) — ce que fait une app Quest qui rend sous la
+    /// résolution recommandée pour tenir le budget (le compositeur agrandit).
+    pub fn scaled(self, scale: f32) -> Self {
+        let s = scale.clamp(0.25, 1.5);
+        Self {
+            eye_width: ((self.eye_width as f32 * s).round() as u32).max(1),
+            eye_height: ((self.eye_height as f32 * s).round() as u32).max(1),
+            ..self
+        }
+    }
+
     /// Budget de temps par image (ms) à la fréquence visée.
     pub fn frame_budget_ms(&self) -> f32 {
         1000.0 / self.refresh_hz
@@ -237,6 +249,13 @@ mod tests {
         assert!(head.pitch <= PITCH_LIMIT);
         head.look(0.0, -20.0);
         assert!(head.pitch >= -PITCH_LIMIT);
+    }
+
+    #[test]
+    fn scaled_keeps_the_eye_aspect_and_clamps() {
+        let p = QuestProfile::QUEST3.scaled(0.5);
+        assert_eq!((p.eye_width, p.eye_height), (1032, 1104));
+        assert_eq!(QuestProfile::QUEST3.scaled(0.01).eye_width, 516);
     }
 
     #[test]

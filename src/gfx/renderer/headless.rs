@@ -126,72 +126,15 @@ impl Renderer {
         // Passe principale — identique à celle de `render()`, sans grille ni gizmos.
         // Dessine dans `hdr_view` ; `self.tonemap()` fait le dernier pas
         // vers `view`, juste avant la lecture des pixels.
-        {
-            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("headless_main_pass"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    // MSAA : dessine dans la cible multi-échantillonnée et se résout
-                    // vers `hdr_view` — même branchement que la passe principale de
-                    // `render()`, sinon comportement inchangé (goldens mono-échantillon).
-                    view: msaa_color_view.as_ref().unwrap_or(&hdr_view),
-                    resolve_target: msaa_color_view.as_ref().map(|_| &hdr_view),
-                    depth_slice: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color {
-                            r: 0.07,
-                            g: 0.08,
-                            b: 0.1,
-                            a: 1.0,
-                        }),
-                        store: wgpu::StoreOp::Store,
-                    },
-                })],
-                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
-                    view: &depth_view,
-                    depth_ops: Some(wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(1.0),
-                        store: wgpu::StoreOp::Store,
-                    }),
-                    stencil_ops: None,
-                }),
-                timestamp_writes: None,
-                occlusion_query_set: None,
-                multiview_mask: None,
-            });
-            pass.set_viewport(0.0, 0.0, iw as f32, ih as f32, 0.0, 1.0);
-
-            // Ciel : même geste que dans `render()`.
-            pass.set_pipeline(&self.sky_pipeline);
-            pass.set_bind_group(0, &self.camera_bind_group, &[]);
-            pass.draw(0..3, 0..1);
-
-            pass.set_pipeline(&self.pipeline);
-            pass.set_bind_group(0, &self.camera_bind_group, &[]);
-            pass.set_bind_group(2, &self.shadow_bind_group, &[]);
-            pass.set_bind_group(1, &self.models_bind_group, &[]);
-
-            scene_draw_calls += self.draw_static_instanced(&mut pass, app);
-
-            // Debug drawing.
-            if debug_count > 0 {
-                pass.set_pipeline(&self.gizmo_pipeline);
-                pass.set_bind_group(0, &self.camera_bind_group, &[]);
-                pass.set_vertex_buffer(0, self.debug_vbuf.slice(..));
-                pass.draw(0..debug_count, 0..1);
-            }
-
-            // Objets skinnés : cf. commentaire équivalent dans `render()`.
-            scene_draw_calls += self.draw_skinned_objects(
-                &mut pass,
-                &app.scene,
-                &self.skinned_offsets_scratch,
-                &self.camera_bind_group,
-            );
-            // Translucides en dernier, comme dans `render()`.
-            scene_draw_calls += self.draw_transparent_objects(&mut pass, app);
-            // Particules tout en dernier, comme dans `render()`.
-            scene_draw_calls += self.draw_particles(&mut pass);
-        }
+        scene_draw_calls += self.encode_scene_pass(
+            &mut encoder,
+            app,
+            &hdr_view,
+            msaa_color_view.as_ref(),
+            &depth_view,
+            (iw, ih),
+            debug_count,
+        );
 
         // Cf. `render()` : `last_frame_draw_calls` sert de source unique à
         // `gpu_profiler_info()`, lu aussi bien après `render()` (panneau Profiler en
@@ -317,5 +260,90 @@ impl Renderer {
         drop(mapped);
         readback.unmap();
         out
+    }
+
+    /// Passe principale de rendu de la scène (ciel, statiques instanciés, lignes
+    /// de debug, skinnés, translucides, particules) dans une cible HDR — sans
+    /// grille, gizmos ni UI. Partagée par le rendu headless (goldens, captures)
+    /// et le rendu VR (`render_views`, une fois par œil) : un shader ou un ordre
+    /// de dessin qui dérive fait dériver les deux, et les goldens le voient.
+    /// Renvoie le nombre de draw calls de la scène.
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn encode_scene_pass(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        app: &AppState,
+        hdr_view: &wgpu::TextureView,
+        msaa_color_view: Option<&wgpu::TextureView>,
+        depth_view: &wgpu::TextureView,
+        (iw, ih): (u32, u32),
+        debug_count: u32,
+    ) -> u32 {
+        let mut draw_calls = 0;
+        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("scene_pass"),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                // MSAA : dessine dans la cible multi-échantillonnée et se résout
+                // vers `hdr_view` — même branchement que la passe principale de
+                // `render()`, sinon comportement inchangé (goldens mono-échantillon).
+                view: msaa_color_view.unwrap_or(hdr_view),
+                resolve_target: msaa_color_view.map(|_| hdr_view),
+                depth_slice: None,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(wgpu::Color {
+                        r: 0.07,
+                        g: 0.08,
+                        b: 0.1,
+                        a: 1.0,
+                    }),
+                    store: wgpu::StoreOp::Store,
+                },
+            })],
+            depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                view: depth_view,
+                depth_ops: Some(wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(1.0),
+                    store: wgpu::StoreOp::Store,
+                }),
+                stencil_ops: None,
+            }),
+            timestamp_writes: None,
+            occlusion_query_set: None,
+            multiview_mask: None,
+        });
+        pass.set_viewport(0.0, 0.0, iw as f32, ih as f32, 0.0, 1.0);
+
+        // Ciel : même geste que dans `render()`.
+        pass.set_pipeline(&self.sky_pipeline);
+        pass.set_bind_group(0, &self.camera_bind_group, &[]);
+        pass.draw(0..3, 0..1);
+
+        pass.set_pipeline(&self.pipeline);
+        pass.set_bind_group(0, &self.camera_bind_group, &[]);
+        pass.set_bind_group(2, &self.shadow_bind_group, &[]);
+        pass.set_bind_group(1, &self.models_bind_group, &[]);
+
+        draw_calls += self.draw_static_instanced(&mut pass, app);
+
+        // Debug drawing.
+        if debug_count > 0 {
+            pass.set_pipeline(&self.gizmo_pipeline);
+            pass.set_bind_group(0, &self.camera_bind_group, &[]);
+            pass.set_vertex_buffer(0, self.debug_vbuf.slice(..));
+            pass.draw(0..debug_count, 0..1);
+        }
+
+        // Objets skinnés : cf. commentaire équivalent dans `render()`.
+        draw_calls += self.draw_skinned_objects(
+            &mut pass,
+            &app.scene,
+            &self.skinned_offsets_scratch,
+            &self.camera_bind_group,
+        );
+        // Translucides en dernier, comme dans `render()`.
+        draw_calls += self.draw_transparent_objects(&mut pass, app);
+        // Particules tout en dernier, comme dans `render()`.
+        draw_calls += self.draw_particles(&mut pass);
+        draw_calls
     }
 }

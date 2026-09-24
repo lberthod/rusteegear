@@ -40,6 +40,8 @@ mod frame;
 
 mod headless;
 
+mod xr;
+
 #[cfg(test)]
 #[path = "tests.rs"]
 mod tests;
