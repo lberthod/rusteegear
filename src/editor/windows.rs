@@ -2977,75 +2977,221 @@ pub(super) fn player_welcome_window(
     use crate::app::locale as l;
     use crate::net::protocol::MAX_NAME_LEN;
     let mut choice = None;
+
+    // Palette reprise de la page d'accueil web (packaging/web/index.html,
+    // #12141a / #e8763b) pour que le lobby natif et la démo navigateur aient
+    // la même identité visuelle (demande « rends ça plus ergonomique et
+    // joli, façon lobby / écran de démarrage », 2026-09-14). Avant : thème
+    // egui par défaut, sans rapport avec l'habillage de la page web.
+    let bg = egui::Color32::from_rgb(18, 20, 26);
+    let card_bg = egui::Color32::from_rgb(26, 29, 36);
+    let input_bg = egui::Color32::from_rgb(22, 25, 31);
+    let border = egui::Color32::from_rgb(40, 45, 54);
+    let accent = egui::Color32::from_rgb(232, 118, 59);
+    let accent_soft = egui::Color32::from_rgb(240, 146, 95);
+    let text = egui::Color32::from_rgb(230, 232, 227);
+    let text_dim = egui::Color32::from_rgb(148, 154, 164);
+    let danger_bg = egui::Color32::from_rgb(62, 31, 29);
+    let danger_fg = egui::Color32::from_rgb(240, 179, 173);
+    let danger = egui::Color32::from_rgb(240, 115, 106);
+
     let mut frame = egui::Frame::window(&ctx.global_style());
-    frame.fill = frame.fill.to_opaque();
+    frame.fill = bg;
+    frame.stroke = egui::Stroke::new(1.0_f32, border);
+    frame.corner_radius = 16.into();
     // Largeur bornée à la zone de jeu (même patron que `player_corner_minimap`,
     // ~l.591) : une largeur fixe de 380 px débordait entièrement hors d'un
     // viewport mobile de 375 px CSS (roadmap post-audit UX 2026-09-15) —
     // premier écran vu par tout joueur mobile, texte tronqué net au bord
     // (sous-titre, compteur de pseudo, champ Salon, hint de contrôles).
-    let win_w = (area.width() * 0.92).min(380.0);
+    let win_w = (area.width() * 0.92).min(400.0);
+    // Marges intérieures resserrées sur écran étroit : 22 px de chaque côté
+    // mangeaient 12 % d'un viewport de 375 px.
+    let pad_x: i8 = if win_w < 360.0 { 14 } else { 22 };
+    frame.inner_margin = egui::Margin {
+        left: pad_x,
+        right: pad_x,
+        top: 18,
+        bottom: 18,
+    };
+    frame.shadow = egui::Shadow {
+        offset: [0, 10],
+        blur: 28,
+        spread: 0,
+        color: egui::Color32::from_black_alpha(140),
+    };
+
     egui::Window::new("RusteeGear")
         .id(egui::Id::new("player_welcome"))
         .collapsible(false)
         .resizable(false)
-        .title_bar(true)
+        .title_bar(false)
+        .movable(false)
         .frame(frame)
         .fixed_pos(egui::pos2(
             area.center().x - win_w / 2.0,
-            area.center().y - 190.0,
+            area.center().y - 210.0,
         ))
         .default_width(win_w)
         .max_width(win_w)
         .show(ctx, |ui| {
-            // Hors `horizontal()` (qui offre une largeur non bornée au label et
-            // l'empêchait de retourner à la ligne) : replié dans `win_w` au lieu
-            // de déborder hors du cadre sur un écran étroit.
-            ui.label(l::welcome_subtitle(locale));
+            // Largeur de contenu imposée : `max_width` seul ne bornait rien — un
+            // contenu plus large (rangées horizontales) faisait grandir la
+            // fenêtre vers la droite depuis `fixed_pos`, décentrée et collée au
+            // bord d'un écran de 375 px (constaté, déjà vrai avant l'habillage).
+            ui.set_width(win_w - 2.0 * f32::from(pad_x));
+            // Style local à cette fenêtre uniquement : ne touche pas le
+            // style global, le HUD et l'éditeur gardent leur apparence.
+            let v = ui.visuals_mut();
+            v.override_text_color = Some(text);
+            v.extreme_bg_color = input_bg;
+            v.selection.bg_fill = accent.gamma_multiply(0.35);
+            v.selection.stroke = egui::Stroke::new(1.0_f32, accent);
+            v.widgets.noninteractive.corner_radius = 8.into();
+            v.widgets.inactive.corner_radius = 8.into();
+            v.widgets.hovered.corner_radius = 8.into();
+            v.widgets.active.corner_radius = 8.into();
+            v.widgets.inactive.weak_bg_fill = card_bg;
+            v.widgets.inactive.bg_fill = card_bg;
+            v.widgets.inactive.bg_stroke = egui::Stroke::new(1.0_f32, border);
+            v.widgets.hovered.weak_bg_fill = card_bg.gamma_multiply(1.3);
+            v.widgets.hovered.bg_fill = card_bg.gamma_multiply(1.3);
+            v.widgets.hovered.bg_stroke = egui::Stroke::new(1.0_f32, accent_soft);
+            v.widgets.hovered.fg_stroke = egui::Stroke::new(1.0_f32, text);
+            v.widgets.active.weak_bg_fill = accent;
+            v.widgets.active.bg_fill = accent;
+            v.widgets.active.bg_stroke = egui::Stroke::new(1.0_f32, accent);
+            ui.spacing_mut().item_spacing = egui::vec2(8.0, 8.0);
+            ui.spacing_mut().button_padding = egui::vec2(10.0, 6.0);
+
+            // ⚙ / ? (Réglages, Aide) en haut à droite, détachés du logo pour
+            // rester lisibles quelle que soit la longueur des libellés.
             ui.horizontal(|ui| {
-                if ui
-                    .button("⚙")
-                    .on_hover_text(l::pause_settings_label(locale))
-                    .clicked()
-                {
-                    *settings_open = !*settings_open;
-                    *help_open = false;
-                }
-                if ui.button(l::help_label(locale)).clicked() {
-                    *help_open = !*help_open;
-                    *settings_open = false;
-                }
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if ui
+                        .button(egui::RichText::new("⚙").size(15.0))
+                        .on_hover_text(l::pause_settings_label(locale))
+                        .clicked()
+                    {
+                        *settings_open = !*settings_open;
+                        *help_open = false;
+                    }
+                    if ui
+                        .button(egui::RichText::new(l::help_label(locale)).size(13.0))
+                        .clicked()
+                    {
+                        *help_open = !*help_open;
+                        *settings_open = false;
+                    }
+                });
+            });
+
+            // Logo façon page web (🦀Rustee + « Gear » en accent) et sous-titre.
+            ui.vertical_centered(|ui| {
+                // Pas d'emoji 🦀 ici (contrairement au logo de la page web,
+                // packaging/web/index.html) : la police par défaut d'egui
+                // n'a pas ce glyphe et l'affiche en tofu (vérifié en
+                // rendant la fenêtre dans packaging/web).
+                let mut logo = egui::text::LayoutJob::default();
+                logo.append(
+                    "Rustee",
+                    0.0,
+                    egui::TextFormat {
+                        font_id: egui::FontId::proportional(24.0),
+                        color: text,
+                        ..Default::default()
+                    },
+                );
+                logo.append(
+                    "Gear",
+                    0.0,
+                    egui::TextFormat {
+                        font_id: egui::FontId::proportional(24.0),
+                        color: accent,
+                        ..Default::default()
+                    },
+                );
+                ui.label(logo);
+                ui.add_space(2.0);
+                ui.label(
+                    egui::RichText::new(l::welcome_subtitle(locale))
+                        .size(12.5)
+                        .color(text_dim),
+                );
+            });
+            ui.add_space(10.0);
+
+            let card = || {
+                egui::Frame::NONE
+                    .fill(card_bg)
+                    .stroke(egui::Stroke::new(1.0_f32, border))
+                    .corner_radius(10)
+                    .inner_margin(egui::Margin {
+                        left: 12,
+                        right: 12,
+                        top: 10,
+                        bottom: 10,
+                    })
+            };
+
+            // Carte « Pseudo ».
+            // Les deux cartes prennent toute la largeur utile : sans ça chacune
+            // se taillait sur son contenu (le champ Salon, `f32::INFINITY`,
+            // poussait la sienne jusqu'au bord et pas l'autre).
+            let card_w = ui.available_width() - 2.0 * 12.0 - 2.0;
+            card().show(ui, |ui| {
+                ui.set_width(card_w);
+                ui.label(
+                    egui::RichText::new(l::nickname_label(locale))
+                        .color(text_dim)
+                        .size(12.5),
+                );
+                ui.horizontal(|ui| {
+                    ui.add(
+                        egui::TextEdit::singleline(name)
+                            .char_limit(MAX_NAME_LEN)
+                            .desired_width(ui.available_width() - 48.0),
+                    );
+                    ui.small(format!("{}/{MAX_NAME_LEN}", name.chars().count()));
+                });
             });
             ui.add_space(8.0);
-            ui.label(l::nickname_label(locale));
-            ui.horizontal(|ui| {
-                ui.add(
-                    egui::TextEdit::singleline(name)
-                        .char_limit(MAX_NAME_LEN)
-                        .desired_width(ui.available_width() - 48.0),
-                );
-                ui.small(format!("{}/{MAX_NAME_LEN}", name.chars().count()));
-            });
-            ui.horizontal(|ui| {
-                ui.label(l::class_label(locale));
-                egui::ComboBox::from_id_salt("welcome_class")
-                    .selected_text(class.label())
-                    .show_ui(ui, |ui| {
-                        for c in crate::app::multiplayer::PlayerClass::ALL {
-                            ui.selectable_value(class, c, c.label());
-                        }
+
+            // Carte « Partie » : classe + salon.
+            let room_ok = card()
+                .show(ui, |ui| {
+                    ui.set_width(card_w);
+                    ui.horizontal(|ui| {
+                        ui.label(
+                            egui::RichText::new(l::class_label(locale))
+                                .color(text_dim)
+                                .size(12.5),
+                        );
+                        egui::ComboBox::from_id_salt("welcome_class")
+                            .selected_text(class.label())
+                            .show_ui(ui, |ui| {
+                                for c in crate::app::multiplayer::PlayerClass::ALL {
+                                    ui.selectable_value(class, c, c.label());
+                                }
+                            });
                     });
-            });
-            ui.small(l::class_description(locale, *class));
-            ui.label(l::room_label(locale));
-            ui.add(egui::TextEdit::singleline(room).desired_width(f32::INFINITY));
-            let room_ok = room_code_is_valid(room.trim());
-            if !room_ok {
-                ui.colored_label(
-                    egui::Color32::from_rgb(230, 110, 90),
-                    l::room_invalid(locale),
-                );
-            }
+                    ui.small(l::class_description(locale, *class));
+                    ui.add_space(6.0);
+                    ui.label(
+                        egui::RichText::new(l::room_label(locale))
+                            .color(text_dim)
+                            .size(12.5),
+                    );
+                    ui.add(egui::TextEdit::singleline(room).desired_width(f32::INFINITY));
+                    let room_ok = room_code_is_valid(room.trim());
+                    if !room_ok {
+                        ui.colored_label(danger, l::room_invalid(locale));
+                    }
+                    room_ok
+                })
+                .inner;
+            ui.add_space(4.0);
+
             egui::CollapsingHeader::new(l::server_section_title(locale))
                 .id_salt("welcome_server")
                 .default_open(false)
@@ -3062,16 +3208,35 @@ pub(super) fn player_welcome_window(
                         *server_url = crate::app::network_client::DEFAULT_SERVER_URL.to_string();
                     }
                 });
-            ui.add_space(10.0);
+            ui.add_space(12.0);
             let has_name = !name.trim().is_empty();
             let can_online = has_name && room_ok && !server_url.trim().is_empty();
-            let primary = |label: &str| {
-                egui::Button::new(egui::RichText::new(label).size(17.0))
-                    .min_size(egui::vec2(170.0, 36.0))
+            // Sur écran étroit (mobile ~375 px), les deux boutons côte à côte
+            // (176 + ~150 px, le texte « ▶ Jouer en ligne » impose sa largeur)
+            // débordaient de la fenêtre et la décalaient hors de l'écran
+            // (constaté en émulation 375×812) : empilés en pleine largeur.
+            let full_w = ui.available_width();
+            let stacked = full_w < 340.0;
+            let (primary_w, secondary_w) = if stacked {
+                (full_w, full_w)
+            } else {
+                (176.0, 126.0)
             };
-            let secondary =
-                |label: &str| egui::Button::new(label).min_size(egui::vec2(120.0, 36.0));
-            ui.horizontal(|ui| {
+            let primary = |label: &str| {
+                egui::Button::new(egui::RichText::new(label).size(16.0).strong().color(bg))
+                    .fill(accent)
+                    .stroke(egui::Stroke::NONE)
+                    .corner_radius(9)
+                    .min_size(egui::vec2(primary_w, 38.0))
+            };
+            let secondary = |label: &str| {
+                egui::Button::new(egui::RichText::new(label).size(15.0))
+                    .fill(egui::Color32::TRANSPARENT)
+                    .stroke(egui::Stroke::new(1.0_f32, border))
+                    .corner_radius(9)
+                    .min_size(egui::vec2(secondary_w, 38.0))
+            };
+            let buttons = |ui: &mut egui::Ui| {
                 let online_btn = if last_online {
                     primary(l::play_online_label(locale))
                 } else {
@@ -3102,15 +3267,37 @@ pub(super) fn player_welcome_window(
                 if solo {
                     choice = Some(WelcomeChoice::Solo);
                 }
-            });
+            };
+            if stacked {
+                ui.vertical(buttons);
+            } else {
+                ui.horizontal(buttons);
+            }
             // Raison du retour ici (roadmap post-audit UX v2 2026-09-04, 2.4) :
             // Join refusé, serveur injoignable, reconnexion abandonnée.
             if let Some(err) = error {
-                ui.add_space(4.0);
-                ui.colored_label(egui::Color32::from_rgb(240, 115, 106), format!("⚠ {err}"));
+                ui.add_space(8.0);
+                egui::Frame::NONE
+                    .fill(danger_bg)
+                    .corner_radius(8)
+                    .inner_margin(egui::Margin {
+                        left: 10,
+                        right: 10,
+                        top: 7,
+                        bottom: 7,
+                    })
+                    .show(ui, |ui| {
+                        ui.colored_label(danger_fg, format!("⚠ {err}"));
+                    });
             }
-            ui.add_space(6.0);
-            ui.small(l::welcome_controls_hint(locale, ability_bar));
+            ui.add_space(8.0);
+            ui.separator();
+            ui.add_space(4.0);
+            ui.label(
+                egui::RichText::new(l::welcome_controls_hint(locale, ability_bar))
+                    .size(11.0)
+                    .color(text_dim),
+            );
         });
     choice
 }
