@@ -772,6 +772,9 @@ L'historique propre et la **logique des prochains sprints** vivent dans :
   **[sprintjeurefelxion.md](docs/sprintjeurefelxion.md)** — composition de la carte du Hameau des
   Braises assistée par Blender MCP (inventaire d'assets, méthode, pièges rencontrés) et son plan de
   sprints phase par phase (eau `shore_*`, grotte `grotto_*`, régénération de la scène servie).
+- **[roadmapExportVRQuest24septembre.md](docs/roadmapExportVRQuest24septembre.md)** — export
+  **VR Meta Quest** (APK OpenXR natif, `packaging/build_quest.sh`) : faisabilité, 10 phases,
+  spike Phase 0 écrit. Antécédent MR passthrough : [XR_PORTAIL_ARENE.md](docs/XR_PORTAIL_ARENE.md).
 
 **Terminé — Phase P, audio/HUD/confort** (détail dans [ROADMAP_SPRINTS.md](docs/ROADMAP_SPRINTS.md)) :
 audio bus/panning/streaming (104) et randomisation pitch/volume (108),

@@ -216,6 +216,13 @@ jobs:
       - name: Build lib pour ${{ matrix.target }}
         run: cargo build --lib --target ${{ matrix.target }}
 
+      # APK VR Meta Quest (docs/roadmapExportVRQuest24septembre.md) : `openxr`/`ash`
+      # ne sont dépendances que sur Android, donc ce build est le seul endroit de
+      # la CI qui vérifie que `src/xr/hello.rs` compile contre le NDK.
+      - name: Build lib (feature vr) pour ${{ matrix.target }}
+        if: matrix.target == 'aarch64-linux-android'
+        run: cargo build --lib --target ${{ matrix.target }} --features vr
+
   # Avis de sécurité RustSec sur les dépendances (roadmap post-audit 2026-09-03,
   # 1.5). `continue-on-error` le temps de vérifier que la base d'avis ne produit
   # pas de faux positifs bruyants sur ce dépôt — même précaution que le job

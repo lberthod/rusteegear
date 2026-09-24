@@ -2,6 +2,10 @@
 
 *24 septembre 2026 — branche de départ : `feat/herroad`*
 
+> Antécédent : [XR_PORTAIL_ARENE.md](XR_PORTAIL_ARENE.md) (28 juillet 2026) cadrait
+> une arène MR passthrough et un squelette OpenXR jamais fusionné, faute de casque.
+> Cette roadmap le remplace pour l'export VR ; la vision MR y reste documentée.
+
 ## 1. Est-ce possible ? — Oui, et le moteur est déjà bien placé
 
 Un Meta Quest (2, 3, 3S, Pro) est un **appareil Android arm64** équipé d'un GPU
