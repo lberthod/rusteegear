@@ -1634,3 +1634,103 @@ fn a_joint_on_an_object_without_physics_is_ignored_not_fatal() {
     let phys = Physics::build(&scene);
     assert_eq!(phys.joint_count(), 0);
 }
+
+/// Phase 2 VR (24 septembre 2026) : un corps scripté posé au sol, que son
+/// script ne déplace pas, passe **au repos** (plus de `KinematicCharacter
+/// Controller` à chaque pas — jusqu'à 2 ms par grand collider dans Rivière) et
+/// n'en bouge pas d'un iota.
+#[test]
+fn a_still_scripted_body_goes_to_rest_without_moving() {
+    let mut scene = scripted_walker_scene(PhysicsKind::Kinematic);
+    let walker = 3;
+    let mut phys = Physics::build(&scene);
+    let dt = 1.0 / 60.0;
+    for _ in 0..30 {
+        phys.resolve_scripted_moves(dt, &mut scene);
+        phys.step(dt, &mut scene);
+    }
+    assert!(
+        phys.scripted_rest.contains_key(&walker),
+        "posé et immobile : doit être au repos"
+    );
+    let settled = scene.objects[walker].transform.position;
+    for _ in 0..120 {
+        phys.resolve_scripted_moves(dt, &mut scene);
+        phys.step(dt, &mut scene);
+    }
+    // Au repos à 0,1 mm près : la revérification périodique (tous les 15 pas)
+    // repasse par le contrôleur, qui peut déplacer de ~1e-7 m (bruit flottant).
+    assert!(scene.objects[walker].transform.position.distance(settled) < 1e-4);
+    assert_eq!(phys.scripted_delta.get(&walker), Some(&Vec3::ZERO));
+}
+
+/// Un corps au repos repart **au pas même** où son script le déplace.
+#[test]
+fn a_resting_scripted_body_moves_as_soon_as_its_script_does() {
+    let mut scene = scripted_walker_scene(PhysicsKind::Kinematic);
+    let walker = 3;
+    let mut phys = Physics::build(&scene);
+    let dt = 1.0 / 60.0;
+    for _ in 0..30 {
+        phys.resolve_scripted_moves(dt, &mut scene);
+        phys.step(dt, &mut scene);
+    }
+    assert!(phys.scripted_rest.contains_key(&walker));
+    let x0 = scene.objects[walker].transform.position.x;
+    scene.objects[walker].transform.position.x += 2.0 * dt;
+    phys.resolve_scripted_moves(dt, &mut scene);
+    phys.step(dt, &mut scene);
+    let x1 = scene.objects[walker].transform.position.x;
+    assert!(
+        (x1 - x0 - 2.0 * dt).abs() < 1e-4,
+        "déplacement du script appliqué dès ce pas : {x0} → {x1}"
+    );
+    assert!(!phys.scripted_rest.contains_key(&walker));
+}
+
+/// Une rotation demandée par le script (créature qui se tourne sur place)
+/// réveille le corps : sa forme tourne, la collision doit être recalculée.
+#[test]
+fn a_resting_scripted_body_wakes_up_when_it_turns() {
+    let mut scene = scripted_walker_scene(PhysicsKind::Kinematic);
+    let walker = 3;
+    let mut phys = Physics::build(&scene);
+    let dt = 1.0 / 60.0;
+    for _ in 0..30 {
+        phys.resolve_scripted_moves(dt, &mut scene);
+        phys.step(dt, &mut scene);
+    }
+    assert!(phys.scripted_rest.contains_key(&walker));
+    scene.objects[walker].transform.rotation = glam::Quat::from_rotation_y(0.5);
+    phys.resolve_scripted_moves(dt, &mut scene);
+    assert!(
+        !phys.scripted_rest.contains_key(&walker),
+        "une rotation doit repasser par la résolution complète"
+    );
+}
+
+/// Sol retiré sous un corps au repos (`set_object_solid`, piège, plateforme
+/// qui disparaît) : il tombe, il ne reste pas suspendu dans le vide.
+#[test]
+fn a_resting_scripted_body_falls_when_its_floor_disappears() {
+    let mut scene = scripted_walker_scene(PhysicsKind::Kinematic);
+    let walker = 3;
+    let mut phys = Physics::build(&scene);
+    let dt = 1.0 / 60.0;
+    for _ in 0..30 {
+        phys.resolve_scripted_moves(dt, &mut scene);
+        phys.step(dt, &mut scene);
+    }
+    assert!(phys.scripted_rest.contains_key(&walker));
+    let y0 = scene.objects[walker].transform.position.y;
+    assert!(phys.set_object_solid(0, false));
+    for _ in 0..10 {
+        phys.resolve_scripted_moves(dt, &mut scene);
+        phys.step(dt, &mut scene);
+    }
+    assert!(
+        scene.objects[walker].transform.position.y < y0 - 0.2,
+        "sans sol, le corps doit tomber (y {y0} → {})",
+        scene.objects[walker].transform.position.y
+    );
+}

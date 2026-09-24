@@ -47,7 +47,7 @@ impl Renderer {
         let needed = scene.objects.iter().any(|o| {
             o.visible && matches!(o.water, Some(w) if w.kind == crate::scene::WaterKind::Riviere)
         });
-        if !needed {
+        if !needed || !self.planar_reflections {
             self.reflection = None;
             return;
         }
@@ -582,14 +582,18 @@ impl Renderer {
                 water: water_uniform(obj),
             });
             let (lmin, lmax) = app.scene.local_aabb(obj.mesh);
-            let radius = culling_radius_for(&app.scene, obj.mesh);
+            let radius =
+                culling_radius_for(&app.scene, obj.mesh).map(|r| r * self.draw_distance_scale);
             let visible = obj.visible
                 && distance_visible(eye, obj.transform.position, radius)
                 && aabb_visible(&planes, model, lmin, lmax);
             // LOD géométrique (Phase D) : distance à la caméra « pure », comme le culling
             // par distance ci-dessus — jamais le décalage cosmétique de `write_uniforms`.
-            let lod_mesh =
-                foliage_lod_mesh(&app.scene, obj.mesh, eye.distance(obj.transform.position));
+            let lod_mesh = foliage_lod_mesh(
+                &app.scene,
+                obj.mesh,
+                eye.distance(obj.transform.position) / self.draw_distance_scale.max(0.01),
+            );
             self.draw_plan.push(InstanceDraw {
                 obj: i,
                 visible,

@@ -333,6 +333,8 @@ impl Physics {
         };
         let not_rider =
             |_: ColliderHandle, c: &Collider| c.parent().is_none_or(|p| !riders.contains(&p));
+        let rest_allowed = self.scripted_rest_cooldown == 0;
+        self.scripted_rest_cooldown = self.scripted_rest_cooldown.saturating_sub(1);
         for slot in 0..self.scripted.len() {
             let (index, handle) = self.scripted[slot];
             let Some(obj) = scene.objects.get_mut(index) else {
@@ -358,6 +360,25 @@ impl Physics {
 
             let target = obj.transform.position;
             let mut desired = target - cur;
+            // Repos (24 septembre 2026, phase 2 VR — ~15 ms/image dans Rivière
+            // pour 11 créatures **immobiles**) : ni déplacement ni rotation
+            // demandés, et déjà posé au sol au pas précédent → la résolution
+            // rendrait « pas de mouvement » ; on la saute, avec une résolution
+            // complète tous les `SCRIPTED_REST_RECHECK_STEPS` pas. Jamais en
+            // plateformer 2D (plateformes mobiles, pièges : tout doit réagir
+            // au pas près).
+            let still = desired.length_squared() < 1e-12
+                && body.rotation().angle_between(obj.transform.rotation) < 1e-4;
+            if !self.platformer_feel
+                && still
+                && let Some(skipped) = self.scripted_rest.get_mut(&index)
+                && *skipped < SCRIPTED_REST_RECHECK_STEPS
+            {
+                *skipped += 1;
+                self.scripted_delta.insert(index, Vec3::ZERO);
+                continue;
+            }
+            self.scripted_rest.remove(&index);
             // Plateformer 2D : les corps scriptés sont des plateformes qui écrivent
             // leur hauteur — pas de descente forcée (une plateforme dont le script
             // est mis en veille au loin, cf. `SCRIPT_CULL_DISTANCE`, tomberait
@@ -449,6 +470,19 @@ impl Physics {
                 .unwrap_or(false);
             self.scripted_delta
                 .insert(index, if rotating { Vec3::ZERO } else { resolved - cur });
+            // Posé et immobile ce pas-ci (la descente constante a été bloquée
+            // par le sol) : candidat au repos pour les pas suivants. Seuil de
+            // 1 mm par pas, pas zéro : sur une pente, le contrôleur fait
+            // glisser d'une fraction de millimètre à chaque pas un corps
+            // pourtant « posé » (renard de Rivière, constaté) — le figer là est
+            // invisible et c'est ce qu'on attend d'un objet au repos.
+            // Compteur de départ décalé selon l'objet : les revérifications
+            // périodiques se répartissent sur les pas au lieu de tomber toutes
+            // ensemble (pic de ~10 ms toutes les 0,25 s constaté sans ça).
+            if rest_allowed && still && translation.length_squared() < 1e-6 {
+                self.scripted_rest
+                    .insert(index, index as u32 % SCRIPTED_REST_RECHECK_STEPS);
+            }
 
             obj.transform.position = resolved;
             if let Some(body) = self.bodies.get_mut(handle) {

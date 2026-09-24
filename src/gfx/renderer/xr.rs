@@ -10,15 +10,23 @@ use glam::{Mat4, Vec3};
 use super::*;
 use crate::xr::math::{EyeView, NEAR, projection_from_fov, view_from_pose};
 
+/// Profil de rendu VR (phase 2, mesuré sur le simulateur le 24 septembre 2026 :
+/// le GPU, pas le remplissage, était chargé par la géométrie — 2 549 draw
+/// calls par image stéréo dans Rivière). Distances de culling et de LOD du
+/// feuillage × 0,6 (feuillage coupé à 27 m, objets moyens à 66 m, arbres en
+/// impostor dès 24 m), carte d'ombre 1024, pas de réflexion planaire.
+pub const VR_DRAW_DISTANCE_SCALE: f32 = 0.6;
+const VR_SHADOW_SIZE: u32 = 1024;
+
 impl Renderer {
     /// Renderer sur un device **déjà créé** par l'appelant (instance Vulkan du
     /// runtime OpenXR, ou device de la fenêtre du simulateur) : ni fenêtre, ni
     /// surface, ni UI egui. `format` = format des cibles passées à
     /// `render_views` (celui de la swapchain XR, sRGB).
     ///
-    /// Qualité : mono-échantillon et ombres à la taille de référence pour
-    /// l'instant — le profil `RenderQuality::Vr` (MSAA 4×, ombres réduites, bloom
-    /// coupé) est l'objet de la phase 2.
+    /// Qualité : profil VR (cf. `VR_DRAW_DISTANCE_SCALE`) — distances
+    /// d'affichage réduites, ombres 1024, pas de réflexion planaire ;
+    /// mono-échantillon (MSAA à venir avec le multiview).
     pub fn new_external(
         adapter: &wgpu::Adapter,
         device: wgpu::Device,
@@ -40,7 +48,7 @@ impl Renderer {
         };
         let info = adapter.get_info();
         log::info!("GPU : {} ({:?}) — rendu VR", info.name, info.backend);
-        Self::assemble(
+        let mut renderer = Self::assemble(
             None,
             None,
             device,
@@ -48,10 +56,23 @@ impl Renderer {
             config,
             size,
             1,
-            SHADOW_SIZE,
+            VR_SHADOW_SIZE,
             format!("{:?}", info.backend),
             None,
-        )
+        );
+        renderer.draw_distance_scale = VR_DRAW_DISTANCE_SCALE;
+        renderer.planar_reflections = false;
+        renderer
+    }
+
+    /// Règle l'échelle des distances d'affichage (culling + LOD du feuillage),
+    /// `1.0` = celles du jeu desktop — réglage du profil VR, exposé au
+    /// simulateur (`QUEST_SIM_DRAW_DISTANCE`) pour mesurer son effet.
+    pub fn set_draw_distance_scale(&mut self, scale: f32) {
+        self.draw_distance_scale = scale.clamp(0.1, 4.0);
+        // Le plan de dessin est mis en cache tant que la scène et la caméra
+        // ne changent pas : le forcer à se reconstruire.
+        self.last_render_hash = 0;
     }
 
     /// Rend la scène pour les deux yeux, en coordonnées **monde** (poses déjà

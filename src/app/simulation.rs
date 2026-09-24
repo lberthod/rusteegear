@@ -1839,6 +1839,12 @@ impl AppState {
             // chaque changement de direction. Les requêtes voient de toute façon
             // les positions d'avant-pas (`set_next_kinematic_translation` ne
             // s'applique qu'au `step`) : l'ordre n'a pas d'autre effet.
+            // Chronomètre « physique » : tout le bloc (pilotage joueurs/IA,
+            // corps scriptés, pas rapier), plus seulement `step` — la
+            // résolution des corps scriptés (`resolve_scripted_moves`), ~15 ms
+            // par image dans Rivière avant sa mise au repos, restait invisible
+            // de cette mesure (constaté le 24 septembre 2026, phase 2 VR).
+            let phys_started = crate::time_compat::Instant::now();
             let scripted_first = self.scene.platformer.is_some();
             if scripted_first {
                 phys.resolve_scripted_moves(dt, &mut self.scene);
@@ -1912,7 +1918,6 @@ impl AppState {
             if !scripted_first {
                 phys.resolve_scripted_moves(dt, &mut self.scene);
             }
-            let phys_started = crate::time_compat::Instant::now();
             phys.step(dt, &mut self.scene);
             self.perf.sim_physics_ms = phys_started.elapsed().as_secs_f32() * 1000.0;
             // Plateformer 2D : le joueur est ramené sur le plan de jeu après le pas

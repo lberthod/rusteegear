@@ -339,6 +339,8 @@ impl Renderer {
             gpu_pass_timings_ms: Vec::new(),
             last_frame_draw_calls: 0,
             xr_targets: None,
+            draw_distance_scale: 1.0,
+            planar_reflections: true,
         }
     }
 

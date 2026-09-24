@@ -394,3 +394,55 @@ Dans le casque, l'APK Rivière actuel tournera donc bien en dessous de 72 Hz :
 c'est attendu à ce stade (P1 = justesse du rendu, P2 = vitesse). Pour ce soir,
 le test go / no-go de la phase 0 reste `VR_SCENE=cubes INSTALL=1
 ./packaging/build_quest.sh` ; l'APK Rivière est un aperçu.
+
+## 11. Phase 2, partie 1 — CPU et profil VR (24 septembre 2026)
+
+### Mesurer juste : `quest_sim --bench`
+
+```bash
+cargo run --release --bin quest_sim -- --bench 8        # Rivière, Quest 3
+cargo run --release --bin quest_sim -- --bench 8 --scene cubes
+QUEST_SIM_SCALE=0.7 QUEST_SIM_DRAW_DISTANCE=1 cargo run --release --bin quest_sim -- --bench 8
+```
+
+Hors écran, sans vsync, CPU et GPU en parallèle avec une image d'avance (comme
+`xrWaitFrame`) : débit, CPU (simulation / rendu), draw calls. Les mesures du
+§10 attendaient le GPU à chaque image (CPU + GPU additionnés) : pessimistes.
+Fermer tout autre rendu GPU (navigateur, aperçu web) avant de mesurer —
+l'écart peut aller du simple au double.
+
+### Corrections
+
+| Changement | Effet mesuré |
+|---|---|
+| **Corps scriptés au repos** (`Physics::resolve_scripted_moves`) : un objet posé, que son script ne déplace ni ne tourne, ne repasse plus par le `KinematicCharacterController` à chaque pas ; revérification étalée tous les 15 pas, réveil immédiat au premier déplacement/rotation, après `set_position`, et 2 pas de délai après `set_object_solid` (sol retiré). 4 tests. | `advance_play` Rivière : **16,8 → 2,4 ms** (médiane). Profite aussi au jeu desktop, au web et au **serveur** multijoueur. |
+| Mesure `sim_perf_ms` « physique » : couvre désormais pilotage joueurs/IA + corps scriptés + pas rapier | le coût n'est plus invisible |
+| **Profil de rendu VR** (`Renderer::new_external`) : distances de culling/LOD du feuillage × 0,6, ombres 1024, pas de réflexion planaire (eau sans reflet, une passe de toute la scène en moins par œil) | 2 549 → 1 343 draw calls par image stéréo |
+
+### Résultat (Mac M5 Pro, Rivière, pleine résolution Quest 3)
+
+| | Avant (§10) | Maintenant |
+|---|---|---|
+| Temps par image | 37–39 ms (mesure sérialisée) | **10,1–10,7 ms, 94–99 img/s** (budget 11,1 ms) |
+| CPU par image | ~29 ms | **6,0 ms** (simulation 1,8, rendu 4,3) |
+| Résolution × 0,7 | — | 8,9 ms |
+| Sans ombres | — | 8,8 ms (ombres ≈ 1,3 ms) |
+| Scène de cubes | 1,8 ms | 0,8 ms |
+
+Le Mac tient donc 90 Hz ; **le Quest 3 non, pas encore** : son GPU (Adreno 740)
+et son CPU sont nettement moins puissants qu'un M5 Pro. Estimation grossière,
+à confirmer au casque : ×3 à ×5 sur les deux. D'où la suite.
+
+### Phase 2, partie 2 — à faire (mesure au casque indispensable)
+
+1. **Multiview** (`Features::MULTIVIEW`, `@builtin(view_index)`) : une seule
+   passe de scène pour les deux yeux — divise par deux les draw calls et le
+   coût CPU de rendu (4,3 ms → ~2,2).
+2. **Simulation découplée du rendu** : pas fixe 60 Hz, rendu 72/90 Hz
+   interpolé (le moteur a déjà `sim_poses` pour l'interpolation réseau).
+3. **Résolution de rendu** adaptée au casque (0,7–0,8 × la recommandée, le
+   compositeur agrandit) + **foveation fixe** (`XR_FB_foveation`).
+4. Ombres : 1 cascade en VR ; MSAA 4× + tonemap dans la passe principale
+   (supprime une cible HDR plein écran par œil, coûteuse sur GPU à tuiles) ;
+   textures **ASTC**.
+5. Rafraîchissement 72 Hz par défaut sur Quest, 90 Hz si mesuré tenable.

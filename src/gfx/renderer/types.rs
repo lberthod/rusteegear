@@ -544,6 +544,14 @@ pub struct Renderer {
     /// créées au premier `render_views` puis réutilisées tant que la taille ne
     /// change pas — cf. `xr.rs`.
     pub(super) xr_targets: Option<XrTargets>,
+    /// Multiplie les distances de culling (feuillage, objets moyens) et de
+    /// bascule LOD du feuillage : `1.0` partout, réduit par le profil VR
+    /// (`new_external`) — chaque objet y est dessiné deux fois (un par œil)
+    /// par un GPU mobile.
+    pub(super) draw_distance_scale: f32,
+    /// Réflexion planaire de l'eau (passe supplémentaire de toute la scène) :
+    /// coupée par le profil VR, où elle coûterait une passe de plus **par œil**.
+    pub(super) planar_reflections: bool,
 }
 
 /// Cibles de rendu d'un œil VR (partagées par les deux yeux, rendus l'un après

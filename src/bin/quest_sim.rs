@@ -8,8 +8,10 @@
 //! on développe et on vérifie les phases 1 à 6 de la roadmap VR ici, le casque
 //! ne sert plus qu'aux tests de validation.
 //!
-//! `QUEST_SIM_SCALE=0.7` : résolution de rendu par œil × 0,7 (mesure de la
-//! phase 2).
+//! `--bench <secondes>` : banc d'essai hors écran, sans vsync (débit, CPU,
+//! draw calls). `QUEST_SIM_SCALE=0.7` : résolution de rendu par œil × 0,7 ;
+//! `QUEST_SIM_DRAW_DISTANCE=1` : distances d'affichage du jeu desktop au lieu
+//! du profil VR (mesures de la phase 2).
 //!
 //! Scène : `--scene riviere` (défaut, phase 1 : la vraie partie Rivière rendue
 //! par le `Renderer` du moteur) ou `--scene cubes` (scène de test de la phase 0).
@@ -267,7 +269,7 @@ impl Gpu {
             ..Default::default()
         });
         let eyes = Eyes::new(&device, profile, &blit_layout, &sampler);
-        let content = XrContent::new(
+        let mut content = XrContent::new(
             choice,
             &adapter,
             &device,
@@ -276,6 +278,16 @@ impl Gpu {
             profile.eye_width,
             profile.eye_height,
         );
+        // `QUEST_SIM_DRAW_DISTANCE=1` : distances d'affichage du jeu desktop
+        // (le profil VR les réduit, cf. `VR_DRAW_DISTANCE_SCALE`).
+        if let (XrContent::Game(game), Some(scale)) = (
+            &mut content,
+            std::env::var("QUEST_SIM_DRAW_DISTANCE")
+                .ok()
+                .and_then(|v| v.parse::<f32>().ok()),
+        ) {
+            game.renderer.set_draw_distance_scale(scale);
+        }
         Ok(Self {
             window,
             device,
@@ -530,9 +542,12 @@ impl ApplicationHandler for Sim {
                     return;
                 };
                 gpu.render(&self.head);
-                // Attend la fin du GPU : la mesure couvre CPU + GPU de l'image.
-                let _ = gpu.device.poll(wgpu::PollType::wait_indefinitely());
-                self.acc_ms += now.elapsed().as_secs_f32() * 1000.0;
+                // Pas d'attente du GPU : comme dans un casque, CPU (image N+1) et
+                // GPU (image N) travaillent en parallèle, `get_current_texture`
+                // freine quand le GPU prend du retard. Le temps par image est donc
+                // l'intervalle entre deux images (débit réel). Mesure CPU/GPU
+                // précise, sans vsync : `--bench`.
+                self.acc_ms += dt * 1000.0;
                 self.acc_frames += 1;
                 if self.acc_ms >= 500.0 {
                     let avg = self.acc_ms / self.acc_frames as f32;
@@ -561,7 +576,8 @@ impl ApplicationHandler for Sim {
                             XrContent::Cubes(_) => String::new(),
                         };
                         log::info!(
-                            "{avg:.2} ms/image (CPU+GPU, 2 yeux) — budget {:.1} ms ({} Hz){detail}",
+                            "{avg:.2} ms/image ({:.0} img/s, 2 yeux) — budget {:.1} ms ({} Hz){detail}",
+                            1000.0 / avg.max(0.01),
                             p.frame_budget_ms(),
                             p.refresh_hz
                         );
@@ -705,9 +721,128 @@ async fn snapshot(path: &str, profile: QuestProfile, choice: SceneChoice) -> Res
         .map_err(|e| format!("écriture de {path} : {e}"))
 }
 
+/// `--bench <secondes>` : banc d'essai hors écran (sans vsync), CPU et GPU en
+/// parallèle avec une image d'avance au plus — comme un casque, où
+/// `xrWaitFrame` laisse le CPU préparer l'image N+1 pendant que le GPU rend la
+/// N. Affiche le débit (images/s), le temps CPU par image (simulation, rendu)
+/// et le nombre de draw calls. Même scène, même pose que `--snapshot`.
+async fn bench(seconds: f32, profile: QuestProfile, choice: SceneChoice) -> Result<(), String> {
+    let instance = wgpu::Instance::default();
+    let adapter = instance
+        .request_adapter(&wgpu::RequestAdapterOptions {
+            power_preference: wgpu::PowerPreference::HighPerformance,
+            compatible_surface: None,
+            force_fallback_adapter: false,
+        })
+        .await
+        .map_err(|e| format!("adaptateur GPU : {e}"))?;
+    let (device, queue) = adapter
+        .request_device(&wgpu::DeviceDescriptor {
+            label: Some("quest_sim_bench"),
+            required_limits: adapter.limits(),
+            ..Default::default()
+        })
+        .await
+        .map_err(|e| format!("device : {e}"))?;
+    let (w, h) = (profile.eye_width, profile.eye_height);
+    let texture = device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("quest_sim_bench"),
+        size: wgpu::Extent3d {
+            width: w,
+            height: h,
+            depth_or_array_layers: 2,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: EYE_FORMAT,
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+        view_formats: &[],
+    });
+    let views = [0, 1].map(|layer| {
+        texture.create_view(&wgpu::TextureViewDescriptor {
+            dimension: Some(wgpu::TextureViewDimension::D2),
+            base_array_layer: layer,
+            array_layer_count: Some(1),
+            ..Default::default()
+        })
+    });
+    let mut content = XrContent::new(choice, &adapter, &device, &queue, EYE_FORMAT, w, h);
+    if let (XrContent::Game(game), Some(scale)) = (
+        &mut content,
+        std::env::var("QUEST_SIM_DRAW_DISTANCE")
+            .ok()
+            .and_then(|v| v.parse::<f32>().ok()),
+    ) {
+        game.renderer.set_draw_distance_scale(scale);
+    }
+    let eyes = SimHead::default().eye_views(&profile);
+    // Échauffement : pipelines compilés, rig posé, caches remplis.
+    for _ in 0..30 {
+        content.render(&device, &queue, eyes, [&views[0], &views[1]], w, h);
+        let _ = device.poll(wgpu::PollType::wait_indefinitely());
+    }
+    let started = Instant::now();
+    let (mut frames, mut cpu_ms, mut sim_ms, mut render_ms) = (0u32, 0f32, 0f32, 0f32);
+    let mut previous: Option<wgpu::SubmissionIndex> = None;
+    while started.elapsed().as_secs_f32() < seconds {
+        let t = Instant::now();
+        content.render(&device, &queue, eyes, [&views[0], &views[1]], w, h);
+        cpu_ms += t.elapsed().as_secs_f32() * 1000.0;
+        if let XrContent::Game(g) = &content {
+            sim_ms += g.last_sim_ms;
+            render_ms += g.last_render_ms;
+        }
+        // Une image d'avance au plus : attend la fin GPU de l'image précédente.
+        let current = queue.submit([]);
+        if let Some(prev) = previous.replace(current) {
+            let _ = device.poll(wgpu::PollType::Wait {
+                submission_index: Some(prev),
+                timeout: None,
+            });
+        }
+        frames += 1;
+    }
+    let _ = device.poll(wgpu::PollType::wait_indefinitely());
+    let total = started.elapsed().as_secs_f32() * 1000.0;
+    let n = frames.max(1) as f32;
+    let draw_calls = match &content {
+        XrContent::Game(g) => g.renderer.gpu_profiler_info().1,
+        XrContent::Cubes(_) => 12,
+    };
+    println!(
+        "{} {}×{}/œil : {:.2} ms/image ({:.0} img/s, budget {:.1} ms) · CPU {:.2} ms (simulation {:.2}, rendu {:.2}) · {} draw calls",
+        profile.name,
+        w,
+        h,
+        total / n,
+        1000.0 * n / total,
+        profile.frame_budget_ms(),
+        cpu_ms / n,
+        sim_ms / n,
+        render_ms / n,
+        draw_calls
+    );
+    Ok(())
+}
+
 fn main() {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
     let args: Vec<String> = std::env::args().collect();
+    if let Some(i) = args.iter().position(|a| a == "--bench") {
+        let seconds = args.get(i + 1).and_then(|v| v.parse().ok()).unwrap_or(10.0);
+        let profile = if args.iter().any(|a| a == "--quest2") {
+            QuestProfile::QUEST2
+        } else {
+            QuestProfile::QUEST3
+        }
+        .scaled(render_scale());
+        if let Err(e) = pollster::block_on(bench(seconds, profile, scene_from_args(&args))) {
+            eprintln!("simulateur : {e}");
+            std::process::exit(1);
+        }
+        return;
+    }
     if let Some(i) = args.iter().position(|a| a == "--snapshot") {
         let Some(path) = args.get(i + 1) else {
             eprintln!(

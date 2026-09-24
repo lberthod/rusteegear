@@ -545,7 +545,9 @@ pub struct PerfState {
     /// indicateur de *quel côté* (sim vs rendu/présentation) chercher un à-coup.
     perf_window_worst_sim: f32,
     /// Durée des scripts et de la physique du dernier pas fixe (ms), et dernier
-    /// journal « pas lent » — diagnostic des saccades (cf. `sim_step`).
+    /// journal « pas lent » — diagnostic des saccades (cf. `sim_step`). La
+    /// physique couvre pilotage des joueurs et de l'IA, corps scriptés et pas
+    /// rapier (pas seulement ce dernier, depuis le 24 septembre 2026).
     sim_scripts_ms: f32,
     sim_physics_ms: f32,
     last_slow_step_log: Option<Instant>,

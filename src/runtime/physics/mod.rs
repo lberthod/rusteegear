@@ -114,6 +114,12 @@ const PLAYER_SNAP_TO_GROUND: f32 = 0.2;
 /// chute libre — inutilement complexe pour un PNJ qui marche.
 const SCRIPTED_FALL_SPEED: f32 = 3.0;
 
+/// Nombre maximal de pas fixes consécutifs sautés par un corps scripté au
+/// repos avant une résolution complète de contrôle (15 pas = 0,25 s à 60 Hz) :
+/// filet si le sol change sous lui sans passer par `set_object_solid`, ou si
+/// un autre corps s'est glissé contre lui (dépénétration).
+const SCRIPTED_REST_RECHECK_STEPS: u32 = 15;
+
 /// Distance (m) au-delà de laquelle `Physics::set_position` (Sprint 103c)
 /// considère qu'un déplacement kinématique imposé hors de `move_shape` a pu
 /// invalider l'état « au sol » mis en cache — largement au-dessus de ce
@@ -183,6 +189,19 @@ pub struct Physics {
     /// d'autant (`control_kinematic`), sans quoi le contrôleur cinématique le
     /// laisserait glisser sur place et la plateforme partirait sous ses pieds.
     scripted_delta: std::collections::HashMap<usize, Vec3>,
+    /// Corps scriptés **au repos** (index d'objet → pas sautés depuis la
+    /// dernière résolution complète), cf. `resolve_scripted_moves` : un objet
+    /// posé au sol dont le script ne demande ni déplacement ni rotation n'a
+    /// pas besoin du `KinematicCharacterController` (réponse connue : il ne
+    /// bouge pas). Coûteux pour les grands colliders contre le terrain (jusqu'à
+    /// 2 ms par boss dans Rivière, mesuré le 24 septembre 2026). Vidé par
+    /// `set_position`/`set_object_solid` (le monde a changé sous lui).
+    scripted_rest: std::collections::HashMap<usize, u32>,
+    /// Pas pendant lesquels aucun corps ne peut **entrer** au repos, après un
+    /// changement du monde (`set_object_solid`) : un collider désactivé reste
+    /// dans la broad-phase jusqu'au `step` suivant, un corps « posé » sur un sol
+    /// qui vient de disparaître se serait rendormi dessus (constaté en test).
+    scripted_rest_cooldown: u32,
     /// Déplacement réellement effectué au dernier pas de chaque **joueur** (index
     /// d'objet → delta) : un joueur posé sur la tête de l'autre (coop du
     /// plateformer 2D) est emporté comme sur une plateforme mobile.

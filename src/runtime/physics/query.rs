@@ -88,6 +88,8 @@ impl Physics {
         {
             body.set_next_kinematic_translation(Vector::new(pos.x, pos.y, pos.z));
             body.set_translation(Vector::new(pos.x, pos.y, pos.z), true);
+            // Téléporté : plus « posé » là où il était (cf. `scripted_rest`).
+            self.scripted_rest.remove(&index);
         }
     }
 
@@ -98,6 +100,10 @@ impl Physics {
     /// (`KinematicState::vspeed`) — le saut en cours mourrait net à chaque piège.
     /// Renvoie `true` si au moins un collider a été touché.
     pub fn set_object_solid(&mut self, index: usize, solid: bool) -> bool {
+        // Un sol qui apparaît/disparaît : tout corps scripté au repos se
+        // re-vérifie au prochain pas (cf. `scripted_rest`).
+        self.scripted_rest.clear();
+        self.scripted_rest_cooldown = 2;
         self.invalidate_query_cache();
         let handles: Vec<ColliderHandle> = self
             .collider_owner

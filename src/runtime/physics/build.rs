@@ -130,8 +130,11 @@ impl Physics {
             // seulement X — une empreinte non carrée serait tronquée sinon),
             // même convention que `ball()`/`capsule()` ci-dessus.
             let cylinder = || {
-                ColliderBuilder::cylinder(he.y.abs().max(0.01), he.x.abs().max(he.z.abs()).max(0.01))
-                    .translation(center)
+                ColliderBuilder::cylinder(
+                    he.y.abs().max(0.01),
+                    he.x.abs().max(he.z.abs()).max(0.01),
+                )
+                .translation(center)
             };
             // Vertices bruts du mesh importé, mis à l'échelle de l'objet — même
             // principe que `he` ci-dessus pour les primitives : le collider rapier
@@ -534,6 +537,8 @@ impl Physics {
             kinematic,
             scripted,
             scripted_delta: std::collections::HashMap::new(),
+            scripted_rest: std::collections::HashMap::new(),
+            scripted_rest_cooldown: 0,
             player_delta: std::collections::HashMap::new(),
             conveyors: scene
                 .objects
