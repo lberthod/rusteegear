@@ -193,7 +193,7 @@ impl Renderer {
                 .textures
                 .get(&obj.texture)
                 .unwrap_or(&self.textures[""]);
-            pass.set_pipeline(&self.skinned_pipeline);
+            pass.set_pipeline(self.mv_or(|m| &m.skinned_pipeline, &self.skinned_pipeline));
             pass.set_bind_group(0, camera_bg, &[]);
             pass.set_bind_group(1, &self.skinned_models_bind_group, &[offset]);
             pass.set_bind_group(2, &self.shadow_bind_group, &[]);

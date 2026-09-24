@@ -309,17 +309,23 @@ impl Renderer {
             }),
             timestamp_writes: None,
             occlusion_query_set: None,
-            multiview_mask: None,
+            // VR multiview (`render_views`) : les deux yeux dans les deux
+            // couches des cibles, variantes multiview des pipelines.
+            multiview_mask: if self.mv_active && self.mv.is_some() {
+                std::num::NonZeroU32::new(0b11)
+            } else {
+                None
+            },
         });
         pass.set_viewport(0.0, 0.0, iw as f32, ih as f32, 0.0, 1.0);
 
         // Ciel : même geste que dans `render()`.
-        pass.set_pipeline(&self.sky_pipeline);
-        pass.set_bind_group(0, &self.camera_bind_group, &[]);
+        pass.set_pipeline(self.mv_or(|m| &m.sky_pipeline, &self.sky_pipeline));
+        pass.set_bind_group(0, self.scene_camera_bg(), &[]);
         pass.draw(0..3, 0..1);
 
-        pass.set_pipeline(&self.pipeline);
-        pass.set_bind_group(0, &self.camera_bind_group, &[]);
+        pass.set_pipeline(self.mv_or(|m| &m.pipeline, &self.pipeline));
+        pass.set_bind_group(0, self.scene_camera_bg(), &[]);
         pass.set_bind_group(2, &self.shadow_bind_group, &[]);
         pass.set_bind_group(1, &self.models_bind_group, &[]);
 
@@ -338,7 +344,7 @@ impl Renderer {
             &mut pass,
             &app.scene,
             &self.skinned_offsets_scratch,
-            &self.camera_bind_group,
+            self.scene_camera_bg(),
         );
         // Translucides en dernier, comme dans `render()`.
         draw_calls += self.draw_transparent_objects(&mut pass, app);

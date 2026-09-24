@@ -552,14 +552,38 @@ pub struct Renderer {
     /// Réflexion planaire de l'eau (passe supplémentaire de toute la scène) :
     /// coupée par le profil VR, où elle coûterait une passe de plus **par œil**.
     pub(super) planar_reflections: bool,
+    /// Pipelines de scène multiview (VR : les deux yeux en une passe), `None`
+    /// hors VR ou si le GPU n'expose pas `Features::MULTIVIEW`.
+    pub(super) mv: Option<pipelines::MultiviewSet>,
+    /// Vrai pendant l'encodage d'une passe multiview (`render_views`) : les
+    /// fonctions de dessin choisissent alors les variantes multiview de leurs
+    /// pipelines et le groupe caméra à deux vues (cf. accesseurs `mv_*`).
+    pub(super) mv_active: bool,
+    /// Classement de chaque modèle importé (rayon de culling, feuillage dense),
+    /// indexé comme `scene.imported` avec son chemin pour revalidation — cf.
+    /// `Renderer::refresh_mesh_classes`.
+    pub(super) mesh_classes: Vec<(String, MeshClass)>,
+}
+
+/// Classement d'un modèle importé, dérivé une fois de son nom de fichier.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct MeshClass {
+    pub(super) cull_radius: Option<f32>,
+    pub(super) dense_foliage: bool,
 }
 
 /// Cibles de rendu d'un œil VR (partagées par les deux yeux, rendus l'un après
 /// l'autre) — cf. `Renderer::render_views`.
 pub(crate) struct XrTargets {
     pub(super) size: (u32, u32),
+    /// 1 (un œil à la fois) ou 2 (multiview : texture-tableau, une couche par œil).
+    pub(super) layers: u32,
     pub(super) depth: wgpu::TextureView,
+    /// Cible de la passe de scène (tableau à 2 couches en multiview).
     pub(super) hdr: wgpu::TextureView,
+    /// Vue HDR de chaque œil (couche 0/1 en multiview, `hdr` lui-même sinon),
+    /// source du bloom et du tone mapping.
+    pub(super) hdr_eyes: [wgpu::TextureView; 2],
     pub(super) msaa: Option<wgpu::TextureView>,
     pub(super) bloom_mips: Vec<wgpu::TextureView>,
 }

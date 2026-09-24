@@ -73,6 +73,18 @@ fn render_scale() -> f32 {
         .unwrap_or(1.0)
 }
 
+/// Features du device VR : `MULTIVIEW` si l'adaptateur l'expose (les deux
+/// yeux en une passe, cf. `gfx::multiview`), sauf `QUEST_SIM_MULTIVIEW=0`
+/// (comparaison avec le rendu œil par œil).
+fn vr_features(adapter: &wgpu::Adapter) -> wgpu::Features {
+    let off = std::env::var("QUEST_SIM_MULTIVIEW").is_ok_and(|v| v == "0");
+    if off {
+        wgpu::Features::empty()
+    } else {
+        adapter.features() & wgpu::Features::MULTIVIEW
+    }
+}
+
 /// Scène depuis la ligne de commande : `--scene cubes|riviere` (défaut Rivière).
 fn scene_from_args(args: &[String]) -> SceneChoice {
     args.iter()
@@ -180,7 +192,7 @@ impl Gpu {
         let (device, queue) = adapter
             .request_device(&wgpu::DeviceDescriptor {
                 label: Some("quest_sim"),
-                required_features: wgpu::Features::empty(),
+                required_features: vr_features(&adapter),
                 required_limits: adapter.limits(),
                 experimental_features: wgpu::ExperimentalFeatures::disabled(),
                 memory_hints: wgpu::MemoryHints::Performance,
@@ -613,6 +625,7 @@ async fn snapshot(path: &str, profile: QuestProfile, choice: SceneChoice) -> Res
     let (device, queue) = adapter
         .request_device(&wgpu::DeviceDescriptor {
             label: Some("quest_sim_snapshot"),
+            required_features: vr_features(&adapter),
             required_limits: adapter.limits(),
             ..Default::default()
         })
@@ -739,6 +752,7 @@ async fn bench(seconds: f32, profile: QuestProfile, choice: SceneChoice) -> Resu
     let (device, queue) = adapter
         .request_device(&wgpu::DeviceDescriptor {
             label: Some("quest_sim_bench"),
+            required_features: vr_features(&adapter),
             required_limits: adapter.limits(),
             ..Default::default()
         })

@@ -220,11 +220,22 @@ fn contains_word(haystack: &str, word: &str) -> bool {
 
 /// Rayon de culling par distance pour `mesh`, `None` si aucune limite ne s'applique
 /// (catégorie « bâtiments/créatures » du plan Phase C, ou primitive codée).
+// Règle de référence (tests) ; le renderer applique la même via son cache
+// par modèle (`Renderer::refresh_mesh_classes`).
+#[cfg(test)]
 pub(super) fn culling_radius_for(scene: &Scene, mesh: MeshKind) -> Option<f32> {
     let MeshKind::Imported(i) = mesh else {
         return None;
     };
-    let path = scene.imported.get(i as usize)?.path.to_ascii_lowercase();
+    culling_radius_for_path(&scene.imported.get(i as usize)?.path)
+}
+
+/// Rayon de culling par distance d'un modèle importé d'après son chemin —
+/// pure fonction du nom de fichier, mise en cache par modèle dans le renderer
+/// (`MeshClass`) : recalculée pour chacun des milliers d'objets à chaque image,
+/// elle coûtait ~1 ms de CPU dans Rivière (profil du 24 septembre 2026).
+pub(super) fn culling_radius_for_path(path: &str) -> Option<f32> {
+    let path = path.to_ascii_lowercase();
     if FOLIAGE_LOW_RADIUS_KEYWORDS
         .iter()
         .any(|k| contains_word(&path, k))

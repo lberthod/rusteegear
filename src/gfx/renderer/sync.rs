@@ -530,6 +530,7 @@ impl Renderer {
 
         // Instances ordonnées par (mesh, texture) pour permettre des draws groupés.
         // On bâtit en parallèle le buffer storage et le plan de rendu (même ordre).
+        self.refresh_mesh_classes(&app.scene);
         let planes = frustum_planes(app.camera.view_proj());
         // Culling par distance (Phase C, `sprintoptimation3daudit10h.md`) : complète le
         // frustum ci-dessus, sur la position caméra « pure » (pas le décalage cosmétique
@@ -582,18 +583,28 @@ impl Renderer {
                 water: water_uniform(obj),
             });
             let (lmin, lmax) = app.scene.local_aabb(obj.mesh);
-            let radius =
-                culling_radius_for(&app.scene, obj.mesh).map(|r| r * self.draw_distance_scale);
+            // Classement du modèle (culling, feuillage dense) : lu dans le cache
+            // par modèle, jamais recalculé ici (cf. `refresh_mesh_classes`).
+            let class = match obj.mesh {
+                MeshKind::Imported(k) => self.mesh_classes.get(k as usize).map(|c| c.1),
+                _ => None,
+            };
+            let radius = class
+                .and_then(|c| c.cull_radius)
+                .map(|r| r * self.draw_distance_scale);
             let visible = obj.visible
                 && distance_visible(eye, obj.transform.position, radius)
                 && aabb_visible(&planes, model, lmin, lmax);
             // LOD géométrique (Phase D) : distance à la caméra « pure », comme le culling
             // par distance ci-dessus — jamais le décalage cosmétique de `write_uniforms`.
-            let lod_mesh = foliage_lod_mesh(
-                &app.scene,
-                obj.mesh,
-                eye.distance(obj.transform.position) / self.draw_distance_scale.max(0.01),
-            );
+            // Même règle que `lod::foliage_lod_mesh`, sur le classement en cache.
+            let far = eye.distance(obj.transform.position) / self.draw_distance_scale.max(0.01)
+                > FOLIAGE_LOD_DISTANCE;
+            let lod_mesh = if far && class.is_some_and(|c| c.dense_foliage) {
+                MeshKind::Billboard
+            } else {
+                obj.mesh
+            };
             self.draw_plan.push(InstanceDraw {
                 obj: i,
                 visible,
@@ -723,6 +734,32 @@ impl Renderer {
                 0,
                 bytemuck::cast_slice(&self.particle_scratch),
             );
+        }
+    }
+
+    /// Met à jour le classement des modèles importés (rayon de culling,
+    /// feuillage dense) : recalculé seulement pour un modèle nouveau ou dont le
+    /// chemin a changé — une comparaison de chaîne par modèle et par image, au
+    /// lieu de dizaines de recherches de mots-clés par **objet** (~1 ms/image
+    /// dans Rivière, 3 104 objets pour 43 modèles).
+    pub(super) fn refresh_mesh_classes(&mut self, scene: &Scene) {
+        self.mesh_classes.truncate(scene.imported.len());
+        for (i, m) in scene.imported.iter().enumerate() {
+            if self.mesh_classes.get(i).is_some_and(|(p, _)| *p == m.path) {
+                continue;
+            }
+            let entry = (
+                m.path.clone(),
+                MeshClass {
+                    cull_radius: culling_radius_for_path(&m.path),
+                    dense_foliage: is_dense_foliage_path(&m.path),
+                },
+            );
+            if i < self.mesh_classes.len() {
+                self.mesh_classes[i] = entry;
+            } else {
+                self.mesh_classes.push(entry);
+            }
         }
     }
 }

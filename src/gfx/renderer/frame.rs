@@ -755,8 +755,8 @@ impl Renderer {
             return 0;
         }
         let mut draws = 0;
-        pass.set_pipeline(&self.transparent_pipeline);
-        pass.set_bind_group(0, &self.camera_bind_group, &[]);
+        pass.set_pipeline(self.mv_or(|m| &m.transparent_pipeline, &self.transparent_pipeline));
+        pass.set_bind_group(0, self.scene_camera_bg(), &[]);
         pass.set_bind_group(1, &self.models_bind_group, &[]);
         pass.set_bind_group(2, &self.shadow_bind_group, &[]);
         for draw in &self.draw_plan_transparent {
@@ -794,8 +794,8 @@ impl Renderer {
         if self.particle_scratch.is_empty() {
             return 0;
         }
-        pass.set_pipeline(&self.particle_pipeline);
-        pass.set_bind_group(0, &self.camera_bind_group, &[]);
+        pass.set_pipeline(self.mv_or(|m| &m.particle_pipeline, &self.particle_pipeline));
+        pass.set_bind_group(0, self.scene_camera_bg(), &[]);
         pass.set_bind_group(1, &self.particle_bind_group, &[]);
         pass.draw(0..6, 0..self.particle_scratch.len() as u32);
         1

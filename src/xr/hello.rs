@@ -75,6 +75,8 @@ fn run_inner(app: &AndroidApp) -> Result<(), String> {
     let mut enabled = xr::ExtensionSet::default();
     enabled.khr_vulkan_enable2 = true;
     enabled.khr_android_create_instance = true;
+    // Fréquence d'affichage (phase 2) : demandée si le runtime la propose.
+    enabled.fb_display_refresh_rate = available.fb_display_refresh_rate;
     let instance = entry
         .create_instance(
             &xr::ApplicationInfo {
@@ -126,8 +128,22 @@ fn run_inner(app: &AndroidApp) -> Result<(), String> {
     if views.len() != VIEW_COUNT as usize {
         return Err(format!("{} vues au lieu de 2", views.len()));
     }
-    let width = views[0].recommended_image_rect_width;
-    let height = views[0].recommended_image_rect_height;
+    // Résolution de rendu (phase 2) : recommandée × `VR_RENDER_SCALE` (fixé à
+    // la construction, défaut 1), bornée par le maximum du runtime.
+    let render_scale = option_env!("RUSTEEGEAR_VR_RENDER_SCALE")
+        .and_then(|v| v.parse::<f32>().ok())
+        .unwrap_or(1.0);
+    let (width, height) = super::quality::eye_size(
+        (
+            views[0].recommended_image_rect_width,
+            views[0].recommended_image_rect_height,
+        ),
+        (
+            views[0].max_image_rect_width,
+            views[0].max_image_rect_height,
+        ),
+        render_scale,
+    );
     log::info!("VR : {width}×{height} px par œil");
 
     let (vk_format, color_format) = pick_swapchain_format(
@@ -210,6 +226,9 @@ fn run_inner(app: &AndroidApp) -> Result<(), String> {
                     match e.state() {
                         xr::SessionState::READY => {
                             session.begin(VIEW_TYPE).map_err(err("début de session"))?;
+                            if enabled.fb_display_refresh_rate {
+                                request_refresh_rate(&session);
+                            }
                             session_running = true;
                         }
                         xr::SessionState::STOPPING => {
@@ -302,6 +321,25 @@ fn run_inner(app: &AndroidApp) -> Result<(), String> {
     Ok(())
 }
 
+/// Demande la fréquence d'affichage visée (`VR_HZ` à la construction, défaut
+/// `quality::DEFAULT_REFRESH_HZ`) parmi celles du casque. Journalise tout :
+/// c'est la première mesure à lire au test casque.
+fn request_refresh_rate(session: &xr::Session<xr::Vulkan>) {
+    let wanted = option_env!("RUSTEEGEAR_VR_HZ")
+        .and_then(|v| v.parse::<f32>().ok())
+        .unwrap_or(super::quality::DEFAULT_REFRESH_HZ);
+    let available = session
+        .enumerate_display_refresh_rates()
+        .unwrap_or_default();
+    match super::quality::pick_refresh_rate(&available, wanted) {
+        Some(hz) => match session.request_display_refresh_rate(hz) {
+            Ok(()) => log::info!("VR : {hz} Hz demandés (disponibles : {available:?})"),
+            Err(e) => log::warn!("VR : {hz} Hz refusés ({e}), disponibles : {available:?}"),
+        },
+        None => log::warn!("VR : aucune fréquence d'affichage annoncée"),
+    }
+}
+
 /// Crée `VkInstance`/`VkDevice` via le runtime XR avec les extensions exigées par
 /// wgpu-hal, puis les importe dans wgpu.
 ///
@@ -385,7 +423,9 @@ unsafe fn create_gpu(
         exposed.info.backend
     );
 
-    let features = wgpu::Features::empty();
+    // Multiview (les deux yeux en une passe, cf. `gfx::multiview`) si le GPU
+    // l'expose — cœur de Vulkan 1.1, donc sur tous les Quest.
+    let features = exposed.features & wgpu::Features::MULTIVIEW;
     let limits = exposed.capabilities.limits.clone();
     let device_exts = exposed.adapter.required_device_extensions(features);
     let device_ext_ptrs: Vec<*const c_char> = device_exts.iter().map(|e| e.as_ptr()).collect();

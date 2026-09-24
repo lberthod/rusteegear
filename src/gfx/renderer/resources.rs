@@ -162,6 +162,7 @@ impl Renderer {
             shadow_size,
             backend,
             gpu_profiler,
+            false,
         ))
     }
 
@@ -180,6 +181,7 @@ impl Renderer {
         shadow_size: u32,
         backend: String,
         gpu_profiler: Option<GpuProfiler>,
+        multiview: bool,
     ) -> Renderer {
         let bundle = pipelines::build(
             &device,
@@ -189,8 +191,10 @@ impl Renderer {
             window.as_ref(),
             msaa_samples,
             shadow_size,
+            multiview,
         );
         let PipelineBundle {
+            multiview: mv,
             pipeline,
             sky_pipeline,
             tonemap_pipeline,
@@ -339,6 +343,9 @@ impl Renderer {
             gpu_pass_timings_ms: Vec::new(),
             last_frame_draw_calls: 0,
             xr_targets: None,
+            mv,
+            mv_active: false,
+            mesh_classes: Vec::new(),
             draw_distance_scale: 1.0,
             planar_reflections: true,
         }

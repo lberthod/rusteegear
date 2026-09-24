@@ -398,7 +398,21 @@ pub(super) fn create_bloom_mip_views(
         })
         .collect()
 }
+/// Pipelines de scène en variante multiview + uniform caméra à deux vues
+/// (cf. `multiview_set` dans `build`).
+pub(crate) struct MultiviewSet {
+    pub(super) pipeline: wgpu::RenderPipeline,
+    pub(super) transparent_pipeline: wgpu::RenderPipeline,
+    pub(super) sky_pipeline: wgpu::RenderPipeline,
+    pub(super) particle_pipeline: wgpu::RenderPipeline,
+    pub(super) skinned_pipeline: wgpu::RenderPipeline,
+    /// Deux `CameraUniform` consécutifs (œil gauche puis droit).
+    pub(super) camera_buf: wgpu::Buffer,
+    pub(super) camera_bind_group: wgpu::BindGroup,
+}
+
 pub(super) struct PipelineBundle {
+    pub(super) multiview: Option<MultiviewSet>,
     pub(super) pipeline: wgpu::RenderPipeline,
     pub(super) sky_pipeline: wgpu::RenderPipeline,
     pub(super) tonemap_pipeline: wgpu::RenderPipeline,
@@ -467,6 +481,7 @@ pub(super) fn build(
     window: Option<&Arc<Window>>,
     sample_count: u32,
     shadow_size: u32,
+    multiview: bool,
 ) -> PipelineBundle {
     let multisample = wgpu::MultisampleState {
         count: sample_count,
@@ -750,7 +765,7 @@ pub(super) fn build(
         ],
         immediate_size: 0,
     });
-    let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+    let pipeline_desc = wgpu::RenderPipelineDescriptor {
         label: Some("pipeline"),
         layout: Some(&pipeline_layout),
         vertex: wgpu::VertexState {
@@ -788,14 +803,15 @@ pub(super) fn build(
         multisample,
         multiview_mask: None,
         cache: None,
-    });
+    };
+    let pipeline = device.create_render_pipeline(&pipeline_desc);
 
     // --- Passe transparente (analyse comparative 2026-09-04) : mêmes shaders et
     // layout que `pipeline`, mais mélange alpha (`ALPHA_BLENDING`) et **pas
     // d'écriture de profondeur** — les objets translucides se dessinent après tous
     // les opaques, triés du plus loin au plus près (`write_uniforms`), et ne
     // masquent rien derrière eux dans le depth buffer.
-    let transparent_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+    let transparent_pipeline_desc = wgpu::RenderPipelineDescriptor {
         label: Some("transparent_pipeline"),
         layout: Some(&pipeline_layout),
         vertex: wgpu::VertexState {
@@ -833,7 +849,8 @@ pub(super) fn build(
         multisample,
         multiview_mask: None,
         cache: None,
-    });
+    };
+    let transparent_pipeline = device.create_render_pipeline(&transparent_pipeline_desc);
 
     // --- Ciel : triangle plein écran sans vertex buffer, dessiné en
     // premier dans la passe principale (avant la géométrie), profondeur à `Always`/
@@ -849,7 +866,7 @@ pub(super) fn build(
         bind_group_layouts: &[Some(&camera_layout)],
         immediate_size: 0,
     });
-    let sky_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+    let sky_pipeline_desc = wgpu::RenderPipelineDescriptor {
         label: Some("sky_pipeline"),
         layout: Some(&sky_pipeline_layout),
         vertex: wgpu::VertexState {
@@ -887,7 +904,8 @@ pub(super) fn build(
         multisample,
         multiview_mask: None,
         cache: None,
-    });
+    };
+    let sky_pipeline = device.create_render_pipeline(&sky_pipeline_desc);
 
     // --- Particules (Sprint 132) : quads billboardés dépliés dans le vertex
     // shader depuis un tampon storage d'instances (`particle_buf`, groupe 1) —
@@ -915,13 +933,12 @@ pub(super) fn build(
         label: Some("particle_shader"),
         source: wgpu::ShaderSource::Wgsl(include_str!("shaders/particles.wgsl").into()),
     });
-    let particle_pipeline_layout =
-        device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("particle_pipeline_layout"),
-            bind_group_layouts: &[Some(&camera_layout), Some(&particle_layout)],
-            immediate_size: 0,
-        });
-    let particle_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+    let particle_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+        label: Some("particle_pipeline_layout"),
+        bind_group_layouts: &[Some(&camera_layout), Some(&particle_layout)],
+        immediate_size: 0,
+    });
+    let particle_pipeline_desc = wgpu::RenderPipelineDescriptor {
         label: Some("particle_pipeline"),
         layout: Some(&particle_pipeline_layout),
         vertex: wgpu::VertexState {
@@ -959,7 +976,8 @@ pub(super) fn build(
         multisample,
         multiview_mask: None,
         cache: None,
-    });
+    };
+    let particle_pipeline = device.create_render_pipeline(&particle_pipeline_desc);
 
     // --- Tone mapping : passe plein écran qui convertit `HDR_FORMAT`
     // (rempli par `pipeline`/`sky_pipeline`/`grid_pipeline`/`gizmo_pipeline`/
@@ -1252,7 +1270,7 @@ pub(super) fn build(
         ],
         immediate_size: 0,
     });
-    let skinned_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+    let skinned_pipeline_desc = wgpu::RenderPipelineDescriptor {
         label: Some("skinned_pipeline"),
         layout: Some(&skinned_pipeline_layout),
         vertex: wgpu::VertexState {
@@ -1290,7 +1308,8 @@ pub(super) fn build(
         multisample,
         multiview_mask: None,
         cache: None,
-    });
+    };
+    let skinned_pipeline = device.create_render_pipeline(&skinned_pipeline_desc);
 
     // --- Pipeline d'ombre (profondeur seule depuis la lumière) ---
     let shadow_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
@@ -1518,7 +1537,65 @@ pub(super) fn build(
     let depth_view = create_depth_view(device, config, sample_count);
     let editor = window.map(|w| Editor::new(device, config.format, w));
 
+    // --- Variantes multiview (VR, phase 2 : les deux yeux en une passe) ---
+    // Mêmes descripteurs que ci-dessus, shaders dérivés par
+    // `gfx::multiview::multiview_wgsl`, `multiview_mask = 0b11`, cibles
+    // mono-échantillon à deux couches. Seulement pour un renderer VR
+    // (`Renderer::new_external`) sur un device qui expose `Features::MULTIVIEW`.
+    let multiview_set = multiview.then(|| {
+        let cam_size = std::mem::size_of::<CameraUniform>();
+        let module = |label: &'static str, src: &str| {
+            device.create_shader_module(wgpu::ShaderModuleDescriptor {
+                label: Some(label),
+                source: wgpu::ShaderSource::Wgsl(
+                    super::multiview::multiview_wgsl(src, cam_size).into(),
+                ),
+            })
+        };
+        let main_mv = module("main_shader_mv", include_str!("shaders/main.wgsl"));
+        let sky_mv = module("sky_shader_mv", include_str!("shaders/sky.wgsl"));
+        let particle_mv = module("particle_shader_mv", include_str!("shaders/particles.wgsl"));
+        let skinned_mv = module("skinned_shader_mv", include_str!("shaders/skinned.wgsl"));
+        let variant = |desc: &wgpu::RenderPipelineDescriptor,
+                       vs: &wgpu::ShaderModule,
+                       fs: &wgpu::ShaderModule| {
+            let mut d = desc.clone();
+            d.vertex.module = vs;
+            if let Some(f) = d.fragment.as_mut() {
+                f.module = fs;
+            }
+            d.multisample = wgpu::MultisampleState::default();
+            d.multiview_mask = std::num::NonZeroU32::new(0b11);
+            device.create_render_pipeline(&d)
+        };
+        let camera_buf = create_uniform(device, "camera_mv", 2 * cam_size);
+        let camera_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("camera_bg_mv"),
+            layout: &camera_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: camera_buf.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: light_buf.as_entire_binding(),
+                },
+            ],
+        });
+        MultiviewSet {
+            pipeline: variant(&pipeline_desc, &main_mv, &main_mv),
+            transparent_pipeline: variant(&transparent_pipeline_desc, &main_mv, &main_mv),
+            sky_pipeline: variant(&sky_pipeline_desc, &sky_mv, &sky_mv),
+            particle_pipeline: variant(&particle_pipeline_desc, &particle_mv, &particle_mv),
+            skinned_pipeline: variant(&skinned_pipeline_desc, &skinned_mv, &main_mv),
+            camera_buf,
+            camera_bind_group,
+        }
+    });
+
     PipelineBundle {
+        multiview: multiview_set,
         pipeline,
         sky_pipeline,
         tonemap_pipeline,

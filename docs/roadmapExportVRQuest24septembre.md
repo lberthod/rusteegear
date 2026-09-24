@@ -446,3 +446,20 @@ et son CPU sont nettement moins puissants qu'un M5 Pro. Estimation grossière,
    (supprime une cible HDR plein écran par œil, coûteuse sur GPU à tuiles) ;
    textures **ASTC**.
 5. Rafraîchissement 72 Hz par défaut sur Quest, 90 Hz si mesuré tenable.
+
+## 12. Phase 2, partie 2 — multiview, cache de classement, réglages casque
+
+| Changement | Effet mesuré (Mac M5 Pro, Rivière, 2064×2208/œil) |
+|---|---|
+| **Multiview** : variantes des shaders de scène **dérivées automatiquement** du source (`gfx::multiview::multiview_wgsl` : `camera` → paire de caméras + `@builtin(view_index)`, validées par naga en test) ; pipelines multiview (`multiview_mask = 0b11`) ; une seule passe de scène vers une cible HDR à deux couches, tone mapping par œil. Activé si le GPU expose `Features::MULTIVIEW` (Metal : oui ; Vulkan 1.1 des Quest : oui). `QUEST_SIM_MULTIVIEW=0` pour comparer. | draw calls 1 343 → **769** ; image identique à 99 % au rendu œil par œil (différences = créatures en mouvement) ; gain de temps faible sur Mac, attendu plus net sur Adreno (multiview natif) — **à mesurer au casque** |
+| **Cache de classement des modèles** (`Renderer::refresh_mesh_classes`) : rayon de culling et « feuillage dense » calculés une fois par modèle (43), plus par objet (3 104) et par image — profilé : recherches de mots-clés dans les chemins de fichiers | CPU de rendu **4,15 → 0,95 ms** — profite aussi au desktop et au web |
+| APK : fréquence d'affichage demandée (`XR_FB_display_refresh_rate`, 72 Hz par défaut, `VR_HZ=90`), résolution de rendu réglable (`VR_RENDER_SCALE=0.8`), module `xr::quality` testé | — (casque) |
+| Simulation découplée du rendu | **déjà en place** dans le moteur : pas fixe 60 Hz + interpolation (`blend_render_poses`) |
+
+**Résultat** : 9,9–10 ms par image (100 img/s), **CPU 2,6 ms** (simulation 1,7, rendu 0,95) — contre 37–39 ms (mesure sérialisée) au matin du 24.
+Le GPU est désormais le seul goulot : ~7 ms fixes (géométrie) + part liée à la
+résolution (8,3 ms à × 0,7).
+
+**Reste pour le casque** (non mesurable sur Mac) : foveation fixe
+(`XR_FB_foveation`), textures ASTC, choix final 72/90 Hz et de la résolution
+selon l'OVR Metrics Tool.

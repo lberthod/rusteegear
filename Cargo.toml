@@ -96,6 +96,10 @@ path = "packaging/release.keystore"
 keystore_password = "changeme-voir-RUSTEEGEAR_KEYSTORE_PASS"
 
 [dev-dependencies]
+# Phase 2 VR (multiview) : valider par naga les variantes multiview des shaders
+# de scène générées par `gfx::multiview` — même version que celle tirée par
+# wgpu 29 (aucune compilation supplémentaire).
+naga = { version = "29.0", features = ["wgsl-in"] }
 # Sprint 127 : produire de vrais octets compressés zstd dans les tests de
 # `assets::decompress` (le décodeur pur Rust `ruzstd`) — vérifie l'interopérabilité
 # réelle avec les octets qu'`editor::export::copy_to_bundle` écrit dans le bundle,

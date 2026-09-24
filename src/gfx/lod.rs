@@ -1,7 +1,9 @@
 //! Sélection de LOD géométrique pour le feuillage dense (Phase D, `sprintoptimation3daudit10h.md`).
 //! Fonction pure, indépendante du pipeline de rendu —
-//! câblée dans `Renderer::render` (`src/gfx/renderer.rs`) via `InstanceDraw::mesh`.
+//! appliquée par le renderer (`write_uniforms`, via le cache `MeshClass` par modèle) dans
+//! `InstanceDraw::mesh`.
 
+#[cfg(test)]
 use crate::scene::{MeshKind, Scene};
 
 /// Sous-chaînes de nom de fichier identifiant le feuillage le plus instancié
@@ -19,6 +21,9 @@ pub(super) const FOLIAGE_LOD_DISTANCE: f32 = 40.0;
 /// en `MeshKind::Billboard` pour le feuillage dense au-delà de `FOLIAGE_LOD_DISTANCE`,
 /// inchangé sinon (primitives, imports hors liste, distance proche). Pure fonction de
 /// résolution : ne modifie ni la scène ni le plan de dessin.
+// Règle de référence (tests) ; le renderer applique la même via son cache
+// par modèle (`Renderer::refresh_mesh_classes`).
+#[cfg(test)]
 pub(super) fn foliage_lod_mesh(scene: &Scene, mesh: MeshKind, camera_distance: f32) -> MeshKind {
     if camera_distance <= FOLIAGE_LOD_DISTANCE {
         return mesh;
@@ -29,20 +34,25 @@ pub(super) fn foliage_lod_mesh(scene: &Scene, mesh: MeshKind, camera_distance: f
     let is_dense_foliage = scene
         .imported
         .get(i as usize)
-        .map(|m| m.path.to_ascii_lowercase())
-        .is_some_and(|path| {
-            // `_sway` = variante animée (ex. `nature_reeds_sway.glb`, distincte de
-            // `nature_reeds.glb`) — probablement skinnée, jamais substituable par un
-            // impostor statique sans perdre son animation. Exclue même si un mot-clé
-            // matche, plutôt que de se fier à `is_skinned` en aval (cet appelant n'a
-            // pas cette information et cette fonction doit rester sûre isolément).
-            !path.contains("_sway") && FOLIAGE_LOD_KEYWORDS.iter().any(|k| path.contains(k))
-        });
+        .is_some_and(|m| is_dense_foliage_path(&m.path));
     if is_dense_foliage {
         MeshKind::Billboard
     } else {
         mesh
     }
+}
+
+/// Le modèle `path` est-il du feuillage dense substituable par un impostor au
+/// loin ? Pure fonction du nom de fichier — mise en cache par modèle dans le
+/// renderer (`MeshClass`), jamais recalculée par objet et par image.
+pub(super) fn is_dense_foliage_path(path: &str) -> bool {
+    let path = path.to_ascii_lowercase();
+    // `_sway` = variante animée (ex. `nature_reeds_sway.glb`, distincte de
+    // `nature_reeds.glb`) — probablement skinnée, jamais substituable par un
+    // impostor statique sans perdre son animation. Exclue même si un mot-clé
+    // matche, plutôt que de se fier à `is_skinned` en aval (cet appelant n'a
+    // pas cette information et cette fonction doit rester sûre isolément).
+    !path.contains("_sway") && FOLIAGE_LOD_KEYWORDS.iter().any(|k| path.contains(k))
 }
 
 #[cfg(test)]

@@ -47,7 +47,15 @@ impl Renderer {
             desired_maximum_frame_latency: 2,
         };
         let info = adapter.get_info();
-        log::info!("GPU : {} ({:?}) — rendu VR", info.name, info.backend);
+        // Multiview si le device l'a activé (l'appelant le demande à la création
+        // quand l'adaptateur l'expose : simulateur, runtime OpenXR).
+        let device_multiview = device.features().contains(wgpu::Features::MULTIVIEW);
+        log::info!(
+            "GPU : {} ({:?}) — rendu VR, multiview {}",
+            info.name,
+            info.backend,
+            if device_multiview { "oui" } else { "non" }
+        );
         let mut renderer = Self::assemble(
             None,
             None,
@@ -59,6 +67,7 @@ impl Renderer {
             VR_SHADOW_SIZE,
             format!("{:?}", info.backend),
             None,
+            device_multiview,
         );
         renderer.draw_distance_scale = VR_DRAW_DISTANCE_SCALE;
         renderer.planar_reflections = false;
@@ -133,33 +142,65 @@ impl Renderer {
             0.0
         };
         let far = game_camera.far;
-        for (eye, target) in eyes.iter().zip(targets) {
-            self.write_eye_camera(app, eye, far);
-            let mut encoder = self.device.create_command_encoder(&Default::default());
-            draw_calls += self.render_reflection_pass(&mut encoder, app);
-            let Some(t) = self.xr_targets.as_ref() else {
-                break; // impossible (`ensure_xr_targets` juste au-dessus)
-            };
-            draw_calls += self.encode_scene_pass(
-                &mut encoder,
-                app,
-                &t.hdr,
-                t.msaa.as_ref(),
-                &t.depth,
-                (w, h),
-                0,
-            );
-            if bloom_intensity > 0.0 {
-                self.render_bloom(&mut encoder, &t.hdr, &t.bloom_mips);
+        // Multiview : une seule passe de scène pour les deux yeux. Impossible
+        // avec la réflexion planaire (sa texture est rendue depuis la caméra
+        // d'un seul œil) — coupée par le profil VR de toute façon.
+        let multiview = self.mv.is_some() && !self.reflection_active;
+        if multiview {
+            let cameras = eyes.map(|e| self.eye_camera_uniform(&e, far).0);
+            if let Some(m) = self.mv.as_ref() {
+                self.queue
+                    .write_buffer(&m.camera_buf, 0, bytemuck::cast_slice(&cameras));
             }
-            self.tonemap(
-                &mut encoder,
-                &t.hdr,
-                &t.bloom_mips[0],
-                bloom_intensity,
-                target,
-            );
+            let mut encoder = self.device.create_command_encoder(&Default::default());
+            self.mv_active = true;
+            if let Some(t) = self.xr_targets.as_ref() {
+                draw_calls +=
+                    self.encode_scene_pass(&mut encoder, app, &t.hdr, None, &t.depth, (w, h), 0);
+                for (hdr_eye, target) in t.hdr_eyes.iter().zip(targets) {
+                    if bloom_intensity > 0.0 {
+                        self.render_bloom(&mut encoder, hdr_eye, &t.bloom_mips);
+                    }
+                    self.tonemap(
+                        &mut encoder,
+                        hdr_eye,
+                        &t.bloom_mips[0],
+                        bloom_intensity,
+                        target,
+                    );
+                }
+            }
+            self.mv_active = false;
             self.queue.submit([encoder.finish()]);
+        } else {
+            for (eye, target) in eyes.iter().zip(targets) {
+                self.write_eye_camera(app, eye, far);
+                let mut encoder = self.device.create_command_encoder(&Default::default());
+                draw_calls += self.render_reflection_pass(&mut encoder, app);
+                let Some(t) = self.xr_targets.as_ref() else {
+                    break; // impossible (`ensure_xr_targets` juste au-dessus)
+                };
+                draw_calls += self.encode_scene_pass(
+                    &mut encoder,
+                    app,
+                    &t.hdr,
+                    t.msaa.as_ref(),
+                    &t.depth,
+                    (w, h),
+                    0,
+                );
+                if bloom_intensity > 0.0 {
+                    self.render_bloom(&mut encoder, &t.hdr, &t.bloom_mips);
+                }
+                self.tonemap(
+                    &mut encoder,
+                    &t.hdr,
+                    &t.bloom_mips[0],
+                    bloom_intensity,
+                    target,
+                );
+                self.queue.submit([encoder.finish()]);
+            }
         }
         self.last_frame_draw_calls = draw_calls;
         app.camera = game_camera;
@@ -169,18 +210,8 @@ impl Renderer {
     /// la première partie de `write_uniforms`, sans tremblement de caméra (le
     /// *camera shake* rend malade en VR).
     fn write_eye_camera(&self, app: &AppState, eye: &EyeView, far: f32) {
-        let view_proj = projection_from_fov(eye.fov, NEAR, far.max(NEAR * 2.0))
-            * view_from_pose(eye.orientation, eye.position);
-        let right = eye.orientation * Vec3::X;
-        let up = eye.orientation * Vec3::Y;
+        let (camera, view_proj) = self.eye_camera_uniform(eye, far);
         let p = eye.position;
-        let camera = CameraUniform {
-            view_proj: view_proj.to_cols_array_2d(),
-            eye: [p.x, p.y, p.z, self.anim_time],
-            inv_view_proj: view_proj.inverse().to_cols_array_2d(),
-            cam_right: [right.x, right.y, right.z, 0.0],
-            cam_up: [up.x, up.y, up.z, 0.0],
-        };
         self.queue
             .write_buffer(&self.camera_buf, 0, bytemuck::bytes_of(&camera));
         // Réflexion planaire : même caméra miroir que `write_uniforms`, par œil.
@@ -208,36 +239,118 @@ impl Renderer {
         }
     }
 
-    /// (Re)crée les cibles intermédiaires d'un œil si la taille a changé.
+    /// Uniform caméra d'un œil (et sa matrice vue-projection).
+    fn eye_camera_uniform(&self, eye: &EyeView, far: f32) -> (CameraUniform, Mat4) {
+        let view_proj = projection_from_fov(eye.fov, NEAR, far.max(NEAR * 2.0))
+            * view_from_pose(eye.orientation, eye.position);
+        let right = eye.orientation * Vec3::X;
+        let up = eye.orientation * Vec3::Y;
+        let p = eye.position;
+        let camera = CameraUniform {
+            view_proj: view_proj.to_cols_array_2d(),
+            eye: [p.x, p.y, p.z, self.anim_time],
+            inv_view_proj: view_proj.inverse().to_cols_array_2d(),
+            cam_right: [right.x, right.y, right.z, 0.0],
+            cam_up: [up.x, up.y, up.z, 0.0],
+        };
+        (camera, view_proj)
+    }
+
+    /// (Re)crée les cibles intermédiaires si la taille a changé : pour un œil
+    /// (réutilisées par les deux, rendus l'un après l'autre), ou à **deux
+    /// couches** en multiview (profondeur et HDR en texture-tableau, une vue
+    /// par couche pour le bloom et le tone mapping de chaque œil).
     fn ensure_xr_targets(&mut self, w: u32, h: u32) {
-        if self.xr_targets.as_ref().is_some_and(|t| t.size == (w, h)) {
+        let layers = if self.mv.is_some() { 2 } else { 1 };
+        if self
+            .xr_targets
+            .as_ref()
+            .is_some_and(|t| t.size == (w, h) && t.layers == layers)
+        {
             return;
         }
-        let depth = self
-            .device
-            .create_texture(&wgpu::TextureDescriptor {
-                label: Some("xr_depth"),
-                size: wgpu::Extent3d {
-                    width: w,
-                    height: h,
-                    depth_or_array_layers: 1,
-                },
-                mip_level_count: 1,
-                sample_count: self.msaa_samples,
-                dimension: wgpu::TextureDimension::D2,
-                format: DEPTH_FORMAT,
-                usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
-                view_formats: &[],
+        let array_view = |tex: &wgpu::Texture| {
+            tex.create_view(&wgpu::TextureViewDescriptor {
+                dimension: Some(if layers == 2 {
+                    wgpu::TextureViewDimension::D2Array
+                } else {
+                    wgpu::TextureViewDimension::D2
+                }),
+                ..Default::default()
             })
-            .create_view(&Default::default());
-        let (hdr, msaa) = create_hdr_view(&self.device, w, h, self.msaa_samples);
+        };
+        let size = wgpu::Extent3d {
+            width: w,
+            height: h,
+            depth_or_array_layers: layers,
+        };
+        let samples = if layers == 2 { 1 } else { self.msaa_samples };
+        let depth_tex = self.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("xr_depth"),
+            size,
+            mip_level_count: 1,
+            sample_count: samples,
+            dimension: wgpu::TextureDimension::D2,
+            format: DEPTH_FORMAT,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+            view_formats: &[],
+        });
+        let (hdr, msaa, hdr_eyes) = if layers == 2 {
+            let tex = self.device.create_texture(&wgpu::TextureDescriptor {
+                label: Some("xr_hdr_mv"),
+                size,
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: HDR_FORMAT,
+                usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+                    | wgpu::TextureUsages::TEXTURE_BINDING,
+                view_formats: &[],
+            });
+            let eyes = [0, 1].map(|layer| {
+                tex.create_view(&wgpu::TextureViewDescriptor {
+                    dimension: Some(wgpu::TextureViewDimension::D2),
+                    base_array_layer: layer,
+                    array_layer_count: Some(1),
+                    ..Default::default()
+                })
+            });
+            (array_view(&tex), None, eyes)
+        } else {
+            let (hdr, msaa) = create_hdr_view(&self.device, w, h, self.msaa_samples);
+            let eyes = [hdr.clone(), hdr.clone()];
+            (hdr, msaa, eyes)
+        };
         let bloom_mips = create_bloom_mip_views(&self.device, w, h);
         self.xr_targets = Some(XrTargets {
             size: (w, h),
-            depth,
+            layers,
+            depth: array_view(&depth_tex),
             hdr,
+            hdr_eyes,
             msaa,
             bloom_mips,
         });
+    }
+
+    /// Pipeline à utiliser : variante multiview pendant une passe VR
+    /// multiview, sinon le pipeline normal.
+    pub(super) fn mv_or<'a>(
+        &'a self,
+        pick: impl Fn(&'a pipelines::MultiviewSet) -> &'a wgpu::RenderPipeline,
+        normal: &'a wgpu::RenderPipeline,
+    ) -> &'a wgpu::RenderPipeline {
+        match (&self.mv, self.mv_active) {
+            (Some(m), true) => pick(m),
+            _ => normal,
+        }
+    }
+
+    /// Groupe caméra de la passe de scène : à deux vues en multiview.
+    pub(super) fn scene_camera_bg(&self) -> &wgpu::BindGroup {
+        match (&self.mv, self.mv_active) {
+            (Some(m), true) => &m.camera_bind_group,
+            _ => &self.camera_bind_group,
+        }
     }
 }

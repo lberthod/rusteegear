@@ -7,6 +7,7 @@
 #   INSTALL=1 ./packaging/build_quest.sh    # + installe et lance sur le casque (adb)
 #   RUSTEEGEAR_KEYSTORE_PASS=… ./packaging/build_quest.sh --release
 #   VR_SCENE=cubes ./packaging/build_quest.sh   # scène de test de la phase 0 (défaut : Rivière)
+#   VR_HZ=90 VR_RENDER_SCALE=0.8 ./packaging/build_quest.sh   # fréquence, résolution de rendu
 #
 # Prérequis : NDK 28.2 (sdkmanager), cargo-apk, casque en mode développeur.
 set -euo pipefail
@@ -145,9 +146,12 @@ else
     export CARGO_PROFILE_DEV_FAST_DEBUG=0 CARGO_PROFILE_DEV_FAST_STRIP=symbols
 fi
 
-# Scène affichée par l'APK, lue à la compilation par `xr::hello` (option_env!).
+# Réglages lus à la compilation par `xr::hello` (option_env!) : scène,
+# fréquence d'affichage (défaut 72 Hz), résolution de rendu (× recommandée).
 export RUSTEEGEAR_VR_SCENE="${VR_SCENE:-riviere}"
-echo "▶ Scène VR : $RUSTEEGEAR_VR_SCENE"
+export RUSTEEGEAR_VR_HZ="${VR_HZ:-72}"
+export RUSTEEGEAR_VR_RENDER_SCALE="${VR_RENDER_SCALE:-1.0}"
+echo "▶ Scène VR : $RUSTEEGEAR_VR_SCENE · $RUSTEEGEAR_VR_HZ Hz · résolution × $RUSTEEGEAR_VR_RENDER_SCALE"
 echo "▶ cargo apk build ${PROFILE_ARGS[*]+"${PROFILE_ARGS[*]}"} --lib --features vr"
 cargo apk build ${PROFILE_ARGS[@]+"${PROFILE_ARGS[@]}"} --lib --features vr
 echo "✅ APK Quest : $APK"

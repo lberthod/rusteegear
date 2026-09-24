@@ -13,6 +13,7 @@
 
 pub mod content;
 pub mod math;
+pub mod quality;
 pub mod rig;
 pub mod sim;
 pub mod test_scene;

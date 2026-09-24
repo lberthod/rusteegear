@@ -7,10 +7,10 @@ use std::sync::Arc;
 use bytemuck::{Pod, Zeroable};
 use winit::window::Window;
 
-use super::lod::foliage_lod_mesh;
+use super::lod::{FOLIAGE_LOD_DISTANCE, is_dense_foliage_path};
 use super::mesh::GpuMesh;
 use super::passes::{
-    aabb_visible, compute_cascades, culling_radius_for, distance_visible, frustum_planes,
+    aabb_visible, compute_cascades, culling_radius_for_path, distance_visible, frustum_planes,
     is_skinned, mesh_key, render_input_hash,
 };
 #[cfg(test)]
