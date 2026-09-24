@@ -25,7 +25,12 @@ pour poser un mur, Échap pour quitter.
 - VPS : service systemd `ball-relay` (`127.0.0.1:7790`, binaire dans
   `~/rusteegear-server/target/release/ball_relay`), exposé par Caddy en
   `wss://ws.loicberthod.ch/ball` (bloc `ws.loicberthod.ch` : `handle /ball*` → 7790, le reste →
-  serveur de jeu 7777 ; sauvegarde `Caddyfile.bak.20260924-200442`).
+  serveur de jeu 7777 ; sauvegarde `Caddyfile.bak.20260924-200442`). Repli **en clair** pour
+  les appareils où le TLS échoue : bloc `http://ws.loicberthod.ch` (`/ball` → 7790, le reste
+  redirigé vers https ; sauvegarde `Caddyfile.bak.20260924-202518`). Les clients essaient
+  `wss://` puis `ws://` (`net::DEFAULT_URLS`).
+- Diagnostic sans câble : le casque affiche l'état de la liaison et, hors ligne, la cause exacte
+  de l'échec (DNS, TLS, délai…) au menu et au tableau des scores.
 - Mise à jour du relais : `git pull` + `cargo build --release --bin ball_relay` dans
   `~/rusteegear-server`, puis `sudo systemctl restart ball-relay`. Changer le format des messages
   = incrémenter `net::PROTOCOL_VERSION` et redistribuer APK + PC.

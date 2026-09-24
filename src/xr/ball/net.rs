@@ -14,9 +14,11 @@
 
 use serde::{Deserialize, Serialize};
 
-/// Adresse du relais par défaut (`BALL_URL` pour en changer, ex.
-/// `ws://127.0.0.1:7790/ball` en local).
-pub const DEFAULT_URL: &str = "wss://ws.loicberthod.ch/ball";
+/// Adresses du relais essayées tour à tour (`BALL_URL` pour n'en viser
+/// qu'une, ex. `ws://127.0.0.1:7790/ball` en local) : chiffrée d'abord, puis
+/// en clair sur le port 80 si le TLS échoue sur l'appareil (repli ajouté
+/// après le 1er essai au casque : « relais injoignable »).
+pub const DEFAULT_URLS: [&str; 2] = ["wss://ws.loicberthod.ch/ball", "ws://ws.loicberthod.ch/ball"];
 /// Incrémenté à chaque changement de format des messages.
 pub const PROTOCOL_VERSION: u32 = 1;
 
@@ -129,6 +131,9 @@ mod native {
         inbox: Mutex<Receiver<Msg>>,
         outbox: tokio::sync::mpsc::UnboundedSender<Vec<u8>>,
         status: Arc<AtomicU8>,
+        /// Raison du dernier échec de connexion (affichée au joueur : c'est
+        /// le seul diagnostic possible sur un casque sans câble).
+        last_error: Arc<Mutex<String>>,
     }
 
     const OFFLINE: u8 = 0;
@@ -136,12 +141,14 @@ mod native {
     const PAIRED: u8 = 2;
 
     impl Link {
-        pub fn start(url: &str, role: Role) -> Self {
+        pub fn start(urls: &[String], role: Role) -> Self {
             let (in_tx, in_rx) = channel();
             let (out_tx, out_rx) = tokio::sync::mpsc::unbounded_channel::<Vec<u8>>();
             let status = Arc::new(AtomicU8::new(OFFLINE));
-            let url = url.to_string();
+            let last_error = Arc::new(Mutex::new(String::from("connexion en cours…")));
+            let urls = urls.to_vec();
             let st = status.clone();
+            let err = last_error.clone();
             std::thread::Builder::new()
                 .name("ball-link".into())
                 .spawn(move || {
@@ -149,14 +156,20 @@ mod native {
                         .enable_all()
                         .build()
                         .expect("runtime tokio");
-                    rt.block_on(run(url, role, in_tx, out_rx, st));
+                    rt.block_on(run(urls, role, in_tx, out_rx, st, err));
                 })
                 .expect("thread réseau");
             Self {
                 inbox: Mutex::new(in_rx),
                 outbox: out_tx,
                 status,
+                last_error,
             }
+        }
+
+        /// Pourquoi la dernière tentative a échoué (vide une fois connecté).
+        pub fn last_error(&self) -> String {
+            self.last_error.lock().map(|e| e.clone()).unwrap_or_default()
         }
 
         pub fn status(&self) -> LinkStatus {
@@ -183,14 +196,39 @@ mod native {
         }
     }
 
+    /// Erreur de connexion en clair, avec sa cause profonde (DNS, TLS…).
+    fn describe(e: &tokio_tungstenite::tungstenite::Error) -> String {
+        use std::error::Error as _;
+        let mut text = e.to_string();
+        let mut source = e.source();
+        while let Some(s) = source {
+            text.push_str(" ← ");
+            text.push_str(&s.to_string());
+            source = s.source();
+        }
+        text
+    }
+
     async fn run(
-        url: String,
+        urls: Vec<String>,
         role: Role,
         inbox: Sender<Msg>,
         mut outbox: tokio::sync::mpsc::UnboundedReceiver<Vec<u8>>,
         status: Arc<AtomicU8>,
+        last_error: Arc<Mutex<String>>,
     ) {
+        let set_error = |url: &str, e: String| {
+            if !e.is_empty() {
+                log::warn!("Ball : relais {url} : {e}");
+            }
+            if let Ok(mut le) = last_error.lock() {
+                *le = if e.is_empty() { e } else { format!("{url} : {e}") };
+            }
+        };
+        let mut attempt = 0usize;
         loop {
+            let url = urls[attempt % urls.len().max(1)].clone();
+            attempt += 1;
             match tokio::time::timeout(
                 Duration::from_secs(8),
                 tokio_tungstenite::connect_async(&url),
@@ -200,6 +238,7 @@ mod native {
                 Ok(Ok((ws, _))) => {
                     log::info!("Ball : relais {url} joint ({role:?})");
                     status.store(WAITING, Ordering::Relaxed);
+                    set_error(&url, String::new());
                     let (mut tx, mut rx) = ws.split();
                     let hello = Msg::Hello {
                         role,
@@ -224,7 +263,7 @@ mod native {
                                                     status.store(if present { PAIRED } else { WAITING }, Ordering::Relaxed);
                                                 }
                                                 Some(Msg::Refused { reason }) => {
-                                                    log::warn!("Ball : relais refusé : {reason}");
+                                                    set_error(&url, format!("refusé : {reason}"));
                                                     break;
                                                 }
                                                 Some(m) => {
@@ -243,13 +282,16 @@ mod native {
                             }
                         }
                     }
-                    log::info!("Ball : relais perdu, nouvelle tentative");
+                    set_error(&url, "connexion perdue".into());
                 }
-                Ok(Err(e)) => log::debug!("Ball : relais injoignable ({e})"),
-                Err(_) => log::debug!("Ball : relais injoignable (délai dépassé)"),
+                Ok(Err(e)) => set_error(&url, describe(&e)),
+                Err(_) => set_error(&url, "délai dépassé (8 s) : réseau lent ou bloqué".into()),
             }
             status.store(OFFLINE, Ordering::Relaxed);
-            tokio::time::sleep(Duration::from_secs(3)).await;
+            // Adresse suivante tout de suite ; pause une fois la liste parcourue.
+            if attempt % urls.len().max(1) == 0 {
+                tokio::time::sleep(Duration::from_secs(3)).await;
+            }
         }
     }
 }

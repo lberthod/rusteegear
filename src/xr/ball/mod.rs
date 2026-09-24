@@ -122,14 +122,17 @@ const SNAPSHOT_PERIOD: f32 = 0.05;
 const REMOTE_COLOR: Vec4 = Vec4::new(0.25, 0.5, 0.95, 1.0);
 const WALL_COLOR: Vec4 = Vec4::new(0.35, 0.62, 0.98, 1.0);
 
-/// Adresse du relais : `BALL_URL` à la compilation (APK) ou à l'exécution.
-pub fn relay_url() -> String {
+/// Adresses du relais : `BALL_URL` (à l'exécution, ou à la compilation pour
+/// l'APK) pour n'en viser qu'une, sinon `net::DEFAULT_URLS`.
+pub fn relay_urls() -> Vec<String> {
     std::env::var("BALL_URL")
         .ok()
         .or(option_env!("BALL_URL").map(str::to_string))
-        .unwrap_or_else(|| net::DEFAULT_URL.to_string())
+        .map_or_else(
+            || net::DEFAULT_URLS.iter().map(|u| u.to_string()).collect(),
+            |u| vec![u],
+        )
 }
-
 impl BallGame {
     pub fn new(device: &wgpu::Device, format: wgpu::TextureFormat, width: u32, height: u32) -> Self {
         let mut g = Self {
@@ -157,7 +160,7 @@ impl BallGame {
             lobby_cleared_at: None,
             #[cfg(not(any(target_arch = "wasm32", target_os = "ios")))]
             link: (std::env::var("BALL_OFFLINE").is_err())
-                .then(|| net::Link::start(&relay_url(), net::Role::Vr)),
+                .then(|| net::Link::start(&relay_urls(), net::Role::Vr)),
             remote: None,
             next_snapshot: 0.0,
             statics_sent: (usize::MAX, Vec3::ZERO, 0.0),
@@ -594,19 +597,26 @@ impl BallGame {
     }
 
     /// État de la connexion, affiché au casque (diagnostic sans câble).
-    fn link_text(&self) -> &'static str {
+    fn link_text(&self) -> String {
         #[cfg(not(any(target_arch = "wasm32", target_os = "ios")))]
         {
-            match self.link.as_ref().map(net::Link::status) {
-                None => "Réseau désactivé",
-                Some(net::LinkStatus::Offline) => "Hors ligne (relais injoignable) : jeu en solo",
-                Some(net::LinkStatus::Waiting) => "En ligne · en attente d'un joueur PC",
-                Some(net::LinkStatus::Paired) => "En ligne · adversaire PC connecté",
+            match &self.link {
+                None => "Réseau désactivé".into(),
+                Some(link) => match link.status() {
+                    net::LinkStatus::Offline => {
+                        // La cause exacte (DNS, TLS, délai…) : seul diagnostic
+                        // possible sur un casque sans câble.
+                        let e: String = link.last_error().chars().take(150).collect();
+                        format!("Hors ligne : {e}")
+                    }
+                    net::LinkStatus::Waiting => "En ligne · en attente d'un joueur PC".into(),
+                    net::LinkStatus::Paired => "En ligne · adversaire PC connecté".into(),
+                },
             }
         }
         #[cfg(any(target_arch = "wasm32", target_os = "ios"))]
         {
-            "Réseau indisponible"
+            "Réseau indisponible".into()
         }
     }
 
@@ -738,7 +748,7 @@ impl BallGame {
             self.best,
             self.targets().0,
             self.remote.is_some().then_some(self.world.blocked),
-        ) + self.link_text()
+        ) + &self.link_text()
     }
 
     fn banner_key(&self) -> String {
@@ -869,7 +879,7 @@ struct MenuView {
     /// Joueur PC présent : tirs qu'il a arrêtés.
     rival: Option<u32>,
     /// État de la connexion au relais, en clair.
-    link: &'static str,
+    link: String,
 }
 
 impl MenuView {
@@ -991,7 +1001,7 @@ fn lobby_ui(ui: &mut egui::Ui, v: &MenuView, actions: &mut Vec<Action>) {
             .size(14.0)
             .color(MUTED),
     );
-    ui.label(egui::RichText::new(v.link).size(15.0).color(link_color(v.link)));
+    ui.label(egui::RichText::new(&v.link).size(18.0).color(link_color(&v.link)));
     if let Some(n) = v.rival {
         let _ = n;
         ui.label(
@@ -1030,7 +1040,7 @@ fn scoreboard_ui(ui: &mut egui::Ui, v: &MenuView) {
         .color(MUTED),
     );
     if v.rival.is_none() {
-        ui.label(egui::RichText::new(v.link).size(26.0).color(link_color(v.link)));
+        ui.label(egui::RichText::new(&v.link).size(26.0).color(link_color(&v.link)));
     }
     if let Some(n) = v.rival {
         ui.label(

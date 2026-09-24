@@ -19,7 +19,7 @@ use glam::{EulerRot, Quat, Vec3, Vec4};
 use motor3derust::time_compat::Instant;
 use motor3derust::xr::ball::gfx::{Gfx, Instance};
 use motor3derust::xr::ball::net::{Link, LinkStatus, Msg, NetBox, NetWall, PcState, Role, Snapshot};
-use motor3derust::xr::ball::relay_url;
+use motor3derust::xr::ball::relay_urls;
 use motor3derust::xr::math::{EyeView, Fov};
 use winit::application::ApplicationHandler;
 use winit::event::{ElementState, MouseButton, WindowEvent};
@@ -57,9 +57,9 @@ struct Player {
 }
 
 impl Player {
-    fn new(url: &str) -> Self {
+    fn new(urls: &[String]) -> Self {
         Self {
-            link: Link::start(url, Role::Pc),
+            link: Link::start(urls, Role::Pc),
             snaps: None,
             statics: Vec::new(),
             origin: Vec3::ZERO,
@@ -506,7 +506,7 @@ impl ApplicationHandler for App {
 /// `--snapshot <png>` : attend la scène du casque (15 s au plus), rend une
 /// image hors écran à 1280×800 et quitte. `--wall` : pose un mur d'abord.
 fn snapshot(path: &str, wall: bool) -> Result<(), String> {
-    let mut player = Player::new(&relay_url());
+    let mut player = Player::new(&relay_urls());
     let started = std::time::Instant::now();
     let dt = 1.0 / 60.0;
     while player.snaps.is_none() || player.statics.is_empty() {
@@ -643,7 +643,7 @@ fn main() {
     let event_loop = EventLoop::new().expect("boucle d'événements");
     event_loop.set_control_flow(ControlFlow::Poll);
     let mut app = App {
-        player: Player::new(&relay_url()),
+        player: Player::new(&relay_urls()),
         gpu: None,
         last: None,
         looking: false,
