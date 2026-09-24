@@ -473,7 +473,7 @@ impl AppState {
         }
 
         // Envoie l'input courant du joueur local, déjà tourné selon **notre**
-        // caméra (`camera_relative_move`, même calcul que `sim_step`) : le
+        // caméra (`camera_relative_axes`, même calcul que `sim_step`) : le
         // serveur (headless, sans caméra) reçoit ainsi directement une direction
         // monde correcte pour ce joueur — il n'a pas à connaître l'orientation
         // de qui que ce soit, chaque client fait sa propre conversion avant
@@ -1290,7 +1290,7 @@ fn network_move_axes(
 ) -> (f32, f32) {
     let raw_mx = (inp.joy.0 + inp.key_move.0 + inp.gamepad_move.0).clamp(-1.0, 1.0);
     let raw_my = (inp.joy.1 + inp.key_move.1 + inp.gamepad_move.1).clamp(-1.0, 1.0);
-    let (mut mx, mut my) = super::simulation::camera_relative_move(raw_mx, raw_my, camera_yaw);
+    let (mut mx, mut my) = super::simulation::camera_relative_axes(raw_mx, raw_my, camera_yaw);
     // `thrust()` (clavier + pavé tactile W/A/S/D) et non `key_thrust` seul : le
     // pavé de l'APK doit être vu par le serveur exactement comme le clavier.
     let thrust = inp.thrust();

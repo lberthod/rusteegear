@@ -138,6 +138,22 @@ pub(super) fn camera_relative_move(mx: f32, my: f32, yaw: f32) -> (f32, f32) {
     (wx, wz)
 }
 
+/// Même rotation que `camera_relative_move`, rendue dans la **convention
+/// joystick** que consomment `drive_local_and_networked_players` et le serveur
+/// (`NetworkInput::move_x/move_y` : x = +X monde, y positif = **−Z** monde, la
+/// simulation appliquant `vz = −move_y × vitesse` — même convention que la
+/// poussée « tank » et le gyroscope, cf. `network_client::network_move_axes`).
+///
+/// Avant le 24 septembre 2026, le Z **monde** de `camera_relative_move` était
+/// passé tel quel à cette négation : l'axe Z était inversé deux fois, et
+/// « avant » (W, flèche haut, stick, joystick tactile) ramenait le personnage
+/// **vers** la caméra dès qu'elle était alignée sur Z (réflexion au lieu d'une
+/// rotation — seul X restait juste).
+pub(super) fn camera_relative_axes(mx: f32, my: f32, yaw: f32) -> (f32, f32) {
+    let (wx, wz) = camera_relative_move(mx, my, yaw);
+    (wx, -wz)
+}
+
 /// Décalage de recul caméra pour la frame courante (Sprint 1, `sprint10audit.md`) :
 /// jitter dans le plan écran (axes droite/haut de la caméra), amplitude
 /// proportionnelle à `camera_shake` et oscillante via `self.time` — pas de RNG à
@@ -355,7 +371,7 @@ fn drive_local_and_networked_players(
 ) -> (Vec<(usize, f32)>, Vec<(usize, bool)>, bool) {
     let inp = input_state;
     // Mouvement combiné joystick/croix directionnelle + clavier (flèches/WASD),
-    // puis tourné selon la caméra (cf. `camera_relative_move`) : « en haut »
+    // puis tourné selon la caméra (cf. `camera_relative_axes`) : « en haut »
     // sur le joystick éloigne le personnage de la caméra, comme dans un jeu
     // à la Zelda, quelle que soit sa rotation actuelle.
     let joy = apply_deadzone(inp.joy, JOYSTICK_DEADZONE);
@@ -363,7 +379,7 @@ fn drive_local_and_networked_players(
         joy.0 + inp.key_move.0 + inp.gamepad_move.0,
         joy.1 + inp.key_move.1 + inp.gamepad_move.1,
     );
-    let (mx, my) = camera_relative_move(raw_mx, raw_my, camera_yaw);
+    let (mx, my) = camera_relative_axes(raw_mx, raw_my, camera_yaw);
     // Plateformer 2D (`Scene::platformer`) : déplacement sur X seulement, cf. plus bas.
     let lock_z = scene.platformer.is_some_and(|p| p.lock_z);
     let (tilt, space) = (inp.tilt, inp.jump);
@@ -377,7 +393,7 @@ fn drive_local_and_networked_players(
             joy.0 + src.key_move.0 + src.gamepad_move.0,
             joy.1 + src.key_move.1 + src.gamepad_move.1,
         );
-        let (mx, my) = camera_relative_move(rmx, rmy, camera_yaw);
+        let (mx, my) = camera_relative_axes(rmx, rmy, camera_yaw);
         (
             rmx,
             rmy,

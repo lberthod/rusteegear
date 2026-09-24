@@ -1615,6 +1615,28 @@ fn network_input_msg_ignores_gyro_and_buttons_the_controller_does_not_use() {
 }
 
 #[test]
+fn network_move_axes_sends_forward_along_the_camera_look() {
+    // Le serveur applique `vx = move_x`, `vz = -move_y` (même code que la
+    // prédiction locale) : « avant » au joystick/clavier doit y donner la
+    // direction du regard de la caméra, pour tout lacet — sinon client et
+    // serveur avancent tous deux vers la caméra (bug du 24 septembre 2026).
+    for yaw in [0.0f32, 1.1, -2.4, std::f32::consts::PI] {
+        // `OrbitCamera::eye` = cible + (sin yaw, ·, cos yaw) × distance.
+        let look = glam::Vec3::new(-yaw.sin(), 0.0, -yaw.cos());
+        let inp = super::super::PlayerInput {
+            key_move: (0.0, 1.0),
+            ..Default::default()
+        };
+        let (mx, my) = network_move_axes(&inp, yaw, None);
+        let server = glam::Vec3::new(mx, 0.0, -my);
+        assert!(
+            server.dot(look) > 0.999,
+            "yaw={yaw} : serveur {server:?}, regard {look:?}"
+        );
+    }
+}
+
+#[test]
 fn network_move_axes_includes_touch_pad_thrust_like_the_keyboard() {
     // Le pavé tactile W/A/S/D (APK) doit être vu par le serveur exactement
     // comme le W/S clavier : même conversion via l'orientation du joueur.

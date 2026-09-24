@@ -1879,6 +1879,59 @@ fn camera_relative_move_advances_the_player_and_turns_it_to_face_the_direction()
     );
 }
 
+/// « Avant » (W/flèche haut, stick gauche manette, joystick tactile — trois
+/// sources qui s'additionnent dans la même entrée) doit éloigner le personnage
+/// de la caméra **le long de son regard**, et « droite » vers la droite de
+/// l'écran, pour tout lacet de caméra — pas seulement sur X. Régression du 24
+/// septembre 2026 : Z était nié deux fois (`camera_relative_move` renvoie du Z
+/// monde, la simulation le niait encore), et « avant » ramenait le joueur vers
+/// la caméra dès qu'elle était alignée sur Z (Rivière : z 24 → 32).
+#[test]
+fn forward_input_moves_the_player_along_the_camera_look_for_any_yaw() {
+    for yaw in [
+        0.0f32,
+        std::f32::consts::FRAC_PI_2,
+        2.4,
+        -2.0,
+        std::f32::consts::PI,
+    ] {
+        for source in ["clavier", "manette", "tactile"] {
+            for (stick, label) in [((0.0, 1.0), "avant"), ((1.0, 0.0), "droite")] {
+                let mut app = AppState::new();
+                app.load_controller_demo();
+                app.playing = true;
+                assert!(app.advance_steps(1));
+                let i = app.player_index().expect("joueur pilotable");
+                app.camera.yaw = yaw;
+                let look = app.camera.target - app.camera.eye();
+                let look = Vec3::new(look.x, 0.0, look.z).normalize();
+                let wanted = if label == "avant" {
+                    look
+                } else {
+                    look.cross(Vec3::Y)
+                };
+                match source {
+                    "clavier" => app.input_state.key_move = stick,
+                    "manette" => app.input_state.gamepad_move = stick,
+                    _ => app.input_state.joy = stick,
+                }
+                let p0 = app.scene.objects[i].transform.position;
+                app.advance_steps(30);
+                let moved = app.scene.objects[i].transform.position - p0;
+                let flat = Vec3::new(moved.x, 0.0, moved.z);
+                assert!(
+                    flat.length() > 0.3,
+                    "{source} {label} (caméra {yaw}) : déplacement {moved:?}"
+                );
+                assert!(
+                    flat.normalize().dot(wanted) > 0.9,
+                    "{source} {label} (caméra {yaw}) : déplacement {moved:?}, voulu {wanted:?}"
+                );
+            }
+        }
+    }
+}
+
 /// Le stick droit de la manette (`gamepad_yaw`) doit orbiter librement la
 /// caméra de jeu, indépendamment du personnage — style « action moderne ».
 #[test]
