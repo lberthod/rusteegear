@@ -30,6 +30,15 @@ const G_WORLD: Group = Group::GROUP_1;
 const G_BLOCK: Group = Group::GROUP_2;
 const G_BALL: Group = Group::GROUP_3;
 const G_HAND: Group = Group::GROUP_4;
+/// Joueur PC (avatar et murs) : n'arrête que les boules, ne touche jamais
+/// les blocs — il défend, il ne peut pas marquer à la place du joueur VR.
+const G_REMOTE: Group = Group::GROUP_5;
+
+/// Mur du joueur PC : 60 cm de large, 1,6 m de haut, posé au sol.
+pub const WALL_HALF: Vec3 = Vec3::new(0.3, 0.8, 0.03);
+/// Corps du joueur PC (boîte grossière, pieds au sol).
+pub const AVATAR_HALF: Vec3 = Vec3::new(0.22, 0.85, 0.15);
+pub const MAX_WALLS: usize = 2;
 
 fn groups(member: Group, filter: Group) -> InteractionGroups {
     InteractionGroups::new(member, filter, InteractionTestMode::And)
@@ -129,6 +138,14 @@ pub struct World {
     pub movers: Vec<Mover>,
     pub balls: VecDeque<RigidBodyHandle>,
     hand_bodies: [[RigidBodyHandle; 6]; 2],
+    /// Avatar puis murs du joueur PC (rangés sous le sol quand absents).
+    remote_bodies: [RigidBodyHandle; 1 + MAX_WALLS],
+    /// Pose voulue de chacun (`None` = absent).
+    pub remote_poses: [Option<(Vec3, f32)>; 1 + MAX_WALLS],
+    /// Boules déjà arrêtées par le joueur PC (comptées une fois).
+    stopped: std::collections::HashSet<RigidBodyHandle>,
+    /// Tirs arrêtés par le joueur PC depuis le début du parcours.
+    pub blocked: u32,
     pub grabbers: [Grabber; 2],
     /// Temps de simulation (s) : anime les éléments mobiles.
     pub time: f32,
@@ -162,6 +179,10 @@ impl World {
             movers: Vec::new(),
             balls: VecDeque::new(),
             hand_bodies: [[RigidBodyHandle::invalid(); 6]; 2],
+            remote_bodies: [RigidBodyHandle::invalid(); 1 + MAX_WALLS],
+            remote_poses: [None; 1 + MAX_WALLS],
+            stopped: Default::default(),
+            blocked: 0,
             grabbers: Default::default(),
             time: 0.0,
             accumulator: 0.0,
@@ -182,7 +203,75 @@ impl World {
                 w.hand_bodies[hand][k] = body;
             }
         }
+        for k in 0..=MAX_WALLS {
+            let half = if k == 0 { AVATAR_HALF } else { WALL_HALF };
+            let body = w.bodies.insert(
+                RigidBodyBuilder::kinematic_position_based()
+                    .translation(Vec3::new(0.0, -200.0 - k as f32 * 3.0, 0.0))
+                    .build(),
+            );
+            let collider = ColliderBuilder::cuboid(half.x, half.y, half.z)
+                .collision_groups(groups(G_REMOTE, G_BALL))
+                .build();
+            w.colliders
+                .insert_with_parent(collider, body, &mut w.bodies);
+            w.remote_bodies[k] = body;
+        }
         w
+    }
+
+    /// Place l'avatar et les murs du joueur PC (`None` / liste vide : absent).
+    /// `avatar` : pieds et lacet ; `walls` : centre au sol et lacet.
+    pub fn set_remote(&mut self, avatar: Option<(Vec3, f32)>, walls: &[(Vec3, f32)]) {
+        self.remote_poses[0] = avatar;
+        for k in 0..MAX_WALLS {
+            self.remote_poses[1 + k] = walls.get(k).copied();
+        }
+    }
+
+    fn apply_remote(&mut self) {
+        for (k, pose) in self.remote_poses.iter().enumerate() {
+            let half = if k == 0 { AVATAR_HALF } else { WALL_HALF };
+            let (p, r) = match pose {
+                Some((feet, yaw)) => (*feet + Vec3::Y * half.y, Quat::from_rotation_y(*yaw)),
+                None => (Vec3::new(0.0, -200.0 - k as f32 * 3.0, 0.0), Quat::IDENTITY),
+            };
+            if let Some(b) = self.bodies.get_mut(self.remote_bodies[k]) {
+                // Absent → présent : téléporté, pas glissé depuis sous le sol.
+                if b.translation().y < -50.0 || p.y < -50.0 {
+                    b.set_translation(p, true);
+                }
+                b.set_next_kinematic_translation(p);
+                b.set_next_kinematic_rotation(r);
+            }
+        }
+    }
+
+    /// Compte les boules qui touchent l'avatar ou un mur du joueur PC.
+    fn count_stopped(&mut self) {
+        let remote: Vec<ColliderHandle> = self
+            .remote_bodies
+            .iter()
+            .filter_map(|h| self.bodies.get(*h))
+            .filter_map(|b| b.colliders().first().copied())
+            .collect();
+        for &ball in &self.balls {
+            if self.stopped.contains(&ball) {
+                continue;
+            }
+            let Some(c) = self.bodies.get(ball).and_then(|b| b.colliders().first().copied()) else {
+                continue;
+            };
+            let hit = remote.iter().any(|&r| {
+                self.narrow
+                    .contact_pair(c, r)
+                    .is_some_and(|p| p.has_any_active_contact())
+            });
+            if hit {
+                self.stopped.insert(ball);
+                self.blocked += 1;
+            }
+        }
     }
 
     /// Vide tout sauf les mains (changement de parcours).
@@ -191,7 +280,10 @@ impl World {
             .bodies
             .iter()
             .map(|(h, _)| h)
-            .filter(|h| !self.hand_bodies.iter().flatten().any(|x| x == h))
+            .filter(|h| {
+                !self.hand_bodies.iter().flatten().any(|x| x == h)
+                    && !self.remote_bodies.contains(h)
+            })
             .collect();
         for h in doomed {
             self.remove(h);
@@ -200,6 +292,8 @@ impl World {
         self.blocks.clear();
         self.movers.clear();
         self.balls.clear();
+        self.stopped.clear();
+        self.blocked = 0;
         for g in &mut self.grabbers {
             g.held = None;
         }
@@ -313,6 +407,14 @@ impl World {
         self.balls.retain(|b| held.contains(b));
     }
 
+    /// Lance une boule libre (tests).
+    #[cfg(test)]
+    pub fn throw_ball(&mut self, from: Vec3, velocity: Vec3) -> RigidBodyHandle {
+        let b = self.spawn_ball(from);
+        self.release(b, velocity);
+        b
+    }
+
     pub fn position(&self, h: RigidBodyHandle) -> Vec3 {
         self.bodies.get(h).map_or(Vec3::ZERO, |b| b.translation())
     }
@@ -346,7 +448,7 @@ impl World {
             .density(2500.0)
             .restitution(0.3)
             .friction(0.6)
-            .collision_groups(groups(G_BALL, G_WORLD | G_BLOCK | G_BALL))
+            .collision_groups(groups(G_BALL, G_WORLD | G_BLOCK | G_BALL | G_REMOTE))
             .build();
         self.colliders
             .insert_with_parent(collider, body, &mut self.bodies);
@@ -448,6 +550,7 @@ impl World {
         while self.accumulator >= PHYSICS_DT {
             self.accumulator -= PHYSICS_DT;
             self.time += PHYSICS_DT;
+            self.apply_remote();
             for m in &self.movers {
                 let (p, r) = m.motion.pose(self.time - m.t0);
                 if let Some(b) = self.bodies.get_mut(m.body) {
@@ -469,6 +572,7 @@ impl World {
                 &(),
                 &(),
             );
+            self.count_stopped();
         }
         let lost: Vec<RigidBodyHandle> = self
             .balls
@@ -479,6 +583,39 @@ impl World {
         for b in lost {
             self.balls.retain(|&x| x != b);
             self.remove(b);
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Un mur du joueur PC arrête une boule (et compte un tir arrêté) ; sans
+    /// mur, la même boule passe.
+    #[test]
+    fn a_pc_wall_stops_a_throw() {
+        for with_wall in [false, true] {
+            let mut w = World::new();
+            w.add_static(Vec3::new(0.0, -0.05, 0.0), Vec3::new(10.0, 0.05, 10.0), Vec4::ONE);
+            let walls = if with_wall {
+                vec![(Vec3::new(0.0, 0.0, -1.5), 0.0)]
+            } else {
+                vec![]
+            };
+            w.set_remote(Some((Vec3::new(2.0, 0.0, -1.0), 0.0)), &walls);
+            let ball = w.throw_ball(Vec3::new(0.0, 1.2, -0.3), Vec3::new(0.0, 0.5, -8.0));
+            for _ in 0..60 {
+                w.step(PHYSICS_DT);
+            }
+            let z = w.position(ball).z;
+            if with_wall {
+                assert!(z > -1.6, "arrêtée devant le mur : z = {z}");
+                assert_eq!(w.blocked, 1);
+            } else {
+                assert!(z < -3.0, "passe sans mur : z = {z}");
+                assert_eq!(w.blocked, 0);
+            }
         }
     }
 }

@@ -172,6 +172,7 @@ pub struct Gfx {
     instances: wgpu::Buffer,
     eye_buffers: [wgpu::Buffer; 2],
     eye_groups: [wgpu::BindGroup; 2],
+    format: wgpu::TextureFormat,
     light_buffer: wgpu::Buffer,
     light_group: wgpu::BindGroup,
     shadow_view: wgpu::TextureView,
@@ -422,12 +423,38 @@ impl Gfx {
             light_buffer,
             light_group,
             shadow_view,
+            format,
             msaa: target("ball-msaa", format),
             depth: target("ball-depth", DEPTH_FORMAT),
         }
     }
 
-    /// Dessine l'ombre puis les deux yeux. `eyes` en coordonnées monde,
+    /// Nouvelle taille de vue (fenêtre du joueur PC redimensionnée).
+    pub fn resize(&mut self, device: &wgpu::Device, width: u32, height: u32) {
+        let target = |label, format| {
+            device
+                .create_texture(&wgpu::TextureDescriptor {
+                    label: Some(label),
+                    size: wgpu::Extent3d {
+                        width: width.max(1),
+                        height: height.max(1),
+                        depth_or_array_layers: 1,
+                    },
+                    mip_level_count: 1,
+                    sample_count: SAMPLES,
+                    dimension: wgpu::TextureDimension::D2,
+                    format,
+                    usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+                    view_formats: &[],
+                })
+                .create_view(&Default::default())
+        };
+        self.msaa = target("ball-msaa", self.format);
+        self.depth = target("ball-depth", DEPTH_FORMAT);
+    }
+
+    /// Dessine l'ombre puis chaque vue (deux yeux en VR, une sur ordinateur).
+    /// `eyes` en coordonnées monde,
     /// `shadow_center` : centre de la zone ombrée (le trou en cours), `fade` :
     /// 1 = image normale, 0 = noir (transition entre trous).
     #[allow(clippy::too_many_arguments)]
@@ -435,8 +462,8 @@ impl Gfx {
         &self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
-        eyes: [EyeView; 2],
-        targets: [&wgpu::TextureView; 2],
+        eyes: &[EyeView],
+        targets: &[&wgpu::TextureView],
         cubes: &[Instance],
         spheres: &[Instance],
         shadow_center: Vec3,
@@ -448,7 +475,7 @@ impl Gfx {
             0,
             bytemuck::cast_slice(&light_vp.to_cols_array()),
         );
-        for (buffer, e) in self.eye_buffers.iter().zip(eyes) {
+        for (buffer, e) in self.eye_buffers.iter().zip(eyes.iter().copied()) {
             let mut data = [0.0f32; 36];
             data[..16].copy_from_slice(&e.view_proj().to_cols_array());
             data[16..19].copy_from_slice(&e.position.to_array());
@@ -490,7 +517,7 @@ impl Gfx {
             pass.draw(self.sphere_range.clone(), n_cubes..n_all);
         }
         let f = f64::from(fade.clamp(0.0, 1.0));
-        for (target, group) in targets.into_iter().zip(&self.eye_groups) {
+        for (target, group) in targets.iter().copied().zip(&self.eye_groups) {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("ball-eye"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {

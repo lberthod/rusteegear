@@ -16,8 +16,11 @@
 //! transporte le joueur (aucun inconfort).
 
 mod course;
-mod gfx;
+pub mod gfx;
 mod hands;
+pub mod net;
+#[cfg(not(any(target_arch = "wasm32", target_os = "ios")))]
+pub mod relay;
 mod world;
 
 use glam::{Quat, Vec2, Vec3, Vec4};
@@ -103,6 +106,28 @@ pub struct BallGame {
     painted: [String; 2],
     repaint: [u8; 2],
     lobby_cleared_at: Option<f32>,
+    /// Liaison au joueur PC par le relais du VPS (`net`).
+    #[cfg(not(any(target_arch = "wasm32", target_os = "ios")))]
+    link: Option<net::Link>,
+    /// Dernier état reçu du joueur PC, et quand.
+    remote: Option<(net::PcState, f32)>,
+    next_snapshot: f32,
+    statics_sent: (usize, Vec3, f32),
+}
+
+/// Le joueur PC est considéré parti après ce silence (s).
+const REMOTE_TIMEOUT: f32 = 3.0;
+/// Cadence d'envoi de la scène au PC.
+const SNAPSHOT_PERIOD: f32 = 0.05;
+const REMOTE_COLOR: Vec4 = Vec4::new(0.25, 0.5, 0.95, 1.0);
+const WALL_COLOR: Vec4 = Vec4::new(0.35, 0.62, 0.98, 1.0);
+
+/// Adresse du relais : `BALL_URL` à la compilation (APK) ou à l'exécution.
+pub fn relay_url() -> String {
+    std::env::var("BALL_URL")
+        .ok()
+        .or(option_env!("BALL_URL").map(str::to_string))
+        .unwrap_or_else(|| net::DEFAULT_URL.to_string())
 }
 
 impl BallGame {
@@ -130,6 +155,12 @@ impl BallGame {
             painted: Default::default(),
             repaint: [0; 2],
             lobby_cleared_at: None,
+            #[cfg(not(any(target_arch = "wasm32", target_os = "ios")))]
+            link: (std::env::var("BALL_OFFLINE").is_err())
+                .then(|| net::Link::start(&relay_url(), net::Role::Vr)),
+            remote: None,
+            next_snapshot: 0.0,
+            statics_sent: (usize::MAX, Vec3::ZERO, 0.0),
         };
         g.enter_lobby();
         g
@@ -281,6 +312,7 @@ impl BallGame {
         if self.focused {
             haptics = self.update(dt, input);
         }
+        self.network_out(input, (head, eyes[0].orientation));
 
         // Interface : panneau principal (menu, tableau des scores, bilan) et
         // bandeau (trou réussi).
@@ -328,8 +360,8 @@ impl BallGame {
         self.gfx.draw(
             device,
             queue,
-            eyes_world,
-            targets,
+            &eyes_world,
+            &targets,
             &cubes,
             &spheres,
             self.offset + Vec3::new(0.0, 0.0, -2.5),
@@ -349,6 +381,7 @@ impl BallGame {
     fn update(&mut self, dt: f32, input: &XrInput) -> [Option<Haptic>; 2] {
         self.clock += dt;
         let mut haptics = [None, None];
+        self.network_in();
 
         // Fondu entre deux lieux : au noir, on change de lieu.
         match self.goto {
@@ -450,6 +483,146 @@ impl BallGame {
         haptics
     }
 
+    /// Messages du joueur PC → avatar et murs dans le monde.
+    fn network_in(&mut self) {
+        #[cfg(not(any(target_arch = "wasm32", target_os = "ios")))]
+        if let Some(link) = &self.link {
+            for msg in link.poll() {
+                if let net::Msg::Pc(state) = msg {
+                    self.remote = Some((state, self.clock));
+                }
+            }
+            if link.status() != net::LinkStatus::Paired {
+                self.remote = None;
+            }
+        }
+        if self
+            .remote
+            .as_ref()
+            .is_some_and(|(_, t)| self.clock - t > REMOTE_TIMEOUT)
+        {
+            self.remote = None;
+        }
+        match &self.remote {
+            Some((pc, _)) => {
+                let o = self.offset;
+                // Pas de mur sur le joueur VR (ses boules naîtraient dedans).
+                let walls: Vec<(Vec3, f32)> = pc
+                    .walls
+                    .iter()
+                    .map(|w| (Vec3::new(w.x, o.y, w.z), w.yaw))
+                    .filter(|(p, _)| Vec2::new(p.x - o.x, p.z - o.z).length() > 0.8)
+                    .take(world::MAX_WALLS)
+                    .collect();
+                let feet = Vec3::from(pc.pos);
+                self.world.set_remote(Some((feet, pc.yaw)), &walls);
+            }
+            None => self.world.set_remote(None, &[]),
+        }
+    }
+
+    /// Envoie la scène au joueur PC (20 fois par seconde, s'il est là).
+    fn network_out(&mut self, input: &XrInput, head: (Vec3, Quat)) {
+        #[cfg(not(any(target_arch = "wasm32", target_os = "ios")))]
+        {
+            let Some(link) = &self.link else { return };
+            if link.status() != net::LinkStatus::Paired || self.clock < self.next_snapshot {
+                return;
+            }
+            self.next_snapshot = self.clock + SNAPSHOT_PERIOD;
+            let w = &self.world;
+            let nb = |p: Vec3, q: Quat, half: Vec3, color: Vec4| net::NetBox {
+                p: p.to_array(),
+                q: q.to_array(),
+                half: half.to_array(),
+                color: color.to_array(),
+            };
+            let mut boxes = Vec::with_capacity(w.blocks.len() + w.movers.len());
+            for m in &w.movers {
+                boxes.push(nb(w.position(m.body), w.rotation(m.body), m.half, m.color));
+            }
+            for b in &w.blocks {
+                boxes.push(nb(w.position(b.body), w.rotation(b.body), b.half, self.block_color(b)));
+            }
+            let mut spheres: Vec<net::NetSphere> = w
+                .balls
+                .iter()
+                .map(|&b| net::NetSphere {
+                    p: w.position(b).to_array(),
+                    r: world::BALL_RADIUS,
+                    color: [0.95, 0.95, 0.98, 1.0],
+                })
+                .collect();
+            // Mains du joueur VR : paume et bouts des doigts, ou manettes.
+            for hand in [LEFT, RIGHT] {
+                let points: Vec<Vec3> = match (&input.hand_joints[hand], input.hands[hand].grip) {
+                    (Some(j), _) => [0, 5, 10, 15, 20, 25].iter().map(|&k| j[k]).collect(),
+                    (None, Some((p, _))) => vec![p],
+                    _ => vec![],
+                };
+                for p in points {
+                    spheres.push(net::NetSphere {
+                        p: (p + self.offset).to_array(),
+                        r: 0.025,
+                        color: [1.0, 0.85, 0.7, 0.5],
+                    });
+                }
+            }
+            // Décor : à chaque changement de lieu, puis toutes les secondes.
+            let key = (w.statics.len(), self.offset);
+            let statics = (key != (self.statics_sent.0, self.statics_sent.1)
+                || self.clock - self.statics_sent.2 > 1.0)
+                .then(|| {
+                    self.statics_sent = (key.0, key.1, self.clock);
+                    w.statics
+                        .iter()
+                        .map(|&(c, h, color)| nb(c, Quat::IDENTITY, h, color))
+                        .collect()
+                });
+            let snapshot = net::Snapshot {
+                origin: self.offset.to_array(),
+                head: (head.0.to_array(), head.1.to_array()),
+                boxes,
+                spheres,
+                hud: self.hud_lines(),
+                statics,
+            };
+            link.send(&net::Msg::Snapshot(snapshot));
+        }
+        #[cfg(any(target_arch = "wasm32", target_os = "ios"))]
+        let _ = (input, head);
+    }
+
+    /// Informations pour le joueur PC.
+    fn hud_lines(&self) -> Vec<String> {
+        let c = &COURSES[self.course];
+        let mut lines = match self.state {
+            State::Lobby => vec!["Le joueur VR choisit un parcours…".to_string()],
+            State::CourseDone => vec![format!("{} terminé : {} coups", c.name, self.total_strokes())],
+            _ => {
+                let h = &c.holes[self.hole];
+                let (down, total) = self.targets();
+                vec![
+                    format!("{} · trou {}/3 · {}", c.name, self.hole + 1, h.name),
+                    format!(
+                        "Coups {} · par {} · cibles {down}/{total}",
+                        self.strokes[self.hole], h.par
+                    ),
+                ]
+            }
+        };
+        lines.push(format!("Tirs arrêtés : {}", self.world.blocked));
+        lines
+    }
+
+    fn block_color(&self, b: &world::Block) -> Vec4 {
+        if b.material == Material::Target && self.world.is_down(b) {
+            Vec4::new(0.42, 0.43, 0.42, 1.0)
+        } else {
+            b.color
+        }
+    }
+
     fn apply(&mut self, action: Action) {
         match action {
             Action::Start(course) => {
@@ -539,14 +712,15 @@ impl BallGame {
 
     fn menu_key(&self) -> String {
         format!(
-            "{:?}|{}|{}|{:?}|{}|{:?}|{}",
+            "{:?}|{}|{}|{:?}|{}|{:?}|{}|{:?}",
             self.state,
             self.course,
             self.hole,
             self.strokes,
             self.pause,
             self.best,
-            self.targets().0
+            self.targets().0,
+            self.remote.is_some().then_some(self.world.blocked)
         )
     }
 
@@ -578,20 +752,34 @@ impl BallGame {
                 m.color,
             ));
         }
-        for (i, b) in w.blocks.iter().enumerate() {
-            let color = if b.material == Material::Target && w.is_down(b) {
-                // Cible tombée : éteinte (grise), ce qui reste saute aux yeux.
-                Vec4::new(0.42, 0.43, 0.42, 1.0)
-            } else {
-                b.color
-            };
-            let _ = i;
+        for b in &w.blocks {
+            // Cible tombée : éteinte (grise), ce qui reste saute aux yeux.
+            let color = self.block_color(b);
             cubes.push(Instance::boxed(
                 w.position(b.body),
                 b.half,
                 w.rotation(b.body),
                 color,
             ));
+        }
+        // Joueur PC : corps, tête, et ses murs.
+        for (k, pose) in w.remote_poses.iter().enumerate() {
+            let Some((feet, yaw)) = *pose else { continue };
+            let rot = Quat::from_rotation_y(yaw);
+            if k == 0 {
+                let half = world::AVATAR_HALF;
+                cubes.push(Instance::boxed(feet + Vec3::Y * (half.y * 0.8), Vec3::new(half.x, half.y * 0.8, half.z), rot, REMOTE_COLOR));
+                spheres.push(Instance::boxed(feet + Vec3::Y * 1.62, Vec3::splat(0.14), rot, REMOTE_COLOR));
+                // Visière : où il regarde.
+                cubes.push(Instance::boxed(
+                    feet + Vec3::Y * 1.64 + rot * Vec3::new(0.0, 0.0, -0.12),
+                    Vec3::new(0.09, 0.03, 0.03),
+                    rot,
+                    Vec4::new(0.9, 0.95, 1.0, 0.5),
+                ));
+            } else {
+                cubes.push(Instance::boxed(feet + Vec3::Y * world::WALL_HALF.y, world::WALL_HALF, rot, WALL_COLOR));
+            }
         }
         for &ball in &w.balls {
             spheres.push(Instance::boxed(
@@ -661,6 +849,8 @@ struct MenuView {
     targets: (usize, usize),
     best: [Option<u32>; 3],
     new_record: bool,
+    /// Joueur PC présent : tirs qu'il a arrêtés.
+    rival: Option<u32>,
 }
 
 impl MenuView {
@@ -675,6 +865,7 @@ impl MenuView {
             targets: g.targets(),
             best: g.best,
             new_record: g.new_record,
+            rival: g.remote.is_some().then_some(g.world.blocked),
         }
     }
 }
@@ -772,6 +963,14 @@ fn lobby_ui(ui: &mut egui::Ui, v: &MenuView, actions: &mut Vec<Action>) {
             .size(14.0)
             .color(MUTED),
     );
+    if let Some(n) = v.rival {
+        let _ = n;
+        ui.label(
+            egui::RichText::new("Un adversaire est connecté sur ordinateur : il posera des murs !")
+                .size(15.0)
+                .color(egui::Color32::from_rgb(110, 160, 250)),
+        );
+    }
 }
 
 fn scoreboard_ui(ui: &mut egui::Ui, v: &MenuView) {
@@ -801,6 +1000,13 @@ fn scoreboard_ui(ui: &mut egui::Ui, v: &MenuView) {
         .size(40.0)
         .color(MUTED),
     );
+    if let Some(n) = v.rival {
+        ui.label(
+            egui::RichText::new(format!("Adversaire PC · tirs arrêtés {n}"))
+                .size(36.0)
+                .color(egui::Color32::from_rgb(110, 160, 250)),
+        );
+    }
 }
 
 fn summary_ui(ui: &mut egui::Ui, v: &MenuView, actions: &mut Vec<Action>) {
