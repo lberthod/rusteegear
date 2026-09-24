@@ -209,9 +209,11 @@ jobs:
         if: matrix.target == 'aarch64-linux-android'
         run: |
           TC="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64"
-          echo "CC_aarch64_linux_android=$TC/bin/aarch64-linux-android26-clang" >> "$GITHUB_ENV"
-          echo "AR_aarch64_linux_android=$TC/bin/llvm-ar" >> "$GITHUB_ENV"
-          echo "CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER=$TC/bin/aarch64-linux-android26-clang" >> "$GITHUB_ENV"
+          {
+            echo "CC_aarch64_linux_android=$TC/bin/aarch64-linux-android26-clang"
+            echo "AR_aarch64_linux_android=$TC/bin/llvm-ar"
+            echo "CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER=$TC/bin/aarch64-linux-android26-clang"
+          } >> "$GITHUB_ENV"
 
       - name: Build lib pour ${{ matrix.target }}
         run: cargo build --lib --target ${{ matrix.target }}
@@ -299,7 +301,7 @@ jobs:
         run: |
           xvfb-run -a --server-args="-screen 0 1280x800x24" \
             timeout 180 ./target/debug/motor3derust --pilot > editor.log 2>&1 &
-          for i in $(seq 1 80); do
+          for _ in $(seq 1 80); do
             if ./target/debug/pilot state > state.json 2>/dev/null; then break; fi
             sleep 2
           done
