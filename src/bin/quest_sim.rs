@@ -641,7 +641,7 @@ impl ApplicationHandler for Sim {
                                 g.app.sim_perf_ms().0,
                                 g.app.sim_perf_ms().1
                             ),
-                            XrContent::Cubes(_) => String::new(),
+                            XrContent::Cubes(_) | XrContent::Balls(_) => String::new(),
                         };
                         log::info!(
                             "{avg:.2} ms/image ({:.0} img/s, 2 yeux) — budget {:.1} ms ({} Hz){detail}",
@@ -830,7 +830,7 @@ async fn snapshot(path: &str, profile: QuestProfile, choice: SceneChoice) -> Res
     // `QUEST_SIM_FRAMES=300` : jouer plus longtemps avant la capture ;
     // `QUEST_SIM_SWITCH=herroad` : changer de niveau (comme le menu « Choisir
     // un niveau ») à la première image.
-    let frames = std::env::var("QUEST_SIM_FRAMES")
+    let frames: u32 = std::env::var("QUEST_SIM_FRAMES")
         .ok()
         .and_then(|v| v.parse().ok())
         .unwrap_or(if choice == SceneChoice::Cubes { 1 } else { 60 });
@@ -1044,6 +1044,8 @@ async fn bench(seconds: f32, profile: QuestProfile, choice: SceneChoice) -> Resu
     let draw_calls = match &content {
         XrContent::Game(g) => g.renderer.gpu_profiler_info().1,
         XrContent::Cubes(_) => 12,
+        // Balles & cubes : deux appels (cubes, sphères) par œil.
+        XrContent::Balls(_) => 4,
     };
     println!(
         "{} {}×{}/œil : {:.2} ms/image ({:.0} img/s, budget {:.1} ms) · CPU {:.2} ms (simulation {:.2}, rendu {:.2}) · {} draw calls",

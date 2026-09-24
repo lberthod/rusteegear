@@ -37,6 +37,9 @@ pub enum SceneChoice {
     RageQuit,
     /// Sélecteur de niveaux : Rivière en fond, menu « Choisir un niveau » ouvert.
     Launcher,
+    /// « Balles & cubes » : bac à sable léger aux mains (`xr::balls`), sans le
+    /// `Renderer` du moteur — tient la fréquence du casque.
+    Balls,
 }
 
 /// Niveaux proposés par le menu « Choisir un niveau », dans l'ordre affiché.
@@ -74,6 +77,7 @@ impl SceneChoice {
             "hameau" => Self::Hameau,
             "herroad" => Self::HerRoad,
             "ragequit" => Self::RageQuit,
+            "balles" | "balls" => Self::Balls,
             _ => Self::Launcher,
         }
     }
@@ -88,6 +92,7 @@ impl SceneChoice {
             Self::Hameau => "Hameau",
             Self::HerRoad => "HerRoad · course",
             Self::RageQuit => "RageQuit · plateformer",
+            Self::Balls => "Balles & cubes",
         }
     }
 
@@ -99,7 +104,7 @@ impl SceneChoice {
             Self::HerRoad => "Gâchette droite = gaz, gauche = frein",
             Self::RageQuit => "Stick gauche + A pour sauter",
             Self::Reeducation => "Mouvements des bras et des mains",
-            Self::Cubes | Self::Embedded => "",
+            Self::Cubes | Self::Embedded | Self::Balls => "",
         }
     }
 
@@ -120,7 +125,7 @@ impl SceneChoice {
             Self::Reeducation => app.load_reeducation_demo(),
             Self::HerRoad => app.load_herroad_demo(),
             Self::RageQuit => app.load_scene(ragequit_scene()),
-            Self::Riviere | Self::Launcher | Self::Cubes => app.load_riviere_demo(),
+            Self::Riviere | Self::Launcher | Self::Cubes | Self::Balls => app.load_riviere_demo(),
         }
         app.playing = true;
         app
@@ -194,6 +199,7 @@ enum MenuAction {
 
 pub enum XrContent {
     Cubes(CubeScene),
+    Balls(Box<super::balls::BallScene>),
     Game(Box<GameView>),
 }
 
@@ -257,6 +263,9 @@ impl XrContent {
     ) -> Self {
         match choice {
             SceneChoice::Cubes => Self::Cubes(CubeScene::new(device, format, width, height)),
+            SceneChoice::Balls => Self::Balls(Box::new(super::balls::BallScene::new(
+                device, format, width, height,
+            ))),
             _ => {
                 let renderer = Renderer::new_external(
                     adapter,
@@ -309,8 +318,10 @@ impl XrContent {
     /// reprend au retour du focus — sauf si le joueur l'avait mis en pause
     /// lui-même. Exigence du Horizon Store.
     pub fn set_focused(&mut self, focused: bool) {
-        if let Self::Game(game) = self {
-            game.set_focused(focused);
+        match self {
+            Self::Game(game) => game.set_focused(focused),
+            Self::Balls(balls) => balls.set_focused(focused),
+            Self::Cubes(_) => {}
         }
     }
 
@@ -334,6 +345,10 @@ impl XrContent {
                 scene.render(device, queue, targets, eyes.map(|e| e.view_proj()));
                 FrameOut::default()
             }
+            Self::Balls(balls) => FrameOut {
+                haptics: balls.render(device, queue, eyes, input, targets),
+                quit: false,
+            },
             Self::Game(game) => game.frame(device, queue, eyes, input, targets, width, height),
         }
     }

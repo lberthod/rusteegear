@@ -11,6 +11,7 @@
 //! - `hello` : session OpenXR réelle, seulement dans l'APK VR (Android +
 //!   feature `vr`, produit par `packaging/build_quest.sh`).
 
+pub mod balls;
 pub mod content;
 pub mod hands;
 pub mod input;
