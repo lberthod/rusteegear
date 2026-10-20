@@ -41,9 +41,15 @@ Côté architecture, la dette repart à la hausse : 124 290 lignes (+68 % depuis
 | 1.6 jeton du pont pilot | `dccb263` | ✅ |
 | 1.7-1.8 relais Ball par salon, limites, repli `ws://` après échec TLS seulement | `b99229b` | ✅ code, vérifié en local ; **relais VPS à redéployer, APK Ball et Ball-PC à reconstruire** |
 
-Déploiement VPS restant : `git pull`, build `server` + `ball_relay`, override systemd
-`RUSTEEGEAR_SERVER_ADDR=127.0.0.1:7777`, restart des deux services, smoke test, puis vérifier
-dans `journalctl -u rusteegear-server` qu'un refus par IP cite l'adresse réelle (pas 127.0.0.1).
+Déploiement du 2026-10-20 (`a4fa337`, `scripts/deploy_vps.sh`) : serveur et relais Ball
+reconstruits, écoute `127.0.0.1` (override systemd `listen-local.conf`), smoke wss OK. Vérifié en
+production : 4 sockets ouvertes depuis une IP → la 5ᵉ de la même IP est refusée, une 6ᵉ depuis une
+autre IP (le VPS lui-même, via Caddy) est acceptée ; les sockets muettes sont coupées à ~5 s ;
+relais Ball en salon (`quest_sim` + `ball_pc` en wss), un autre salon reste isolé.
+water.loicberthod.ch reconstruit (`wasm-bindgen` 0.2.127 exigé par le lockfile ; sauvegarde
+`/mnt/data/water/dist.bak` = build du 24/09). Rendu web non vérifié visuellement (navigateur
+intégré masqué) ; rendu natif de Rivière vérifié. Le serveur n'écrit aucun log applicatif dans
+journald (`RUST_LOG` absent de l'unité) : à ajouter pour diagnostiquer en production.
 
 ## Règle
 
