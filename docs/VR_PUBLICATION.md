@@ -50,7 +50,7 @@ moment de soumettre**. Ce que le moteur fait déjà, et ce qui reste à vérifie
 | Fréquence d'affichage tenue sans saccade (72 Hz minimum) | ⚠️ mesuré sur Mac seulement (~10 ms/image) — **OVR Metrics Tool au casque** |
 | Confort : rotation par crans, vignette, pas de secousse de caméra, vue spectateur | ✅ (phase 4) — note de confort à déclarer sur la fiche |
 | Suivi des mains : permission `com.oculus.permission.HAND_TRACKING` déclarée, fonctionnement sans manettes | ✅ manifeste, menu au pincement gauche tenu — **à vérifier au casque** |
-| Politique de confidentialité (obligatoire dès qu'on utilise le suivi des mains) | ❌ à rédiger (données de mains non transmises par le moteur) |
+| Politique de confidentialité (obligatoire dès qu'on utilise le suivi des mains) | ❌ à rédiger. Le moteur ne transmet pas les données de mains, mais **Ball** en partie à deux envoie la position de la tête et des mains au joueur PC par le relais (`wss://`, ou `ws://` en clair après un échec TLS, signalé au joueur) : à déclarer |
 | Icône, visuels de la fiche Store, vidéo | ❌ à produire (`quest_sim --snapshot` pour des premières captures) |
 | Plantages / réseau hors ligne | ⚠️ à tester au casque (le jeu en ligne passe par `wss://ws.loicberthod.ch`) |
 

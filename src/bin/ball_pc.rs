@@ -11,6 +11,10 @@
 //! fluide) et lui renvoie sa position et ses murs. `BALL_URL` : autre relais
 //! (ex. `ws://127.0.0.1:7790/ball` en local). `--snapshot <png>` : attend la
 //! scène du casque, rend une image sans fenêtre et quitte (vérification).
+//!
+//! Salon : le code à 4 chiffres affiché dans le menu du casque, donné par
+//! `--salon <code>` ou `BALL_ROOM`, ou tapé au clavier dans la fenêtre au
+//! lancement (Entrée pour valider, Retour arrière pour corriger).
 
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -19,7 +23,7 @@ use glam::{EulerRot, Quat, Vec3, Vec4};
 use motor3derust::time_compat::Instant;
 use motor3derust::xr::ball::gfx::{Gfx, Instance};
 use motor3derust::xr::ball::net::{
-    Link, LinkStatus, Msg, NetBox, NetWall, PcState, Role, Snapshot,
+    Link, LinkStatus, Msg, NetBox, NetWall, PcState, Role, Snapshot, valid_room,
 };
 use motor3derust::xr::ball::relay_urls;
 use motor3derust::xr::math::{EyeView, Fov};
@@ -42,7 +46,10 @@ const INTERP_DELAY: f32 = 0.06;
 
 /// État du joueur PC et de ce qu'il sait de la partie.
 struct Player {
-    link: Link,
+    /// `None` tant que le code du salon n'est pas saisi.
+    link: Option<Link>,
+    /// Code du salon en cours de saisie (avant connexion).
+    room_input: String,
     /// Deux derniers états reçus (précédent, courant) et quand.
     snaps: Option<(Snapshot, Snapshot, f32)>,
     statics: Vec<NetBox>,
@@ -59,9 +66,10 @@ struct Player {
 }
 
 impl Player {
-    fn new(urls: &[String]) -> Self {
+    fn new(room: Option<&str>) -> Self {
         Self {
-            link: Link::start(urls, Role::Pc),
+            link: room.map(|r| Link::start(&relay_urls(), Role::Pc, r)),
+            room_input: String::new(),
             snaps: None,
             statics: Vec::new(),
             origin: Vec3::ZERO,
@@ -77,9 +85,44 @@ impl Player {
         }
     }
 
+    fn status(&self) -> LinkStatus {
+        self.link.as_ref().map_or(LinkStatus::Offline, Link::status)
+    }
+
+    /// Saisie du code de salon au clavier, avant la connexion.
+    fn type_room(&mut self, code: KeyCode) {
+        if self.link.is_some() {
+            return;
+        }
+        let digit = match code {
+            KeyCode::Digit0 | KeyCode::Numpad0 => Some('0'),
+            KeyCode::Digit1 | KeyCode::Numpad1 => Some('1'),
+            KeyCode::Digit2 | KeyCode::Numpad2 => Some('2'),
+            KeyCode::Digit3 | KeyCode::Numpad3 => Some('3'),
+            KeyCode::Digit4 | KeyCode::Numpad4 => Some('4'),
+            KeyCode::Digit5 | KeyCode::Numpad5 => Some('5'),
+            KeyCode::Digit6 | KeyCode::Numpad6 => Some('6'),
+            KeyCode::Digit7 | KeyCode::Numpad7 => Some('7'),
+            KeyCode::Digit8 | KeyCode::Numpad8 => Some('8'),
+            KeyCode::Digit9 | KeyCode::Numpad9 => Some('9'),
+            _ => None,
+        };
+        match (digit, code) {
+            (Some(d), _) if self.room_input.len() < 12 => self.room_input.push(d),
+            (_, KeyCode::Backspace) => {
+                self.room_input.pop();
+            }
+            (_, KeyCode::Enter | KeyCode::NumpadEnter) if valid_room(&self.room_input) => {
+                self.link = Some(Link::start(&relay_urls(), Role::Pc, &self.room_input));
+            }
+            _ => {}
+        }
+    }
+
     fn update(&mut self, dt: f32) {
         self.clock += dt;
-        for msg in self.link.poll() {
+        let received = self.link.as_ref().map(Link::poll).unwrap_or_default();
+        for msg in received {
             if let Msg::Snapshot(mut s) = msg {
                 if let Some(st) = s.statics.take() {
                     self.statics = st;
@@ -98,7 +141,7 @@ impl Player {
                 });
             }
         }
-        if self.link.status() != LinkStatus::Paired {
+        if self.status() != LinkStatus::Paired {
             self.snaps = None;
         }
 
@@ -131,11 +174,13 @@ impl Player {
         }
         if self.clock >= self.next_send {
             self.next_send = self.clock + INPUT_PERIOD;
-            self.link.send(&Msg::Pc(PcState {
-                pos: self.pos.to_array(),
-                yaw: self.yaw,
-                walls: self.walls.iter().map(|(w, _)| *w).collect(),
-            }));
+            if let Some(link) = &self.link {
+                link.send(&Msg::Pc(PcState {
+                    pos: self.pos.to_array(),
+                    yaw: self.yaw,
+                    walls: self.walls.iter().map(|(w, _)| *w).collect(),
+                }));
+            }
         }
     }
 
@@ -183,8 +228,23 @@ impl Player {
     }
 
     fn title(&self) -> String {
-        let status = match self.link.status() {
-            LinkStatus::Offline => "relais injoignable, nouvelle tentative…".to_string(),
+        let Some(link) = &self.link else {
+            return format!(
+                "Ball — ordinateur · tape le code du salon affiché dans le menu du casque, puis \
+                 Entrée : {}_",
+                self.room_input
+            );
+        };
+        let clear = if link.encrypted() {
+            ""
+        } else {
+            " (connexion non chiffrée)"
+        };
+        let status = match link.status() {
+            LinkStatus::Offline => {
+                let e: String = link.last_error().chars().take(80).collect();
+                format!("relais injoignable ({e}), nouvelle tentative…")
+            }
             LinkStatus::Waiting => "en attente du joueur VR (lance Ball sur le casque)".to_string(),
             LinkStatus::Paired => match &self.snaps {
                 Some((_, s, _)) => s.hud.join(" · "),
@@ -203,7 +263,7 @@ impl Player {
                 self.walls.len()
             )
         };
-        format!("Ball — ordinateur · {status} · {walls}")
+        format!("Ball — ordinateur{clear} · {status} · {walls}")
     }
 
     /// Scène à dessiner : décor, état du casque interpolé, joueur VR, murs.
@@ -489,6 +549,7 @@ impl ApplicationHandler for App {
                     return;
                 }
                 if event.state == ElementState::Pressed {
+                    self.player.type_room(code);
                     self.player.keys.insert(code);
                 } else {
                     self.player.keys.remove(&code);
@@ -532,13 +593,14 @@ impl ApplicationHandler for App {
 
 /// `--snapshot <png>` : attend la scène du casque (15 s au plus), rend une
 /// image hors écran à 1280×800 et quitte. `--wall` : pose un mur d'abord.
-fn snapshot(path: &str, wall: bool) -> Result<(), String> {
-    let mut player = Player::new(&relay_urls());
+fn snapshot(path: &str, wall: bool, room: Option<&str>) -> Result<(), String> {
+    let room = room.ok_or("--snapshot demande le salon (--salon <code> ou BALL_ROOM)")?;
+    let mut player = Player::new(Some(room));
     let started = std::time::Instant::now();
     let dt = 1.0 / 60.0;
     while player.snaps.is_none() || player.statics.is_empty() {
         if started.elapsed().as_secs() > 15 {
-            return Err(format!("pas de scène reçue ({:?})", player.link.status()));
+            return Err(format!("pas de scène reçue ({:?})", player.status()));
         }
         player.update(dt);
         std::thread::sleep(std::time::Duration::from_millis(16));
@@ -656,12 +718,20 @@ fn snapshot(path: &str, wall: bool) -> Result<(), String> {
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
     let args: Vec<String> = std::env::args().collect();
+    // Salon : `--salon <code>`, sinon `BALL_ROOM`, sinon saisi dans la fenêtre.
+    let room = args
+        .iter()
+        .position(|a| a == "--salon")
+        .and_then(|i| args.get(i + 1).cloned())
+        .or_else(|| std::env::var("BALL_ROOM").ok())
+        .map(|r| r.trim().to_string())
+        .filter(|r| valid_room(r));
     if let Some(i) = args.iter().position(|a| a == "--snapshot") {
         let path = args
             .get(i + 1)
             .cloned()
             .unwrap_or_else(|| "ball_pc.png".into());
-        match snapshot(&path, args.iter().any(|a| a == "--wall")) {
+        match snapshot(&path, args.iter().any(|a| a == "--wall"), room.as_deref()) {
             Ok(()) => println!("{path}"),
             Err(e) => {
                 eprintln!("ball_pc --snapshot : {e}");
@@ -673,7 +743,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let event_loop = EventLoop::new()?;
     event_loop.set_control_flow(ControlFlow::Poll);
     let mut app = App {
-        player: Player::new(&relay_urls()),
+        player: Player::new(room.as_deref()),
         gpu: None,
         last: None,
         looking: false,

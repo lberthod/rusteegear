@@ -11,19 +11,36 @@
 //! Protocole : messages `bincode` dans des trames WebSocket binaires. Le PC ne
 //! connaît rien des règles : il affiche ce que le casque lui décrit (boîtes et
 //! sphères) et renvoie sa position et ses murs.
+//!
+//! **Salons** (audit 2026-10-20, 1.7) : le casque tire un code à 4 chiffres
+//! (gardé d'une session à l'autre) et l'affiche ; le joueur PC le tape pour le
+//! rejoindre. Avant, un salon unique et public laissait n'importe qui éjecter
+//! le joueur VR. Les casques d'avant les salons (`Hello`, version 1) jouent
+//! toujours, dans le salon public `""`.
 
 use serde::{Deserialize, Serialize};
 
 /// Adresses du relais essayées tour à tour (`BALL_URL` pour n'en viser
 /// qu'une, ex. `ws://127.0.0.1:7790/ball` en local) : chiffrée d'abord, puis
-/// en clair sur le port 80 si le TLS échoue sur l'appareil (repli ajouté
-/// après le 1er essai au casque : « relais injoignable »).
+/// en clair sur le port 80 **seulement si l'échec est celui du TLS** (repli
+/// ajouté après le 1er essai au casque : « relais injoignable ») — un échec
+/// DNS ou réseau ne se règle pas en clair, et une connexion en clair est
+/// signalée au joueur (`Link::encrypted`).
 pub const DEFAULT_URLS: [&str; 2] = [
     "wss://ws.loicberthod.ch/ball",
     "ws://ws.loicberthod.ch/ball",
 ];
 /// Incrémenté à chaque changement de format des messages.
-pub const PROTOCOL_VERSION: u32 = 1;
+pub const PROTOCOL_VERSION: u32 = 2;
+
+/// Version des clients d'avant les salons, qui envoient `Hello` : acceptés
+/// dans le salon public (`""`), les autres messages n'ont pas changé.
+pub const LEGACY_VERSION: u32 = 1;
+
+/// Code de salon valide : 1 à 12 chiffres ou lettres ASCII.
+pub fn valid_room(room: &str) -> bool {
+    (1..=12).contains(&room.len()) && room.chars().all(|c| c.is_ascii_alphanumeric())
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Role {
@@ -97,6 +114,14 @@ pub enum Msg {
     },
     Snapshot(Snapshot),
     Pc(PcState),
+    /// Premier message d'un client de version ≥ 2 : rôle et salon. Ajouté en
+    /// **dernier** variant pour que l'encodage des précédents ne change pas
+    /// (les casques en version 1 restent compris).
+    Join {
+        role: Role,
+        version: u32,
+        room: String,
+    },
 }
 
 impl Msg {
@@ -144,6 +169,8 @@ mod native {
         /// Raison du dernier échec de connexion (affichée au joueur : c'est
         /// le seul diagnostic possible sur un casque sans câble).
         last_error: Arc<Mutex<String>>,
+        /// Connexion courante chiffrée (`wss://`) ; `false` après un repli `ws://`.
+        encrypted: Arc<std::sync::atomic::AtomicBool>,
     }
 
     const OFFLINE: u8 = 0;
@@ -151,14 +178,17 @@ mod native {
     const PAIRED: u8 = 2;
 
     impl Link {
-        pub fn start(urls: &[String], role: Role) -> Self {
+        pub fn start(urls: &[String], role: Role, room: &str) -> Self {
             let (in_tx, in_rx) = channel();
             let (out_tx, out_rx) = tokio::sync::mpsc::unbounded_channel::<Vec<u8>>();
             let status = Arc::new(AtomicU8::new(OFFLINE));
             let last_error = Arc::new(Mutex::new(String::from("connexion en cours…")));
+            let encrypted = Arc::new(std::sync::atomic::AtomicBool::new(true));
             let urls = urls.to_vec();
+            let room = room.to_string();
             let st = status.clone();
             let err = last_error.clone();
+            let enc = encrypted.clone();
             // Sans thread ni runtime, la liaison reste « hors ligne » et la
             // cause s'affiche dans le casque (`last_error`), comme un échec réseau.
             let spawned = std::thread::Builder::new()
@@ -168,7 +198,16 @@ mod native {
                         .enable_all()
                         .build()
                     {
-                        Ok(rt) => rt.block_on(run(urls, role, in_tx, out_rx, st, err)),
+                        Ok(rt) => rt.block_on(run(Session {
+                            urls,
+                            role,
+                            room,
+                            inbox: in_tx,
+                            outbox: out_rx,
+                            status: st,
+                            last_error: err,
+                            encrypted: enc,
+                        })),
                         Err(e) => set_error(&err, format!("runtime réseau : {e}")),
                     }
                 });
@@ -180,7 +219,13 @@ mod native {
                 outbox: out_tx,
                 status,
                 last_error,
+                encrypted,
             }
+        }
+
+        /// `false` si la liaison passe par le repli en clair (`ws://`).
+        pub fn encrypted(&self) -> bool {
+            self.encrypted.load(Ordering::Relaxed)
         }
 
         /// Pourquoi la dernière tentative a échoué (vide une fois connecté).
@@ -236,14 +281,47 @@ mod native {
         text
     }
 
-    async fn run(
+    /// Tout ce dont la boucle de connexion a besoin.
+    struct Session {
         urls: Vec<String>,
         role: Role,
+        room: String,
         inbox: Sender<Msg>,
-        mut outbox: tokio::sync::mpsc::UnboundedReceiver<Vec<u8>>,
+        outbox: tokio::sync::mpsc::UnboundedReceiver<Vec<u8>>,
         status: Arc<AtomicU8>,
         last_error: Arc<Mutex<String>>,
-    ) {
+        encrypted: Arc<std::sync::atomic::AtomicBool>,
+    }
+
+    /// Échec qui tient au TLS lui-même (certificat, poignée de main) : le seul
+    /// cas où retenter en clair a un sens.
+    pub(super) fn looks_like_tls_failure(error: &str) -> bool {
+        let e = error.to_ascii_lowercase();
+        [
+            "tls",
+            "certificate",
+            "handshake",
+            "alert",
+            "unknownissuer",
+            "badsignature",
+        ]
+        .iter()
+        .any(|k| e.contains(k))
+    }
+
+    async fn run(session: Session) {
+        let Session {
+            urls,
+            role,
+            room,
+            inbox,
+            mut outbox,
+            status,
+            last_error,
+            encrypted,
+        } = session;
+        // Dernier échec d'une adresse chiffrée dû au TLS : autorise le repli `ws://`.
+        let mut tls_failed = false;
         let set_error = |url: &str, e: String| {
             if !e.is_empty() {
                 log::warn!("Ball : relais {url} : {e}");
@@ -260,6 +338,15 @@ mod native {
         loop {
             let url = urls[attempt % urls.len().max(1)].clone();
             attempt += 1;
+            let plain = url.starts_with("ws://");
+            // Repli en clair seulement après un échec TLS d'une adresse chiffrée
+            // (et toujours si `BALL_URL` ne donne qu'une adresse en clair, en local).
+            if plain && urls.len() > 1 && !tls_failed {
+                if attempt.is_multiple_of(urls.len()) {
+                    tokio::time::sleep(Duration::from_secs(3)).await;
+                }
+                continue;
+            }
             match tokio::time::timeout(
                 Duration::from_secs(8),
                 tokio_tungstenite::connect_async(&url),
@@ -267,13 +354,15 @@ mod native {
             .await
             {
                 Ok(Ok((ws, _))) => {
-                    log::info!("Ball : relais {url} joint ({role:?})");
+                    log::info!("Ball : relais {url} joint ({role:?}, salon {room})");
                     status.store(WAITING, Ordering::Relaxed);
+                    encrypted.store(!plain, Ordering::Relaxed);
                     set_error(&url, String::new());
                     let (mut tx, mut rx) = ws.split();
-                    let hello = Msg::Hello {
+                    let hello = Msg::Join {
                         role,
                         version: PROTOCOL_VERSION,
+                        room: room.clone(),
                     };
                     if tx
                         .send(Message::Binary(hello.encode().into()))
@@ -319,7 +408,13 @@ mod native {
                     }
                     set_error(&url, "connexion perdue".into());
                 }
-                Ok(Err(e)) => set_error(&url, describe(&e)),
+                Ok(Err(e)) => {
+                    let text = describe(&e);
+                    if !plain {
+                        tls_failed = looks_like_tls_failure(&text);
+                    }
+                    set_error(&url, text);
+                }
                 Err(_) => set_error(&url, "délai dépassé (8 s) : réseau lent ou bloqué".into()),
             }
             status.store(OFFLINE, Ordering::Relaxed);
@@ -347,5 +442,49 @@ mod tests {
             }],
         });
         assert_eq!(Msg::decode(&m.encode()), Some(m));
+    }
+
+    /// Les casques d'avant les salons (version 1, `Hello`) restent compris :
+    /// les variants existants gardent leur encodage, `Join` vient en dernier.
+    #[test]
+    fn legacy_hello_still_decodes_and_join_is_appended() {
+        let hello = Msg::Hello {
+            role: Role::Vr,
+            version: LEGACY_VERSION,
+        };
+        // Octets d'un casque v1 : tag 0 (`Hello`), tag 0 (`Vr`), version 1.
+        assert_eq!(hello.encode(), [0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0]);
+        let join = Msg::Join {
+            role: Role::Pc,
+            version: PROTOCOL_VERSION,
+            room: "4821".into(),
+        };
+        assert_eq!(join.encode()[..4], [5, 0, 0, 0]);
+        assert_eq!(Msg::decode(&join.encode()), Some(join));
+    }
+
+    #[test]
+    fn room_codes_are_short_and_alphanumeric() {
+        assert!(valid_room("4821"));
+        assert!(valid_room("abc123"));
+        assert!(!valid_room(""));
+        assert!(!valid_room("13 chiffres!!"));
+        assert!(!valid_room("0123456789012"));
+    }
+
+    #[cfg(not(any(target_arch = "wasm32", target_os = "ios")))]
+    #[test]
+    fn only_tls_failures_allow_the_plain_fallback() {
+        use super::native::looks_like_tls_failure;
+        assert!(looks_like_tls_failure(
+            "TLS error: invalid peer certificate: UnknownIssuer"
+        ));
+        assert!(looks_like_tls_failure(
+            "io error: received fatal alert: HandshakeFailure"
+        ));
+        assert!(!looks_like_tls_failure(
+            "IO error: failed to lookup address information"
+        ));
+        assert!(!looks_like_tls_failure("délai dépassé (8 s)"));
     }
 }

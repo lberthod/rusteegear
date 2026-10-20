@@ -111,6 +111,9 @@ pub struct BallGame {
     /// Liaison au joueur PC par le relais du VPS (`net`).
     #[cfg(not(any(target_arch = "wasm32", target_os = "ios")))]
     link: Option<net::Link>,
+    /// Code du salon de ce casque, à donner au joueur PC (`room_code`).
+    #[cfg(not(any(target_arch = "wasm32", target_os = "ios")))]
+    room: String,
     /// Dernier état reçu du joueur PC, et quand.
     remote: Option<(net::PcState, f32)>,
     next_snapshot: f32,
@@ -142,6 +145,8 @@ impl BallGame {
         width: u32,
         height: u32,
     ) -> Self {
+        #[cfg(not(any(target_arch = "wasm32", target_os = "ios")))]
+        let room = room_code();
         let mut g = Self {
             world: World::new(),
             gfx: Gfx::new(device, format, width, height),
@@ -167,7 +172,9 @@ impl BallGame {
             lobby_cleared_at: None,
             #[cfg(not(any(target_arch = "wasm32", target_os = "ios")))]
             link: (std::env::var("BALL_OFFLINE").is_err())
-                .then(|| net::Link::start(&relay_urls(), net::Role::Vr)),
+                .then(|| net::Link::start(&relay_urls(), net::Role::Vr, &room)),
+            #[cfg(not(any(target_arch = "wasm32", target_os = "ios")))]
+            room,
             remote: None,
             next_snapshot: 0.0,
             statics_sent: (usize::MAX, Vec3::ZERO, 0.0),
@@ -625,10 +632,23 @@ impl BallGame {
                         // La cause exacte (DNS, TLS, délai…) : seul diagnostic
                         // possible sur un casque sans câble.
                         let e: String = link.last_error().chars().take(150).collect();
-                        format!("Hors ligne : {e}")
+                        format!("Hors ligne (salon {}) : {e}", self.room)
                     }
-                    net::LinkStatus::Waiting => "En ligne · en attente d'un joueur PC".into(),
-                    net::LinkStatus::Paired => "En ligne · adversaire PC connecté".into(),
+                    status => {
+                        // Repli `ws://` : le joueur doit savoir que sa tête et
+                        // ses mains passent en clair.
+                        let clear = if link.encrypted() {
+                            ""
+                        } else {
+                            " (non chiffré)"
+                        };
+                        let who = if status == net::LinkStatus::Paired {
+                            "adversaire PC connecté"
+                        } else {
+                            "en attente d'un joueur PC"
+                        };
+                        format!("En ligne{clear} · salon {} · {who}", self.room)
+                    }
                 },
             }
         }
@@ -1189,6 +1209,34 @@ fn banner_ui(root: &mut egui::Ui, text: &str) {
                 ui.label(egui::RichText::new(sub).size(26.0).color(TEXT));
             });
         });
+}
+
+/// Code de salon du casque (4 chiffres), tiré une fois puis gardé dans
+/// `ball_room.txt` : le joueur PC le tape une seule fois (`BALL_ROOM` le fixe).
+#[cfg(not(any(target_arch = "wasm32", target_os = "ios")))]
+fn room_code() -> String {
+    if let Ok(code) = std::env::var("BALL_ROOM")
+        && net::valid_room(code.trim())
+    {
+        return code.trim().to_string();
+    }
+    let path = crate::assets::user_dir().map(|d| d.join("ball_room.txt"));
+    if let Some(code) = path
+        .as_ref()
+        .and_then(|p| std::fs::read_to_string(p).ok())
+        .map(|c| c.trim().to_string())
+        .filter(|c| net::valid_room(c))
+    {
+        return code;
+    }
+    use std::hash::{BuildHasher, Hasher};
+    let mut h = std::collections::hash_map::RandomState::new().build_hasher();
+    h.write_u32(std::process::id());
+    let code = format!("{:04}", h.finish() % 10_000);
+    if let Some(p) = path {
+        let _ = std::fs::write(p, &code);
+    }
+    code
 }
 
 fn best_path() -> Option<std::path::PathBuf> {
