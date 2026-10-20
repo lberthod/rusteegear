@@ -67,6 +67,13 @@ const MAX_BYTES_PER_SEC: usize = MAX_WS_MESSAGE_BYTES;
 /// pour un joueur légitime avec plusieurs onglets/instances de test, pas assez pour
 /// qu'une seule machine épuise les ressources du serveur en ouvrant des centaines de
 /// sockets.
+///
+/// Derrière un reverse proxy local (Caddy sur le VPS, qui termine le TLS), toutes
+/// les connexions arrivent de 127.0.0.1 : compté sur l'adresse du pair, ce
+/// plafond limitait le serveur public entier à 4 joueurs (audit 2026-10-20,
+/// 1.1). Pour un pair loopback, l'adresse comptée est donc celle que le proxy
+/// a ajoutée en dernier à `X-Forwarded-For` (cf. `forwarded_client_ip`), et le
+/// contrôle se fait après la poignée de main, seul moment où l'en-tête est lu.
 const MAX_CONNECTIONS_PER_IP: usize = 4;
 
 /// Connexions simultanées tolérées **toutes IP confondues** (audit 2026-07-20,
@@ -85,6 +92,21 @@ const MAX_TOTAL_CONNECTIONS: usize = 256;
 /// serveur qui le refuserait à chaque fois.
 pub const SERVER_FULL_REASON: &str =
     "Serveur plein (trop de connexions simultanées) — réessayez dans quelques instants";
+
+/// Délai entre l'acceptation TCP et la réception du `Join` (poignée de main
+/// WebSocket comprise) — audit 2026-10-20, 1.2. Sans lui, une socket ouverte
+/// qui n'envoie rien occupait un créneau (par IP et global) indéfiniment :
+/// quatre sockets muettes suffisaient à fermer le serveur public. Un vrai
+/// client envoie son `Join` dès l'ouverture (cf. `net::client`).
+const JOIN_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// Messages en attente d'envoi par client (audit 2026-10-20, 1.3). À 60
+/// `Snapshot`/s, 512 messages ≈ 8 s de retard — la durée au bout de laquelle
+/// le client lui-même abandonne une connexion muette. Au-delà, le client ne
+/// lit plus sa socket : il est déconnecté au lieu d'accumuler sans fin en
+/// mémoire (l'ancien canal non borné finissait en manque de mémoire, donc
+/// en arrêt du serveur et de tous les salons).
+const OUTBOX_CAPACITY: usize = 512;
 
 /// Temps accordé à une connexion **refusée** pour terminer sa poignée de main
 /// WebSocket et recevoir `SERVER_FULL_REASON` (2.3) : expliquer le refus
@@ -193,6 +215,29 @@ impl Drop for IpGuard {
     }
 }
 
+/// Plafond par IP des connexions arrivées par un pair loopback (cf.
+/// `MAX_CONNECTIONS_PER_IP`), appliqué dans `handle_connection`.
+struct ProxiedCap {
+    counts: IpCounts,
+    max: usize,
+}
+
+impl ProxiedCap {
+    /// Réserve un créneau pour `ip`, ou `None` si le plafond est atteint.
+    fn reserve(&self, ip: IpAddr) -> Option<IpGuard> {
+        let mut counts = lock_ip_counts(&self.counts);
+        let n = counts.entry(ip).or_insert(0);
+        if *n >= self.max {
+            return None;
+        }
+        *n += 1;
+        Some(IpGuard {
+            counts: self.counts.clone(),
+            ip,
+        })
+    }
+}
+
 /// Plafond de l'inbox partagée (messages en attente côté thread principal,
 /// toutes connexions confondues — audit réseau 2026-07) : l'ancien canal non
 /// borné laissait la mémoire croître sans limite si le thread principal calait
@@ -208,7 +253,8 @@ const INBOX_CAPACITY: usize = 4096;
 /// Message reçu d'un client, avec l'identifiant du joueur qui l'a envoyé.
 pub type Inbound = (PlayerId, ClientMsg);
 
-type Outboxes = Arc<Mutex<HashMap<PlayerId, tokio::sync::mpsc::UnboundedSender<Vec<u8>>>>>;
+type Outbox = tokio::sync::mpsc::Sender<Vec<u8>>;
+type Outboxes = Arc<Mutex<HashMap<PlayerId, Outbox>>>;
 
 /// Verrouille `outboxes` en récupérant le contenu même si le mutex est empoisonné
 /// (Sprint 113b, durcissement) : `insert`/`remove`/lecture sur une simple `HashMap`
@@ -216,12 +262,41 @@ type Outboxes = Arc<Mutex<HashMap<PlayerId, tokio::sync::mpsc::UnboundedSender<V
 /// client fautif ne doit pas figer `send_to`/`broadcast_all_rooms` pour tous les autres
 /// joueurs (et donc tout le thread de jeu principal) derrière un `.unwrap()` qui
 /// re-paniquerait à chaque appel suivant.
-fn lock_outboxes(
-    outboxes: &Outboxes,
-) -> std::sync::MutexGuard<'_, HashMap<PlayerId, tokio::sync::mpsc::UnboundedSender<Vec<u8>>>> {
+fn lock_outboxes(outboxes: &Outboxes) -> std::sync::MutexGuard<'_, HashMap<PlayerId, Outbox>> {
     outboxes
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+/// Pousse `bytes` dans la file d'envoi d'un client ; `false` si elle est
+/// pleine (client qui ne lit plus, cf. `OUTBOX_CAPACITY`) ou fermée. Un
+/// client à file pleine est retiré de `outboxes` par l'appelant, ce qui ferme
+/// sa connexion par le chemin habituel (`NetServer::disconnect`).
+fn push_outbox(tx: &Outbox, bytes: Vec<u8>) -> bool {
+    match tx.try_send(bytes) {
+        Ok(()) => true,
+        Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => false,
+        // Connexion déjà en cours de fermeture : son nettoyage suit.
+        Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => true,
+    }
+}
+
+/// Retire les clients dont la file d'envoi a débordé (cf. `push_outbox`).
+fn drop_stalled(outboxes: &mut HashMap<PlayerId, Outbox>, stalled: &[PlayerId]) {
+    for id in stalled {
+        log::warn!(
+            "Joueur {id} déconnecté : {OUTBOX_CAPACITY} messages en attente, il ne lit plus sa socket"
+        );
+        outboxes.remove(id);
+    }
+}
+
+/// Adresse du client réel derrière un reverse proxy local : la **dernière**
+/// entrée de `X-Forwarded-For`, celle qu'a ajoutée le proxy lui-même (les
+/// précédentes viennent du client et peuvent être forgées). `None` sans
+/// en-tête exploitable.
+fn forwarded_client_ip(header: Option<&str>) -> Option<IpAddr> {
+    header?.rsplit(',').next()?.trim().parse().ok()
 }
 
 /// Serveur réseau : accepte des connexions WebSocket, décode les `ClientMsg` reçus
@@ -281,6 +356,9 @@ impl NetServer {
         let accept_outboxes = outboxes.clone();
         let accept_next_id = next_id.clone();
         let accept_ip_counts = ip_counts.clone();
+        // Connexions arrivées par un pair loopback, comptées par adresse
+        // `X-Forwarded-For` (ou loopback sans en-tête) : cf. `MAX_CONNECTIONS_PER_IP`.
+        let accept_proxied_counts: IpCounts = Arc::new(Mutex::new(HashMap::new()));
         std::thread::spawn(move || {
             let runtime = match tokio::runtime::Builder::new_current_thread()
                 .enable_all()
@@ -342,7 +420,10 @@ impl NetServer {
                             continue;
                         }
                         let n = counts.entry(peer.ip()).or_insert(0);
-                        if *n >= max_connections_per_ip {
+                        // Pair loopback = reverse proxy local (ou outil local) :
+                        // plafond par IP décidé après la poignée de main, sur
+                        // l'adresse de `X-Forwarded-For` (cf. `handle_connection`).
+                        if !peer.ip().is_loopback() && *n >= max_connections_per_ip {
                             log::warn!(
                                 "Connexion refusée depuis {} : déjà {n} connexion(s) simultanée(s) (max {max_connections_per_ip})",
                                 peer.ip()
@@ -361,9 +442,14 @@ impl NetServer {
                     let tx = tx.clone();
                     let outboxes = accept_outboxes.clone();
                     let next_id = accept_next_id.clone();
+                    let proxied = ProxiedCap {
+                        counts: accept_proxied_counts.clone(),
+                        max: max_connections_per_ip,
+                    };
                     tokio::spawn(async move {
                         let _ip_guard = ip_guard;
-                        if let Err(e) = handle_connection(stream, peer, tx, outboxes, next_id).await
+                        if let Err(e) =
+                            handle_connection(stream, peer, tx, outboxes, next_id, proxied).await
                         {
                             log::info!("Connexion {peer} terminée : {e}");
                         }
@@ -389,8 +475,11 @@ impl NetServer {
         let Ok(bytes) = protocol::encode(msg) else {
             return;
         };
-        if let Some(tx) = lock_outboxes(&self.outboxes).get(&id) {
-            let _ = tx.send(bytes);
+        let mut outboxes = lock_outboxes(&self.outboxes);
+        if let Some(tx) = outboxes.get(&id)
+            && !push_outbox(tx, bytes)
+        {
+            drop_stalled(&mut outboxes, &[id]);
         }
     }
 
@@ -410,12 +499,17 @@ impl NetServer {
         let Ok(bytes) = protocol::encode(msg) else {
             return;
         };
-        let outboxes = lock_outboxes(&self.outboxes);
-        for id in ids {
-            if let Some(tx) = outboxes.get(id) {
-                let _ = tx.send(bytes.clone());
-            }
-        }
+        let mut outboxes = lock_outboxes(&self.outboxes);
+        let stalled: Vec<PlayerId> = ids
+            .iter()
+            .filter(|id| {
+                outboxes
+                    .get(id)
+                    .is_some_and(|tx| !push_outbox(tx, bytes.clone()))
+            })
+            .copied()
+            .collect();
+        drop_stalled(&mut outboxes, &stalled);
     }
 
     /// Envoie un message à **tous les clients du process, tous salons
@@ -429,9 +523,13 @@ impl NetServer {
         let Ok(bytes) = protocol::encode(msg) else {
             return;
         };
-        for tx in lock_outboxes(&self.outboxes).values() {
-            let _ = tx.send(bytes.clone());
-        }
+        let mut outboxes = lock_outboxes(&self.outboxes);
+        let stalled: Vec<PlayerId> = outboxes
+            .iter()
+            .filter(|(_, tx)| !push_outbox(tx, bytes.clone()))
+            .map(|(id, _)| *id)
+            .collect();
+        drop_stalled(&mut outboxes, &stalled);
     }
 
     /// Coupe la connexion du joueur `id` côté serveur ; sans effet s'il n'est
@@ -492,13 +590,68 @@ async fn handle_connection(
     tx: SyncSender<Inbound>,
     outboxes: Outboxes,
     next_id: Arc<AtomicU32>,
+    proxied: ProxiedCap,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let ws = tokio_tungstenite::accept_async_with_config(stream, Some(server_ws_config())).await?;
+    // Poignée de main et `Join` bornés ensemble par `JOIN_TIMEOUT` (1.2).
+    let deadline = tokio::time::Instant::now() + JOIN_TIMEOUT;
+    let mut forwarded: Option<String> = None;
+    // Signature imposée par le trait `Callback` de tungstenite (l'erreur est
+    // une réponse HTTP complète) ; jamais renvoyée ici.
+    #[allow(clippy::result_large_err)]
+    let read_forwarded = |req: &tokio_tungstenite::tungstenite::handshake::server::Request,
+                          resp| {
+        forwarded = req
+            .headers()
+            .get("x-forwarded-for")
+            .and_then(|v| v.to_str().ok())
+            .map(str::to_string);
+        Ok(resp)
+    };
+    let ws = tokio::time::timeout_at(
+        deadline,
+        tokio_tungstenite::accept_hdr_async_with_config(
+            stream,
+            read_forwarded,
+            Some(server_ws_config()),
+        ),
+    )
+    .await
+    .map_err(|_| "poignée de main WebSocket trop lente")??;
     let (mut sink, mut stream) = ws.split();
+
+    // Plafond par IP des connexions passées par le proxy local (1.1) :
+    // l'adresse comptée est celle du vrai client, pas 127.0.0.1.
+    let _proxied_guard = if peer.ip().is_loopback() {
+        let client_ip = forwarded_client_ip(forwarded.as_deref()).unwrap_or(peer.ip());
+        match proxied.reserve(client_ip) {
+            Some(guard) => Some(guard),
+            None => {
+                log::warn!(
+                    "Connexion refusée depuis {client_ip} (via {peer}) : déjà {} connexion(s) \
+                     simultanée(s)",
+                    proxied.max
+                );
+                let rejected = protocol::encode(&ServerMsg::JoinRejected {
+                    reason: SERVER_FULL_REASON.to_string(),
+                })?;
+                let _ = tokio::time::timeout(REJECT_HANDSHAKE_TIMEOUT, async {
+                    sink.send(Message::Binary(rejected.into())).await?;
+                    sink.close().await
+                })
+                .await;
+                return Err(format!("plafond par IP atteint pour {client_ip}").into());
+            }
+        }
+    } else {
+        None
+    };
 
     // Première trame attendue : `ClientMsg::Join`. Toute autre trame, ou une
     // déconnexion avant d'avoir rejoint, met fin à la connexion.
-    let first = stream.next().await.ok_or("connexion fermée avant Join")??;
+    let first = tokio::time::timeout_at(deadline, stream.next())
+        .await
+        .map_err(|_| "aucun Join reçu dans le délai")?
+        .ok_or("connexion fermée avant Join")??;
     let join_bytes = match first {
         Message::Binary(b) => b,
         _ => return Err("première trame non binaire".into()),
@@ -541,7 +694,7 @@ async fn handle_connection(
     let id = next_id.fetch_add(1, Ordering::Relaxed);
     log::info!("Joueur {id} ({name}) connecté depuis {peer}");
 
-    let (out_tx, mut out_rx) = tokio::sync::mpsc::unbounded_channel::<Vec<u8>>();
+    let (out_tx, mut out_rx) = tokio::sync::mpsc::channel::<Vec<u8>>(OUTBOX_CAPACITY);
     // Poignée **faible** gardée par la pompe entrante pour répondre aux `Ping`
     // sur place (roadmap post-audit UX v2 2026-09-04, 2.6) : la sonde de
     // latence mesure le transport, pas la file du thread principal ni son
@@ -618,8 +771,15 @@ async fn handle_connection(
                         if let Ok(pong) = protocol::encode(&ServerMsg::Pong { t })
                             && let Some(tx) = pong_tx.upgrade()
                         {
-                            let _ = tx.send(pong);
+                            let _ = tx.try_send(pong);
                         }
+                        continue;
+                    }
+                    // Un seul `Join` par connexion (audit 2026-10-20, 1.4) : le
+                    // premier a été traité plus haut ; les suivants permettaient
+                    // à une connexion d'ouvrir les 16 salons ou de lancer une
+                    // vérification Firebase (un thread) par message.
+                    if matches!(client_msg, ClientMsg::Join { .. }) {
                         continue;
                     }
                     let is_leave = matches!(client_msg, ClientMsg::Leave);
@@ -673,6 +833,21 @@ async fn handle_connection(
 #[cfg(test)]
 mod rate_limiter_tests {
     use super::*;
+
+    /// 1.1 (audit 2026-10-20) : seule la dernière entrée, ajoutée par le proxy,
+    /// fait foi — les précédentes viennent du client et se forgent.
+    #[test]
+    fn forwarded_client_ip_takes_the_entry_added_by_the_proxy() {
+        let ip = |s: &str| s.parse::<IpAddr>().ok();
+        assert_eq!(forwarded_client_ip(Some("203.0.113.7")), ip("203.0.113.7"));
+        assert_eq!(
+            forwarded_client_ip(Some("10.0.0.1, 198.51.100.2")),
+            ip("198.51.100.2")
+        );
+        assert_eq!(forwarded_client_ip(Some("2001:db8::1")), ip("2001:db8::1"));
+        assert_eq!(forwarded_client_ip(Some("pas une ip")), None);
+        assert_eq!(forwarded_client_ip(None), None);
+    }
 
     /// Le cœur du correctif (audit 2026-07) : un burst juste sous la limite à
     /// la toute fin d'une fenêtre, suivi d'un second juste après le
@@ -1339,6 +1514,226 @@ mod tests {
         assert!(
             client.is_alive(),
             "sonder la latence ne coupe pas la connexion"
+        );
+    }
+
+    /// Connexion brute (sans `NetClient`) avec un `X-Forwarded-For` choisi,
+    /// comme Caddy en produit devant le serveur public.
+    async fn connect_forwarded(
+        url: &str,
+        forwarded_for: &str,
+    ) -> tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>
+    {
+        use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+        let mut req = url.into_client_request().expect("requête");
+        req.headers_mut()
+            .insert("x-forwarded-for", forwarded_for.parse().expect("en-tête"));
+        tokio_tungstenite::connect_async(req)
+            .await
+            .expect("connexion brute")
+            .0
+    }
+
+    fn join_bytes(name: &str) -> Vec<u8> {
+        protocol::encode(&ClientMsg::Join {
+            protocol: protocol::PROTOCOL_VERSION,
+            name: name.to_string(),
+            firebase_uid: None,
+            lobby: String::new(),
+            class: 0,
+            objective: 0,
+        })
+        .expect("encodage")
+    }
+
+    /// Premier `ServerMsg` reçu (2 s max), `None` si la connexion se ferme avant.
+    async fn first_server_msg(
+        ws: &mut tokio_tungstenite::WebSocketStream<
+            tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
+        >,
+    ) -> Option<ServerMsg> {
+        let read = async {
+            while let Some(Ok(msg)) = ws.next().await {
+                if let Message::Binary(bytes) = msg {
+                    return protocol::decode(&bytes).ok();
+                }
+            }
+            None
+        };
+        tokio::time::timeout(Duration::from_secs(2), read)
+            .await
+            .ok()
+            .flatten()
+    }
+
+    fn runtime() -> tokio::runtime::Runtime {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("runtime de test")
+    }
+
+    /// Audit 2026-10-20, 1.1 : derrière Caddy, tous les joueurs arrivent de
+    /// 127.0.0.1. Le plafond par IP doit porter sur l'adresse transmise par
+    /// le proxy — plus de 4 joueurs distincts passent, et le 5ᵉ d'une même
+    /// adresse réelle est refusé.
+    #[test]
+    fn per_ip_cap_behind_a_local_proxy_counts_the_forwarded_address() {
+        let server = NetServer::start("127.0.0.1:0").expect("démarrage du serveur");
+        let url = format!("ws://{}", server.local_addr);
+        runtime().block_on(async {
+            let mut kept = Vec::new();
+            for i in 0..(MAX_CONNECTIONS_PER_IP + 2) {
+                let mut ws = connect_forwarded(&url, &format!("198.51.100.{i}")).await;
+                ws.send(Message::Binary(join_bytes(&format!("Distinct{i}")).into()))
+                    .await
+                    .expect("Join");
+                assert!(
+                    matches!(
+                        first_server_msg(&mut ws).await,
+                        Some(ServerMsg::Welcome { .. })
+                    ),
+                    "le joueur {i} (adresse réelle distincte) doit être accepté"
+                );
+                kept.push(ws);
+            }
+            for i in 0..MAX_CONNECTIONS_PER_IP {
+                let mut ws = connect_forwarded(&url, "10.9.9.9, 203.0.113.50").await;
+                ws.send(Message::Binary(join_bytes(&format!("Meme{i}")).into()))
+                    .await
+                    .expect("Join");
+                assert!(matches!(
+                    first_server_msg(&mut ws).await,
+                    Some(ServerMsg::Welcome { .. })
+                ));
+                kept.push(ws);
+            }
+            // L'entrée forgée par le client (`10.9.9.9`) change, la vraie non.
+            let mut over = connect_forwarded(&url, "10.1.1.1, 203.0.113.50").await;
+            let _ = over
+                .send(Message::Binary(join_bytes("UnDeTrop").into()))
+                .await;
+            match first_server_msg(&mut over).await {
+                Some(ServerMsg::JoinRejected { reason }) => assert_eq!(reason, SERVER_FULL_REASON),
+                other => panic!("refus « serveur plein » attendu, reçu {other:?}"),
+            }
+        });
+    }
+
+    /// Audit 2026-10-20, 1.2 : une socket qui n'envoie jamais son `Join` est
+    /// coupée au bout de `JOIN_TIMEOUT` et libère son créneau.
+    #[test]
+    fn a_silent_socket_is_closed_after_the_join_timeout() {
+        let server = NetServer::start_with_ip_cap("127.0.0.1:0", 1).expect("démarrage du serveur");
+        let url = format!("ws://{}", server.local_addr);
+        runtime().block_on(async {
+            let (mut silent, _) = tokio_tungstenite::connect_async(&url)
+                .await
+                .expect("connexion muette");
+            let closed = tokio::time::timeout(JOIN_TIMEOUT + Duration::from_secs(2), async {
+                while let Some(Ok(_)) = silent.next().await {}
+            })
+            .await;
+            assert!(
+                closed.is_ok(),
+                "la socket muette doit être fermée par le serveur"
+            );
+            // Son créneau (plafond 1) est libre : un vrai client passe.
+            let (mut ws, _) = tokio_tungstenite::connect_async(&url)
+                .await
+                .expect("connexion");
+            ws.send(Message::Binary(join_bytes("Apres").into()))
+                .await
+                .expect("Join");
+            assert!(matches!(
+                first_server_msg(&mut ws).await,
+                Some(ServerMsg::Welcome { .. })
+            ));
+        });
+    }
+
+    /// Audit 2026-10-20, 1.4 : un second `Join` sur la même connexion n'est
+    /// jamais relayé au thread principal.
+    #[test]
+    fn a_second_join_on_the_same_connection_is_ignored() {
+        let server = NetServer::start("127.0.0.1:0").expect("démarrage du serveur");
+        let url = format!("ws://{}", server.local_addr);
+        runtime().block_on(async {
+            let (mut ws, _) = tokio_tungstenite::connect_async(&url)
+                .await
+                .expect("connexion");
+            ws.send(Message::Binary(join_bytes("Une").into()))
+                .await
+                .expect("Join");
+            assert!(matches!(
+                first_server_msg(&mut ws).await,
+                Some(ServerMsg::Welcome { .. })
+            ));
+            ws.send(Message::Binary(join_bytes("Deux").into()))
+                .await
+                .expect("second Join");
+            ws.send(Message::Binary(
+                protocol::encode(&ClientMsg::Leave).expect("Leave").into(),
+            ))
+            .await
+            .expect("Leave");
+        });
+        let mut joins = 0;
+        while let Ok((_, msg)) = server.inbox.recv_timeout(Duration::from_millis(500)) {
+            if matches!(msg, ClientMsg::Join { .. }) {
+                joins += 1;
+            }
+            if matches!(msg, ClientMsg::Leave) {
+                break;
+            }
+        }
+        assert_eq!(
+            joins, 1,
+            "seul le premier Join doit atteindre le thread principal"
+        );
+    }
+
+    /// Audit 2026-10-20, 1.3 : un client qui ne lit plus sa socket est
+    /// déconnecté quand sa file d'envoi déborde, au lieu de faire grossir la
+    /// mémoire du serveur sans limite.
+    #[test]
+    fn a_client_that_stops_reading_is_disconnected() {
+        let server = NetServer::start("127.0.0.1:0").expect("démarrage du serveur");
+        let url = format!("ws://{}", server.local_addr);
+        let rt = runtime();
+        let _ws = rt.block_on(async {
+            let (mut ws, _) = tokio_tungstenite::connect_async(&url)
+                .await
+                .expect("connexion");
+            ws.send(Message::Binary(join_bytes("Sourd").into()))
+                .await
+                .expect("Join");
+            assert!(matches!(
+                first_server_msg(&mut ws).await,
+                Some(ServerMsg::Welcome { .. })
+            ));
+            ws // plus jamais lu
+        });
+        let (id, _) = server
+            .inbox
+            .recv_timeout(Duration::from_secs(2))
+            .expect("Join relayé");
+        // Messages volumineux : les tampons TCP se remplissent vite, puis la file.
+        let big = ServerMsg::JoinRejected {
+            reason: "x".repeat(32 * 1024),
+        };
+        let mut sent = 0;
+        while server.connected_count() > 0 && sent < 20 * OUTBOX_CAPACITY {
+            server.send_to(id, &big);
+            sent += 1;
+            if sent % 64 == 0 {
+                std::thread::sleep(Duration::from_millis(5));
+            }
+        }
+        assert_eq!(
+            server.connected_count(),
+            0,
+            "le client sourd doit être déconnecté (après {sent} messages)"
         );
     }
 }
