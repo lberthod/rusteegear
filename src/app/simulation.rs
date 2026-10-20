@@ -2499,6 +2499,9 @@ impl AppState {
                         .lua
                         .load(&obj.script)
                         .set_name(format!("script de « {} »", obj.name))
+                        // Jamais de bytecode venu d'un fichier de scène (bac à
+                        // sable, audit 2026-10-20, 1.5).
+                        .set_mode(mlua::ChunkMode::Text)
                         .into_function()
                     {
                         Ok(f) => {
@@ -2525,6 +2528,7 @@ impl AppState {
                     &obj.script,
                 ));
                 super::script_ctx::set_vr_wanted(super::script_ctx::script_reads_vr(&obj.script));
+                let _budget = self.scripting.lua_breakpoints.line_budget();
                 if let Err(e) = scripting::run_script(
                     &self.scripting.lua,
                     &func,

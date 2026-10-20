@@ -738,6 +738,50 @@ pub(super) struct LuaBreakpoints(std::sync::Arc<std::sync::Mutex<BreakpointState
 struct BreakpointState {
     lines: std::collections::HashSet<u32>,
     hits: Vec<BreakpointHit>,
+    /// Lignes encore permises au script en cours (`LuaBreakpoints::line_budget`) ;
+    /// `None` hors d'un appel de script d'objet (console, chargement) : pas de limite.
+    lines_left: Option<u64>,
+}
+
+/// Lignes Lua exécutables par un script d'objet en un seul appel (audit
+/// 2026-10-20, 1.5). Un script légitime en fait quelques centaines par tick ;
+/// `while true do end` les atteint en une fraction de seconde, et le script est
+/// interrompu par une erreur au lieu de figer l'éditeur ou le jeu.
+pub(super) const LUA_LINE_BUDGET: u64 = 10_000_000;
+
+/// Mémoire maximale du tas Lua natif (audit 2026-10-20, 1.5) : un script qui
+/// grossit une table sans fin échoue en erreur Lua au lieu d'épuiser la machine.
+pub(super) const LUA_MEMORY_LIMIT: usize = 512 * 1024 * 1024;
+
+/// Bac à sable des scripts de scène (audit 2026-10-20, 1.5). `Lua::new()` charge
+/// `io`, `os` et `package` : un script embarqué dans une scène partagée pouvait
+/// lire, écrire ou exécuter n'importe quoi sur la machine de qui l'ouvrait
+/// (`os.execute`, `io.open`, `require`). Seuls restent les calculs (`string`,
+/// `table`, `math`, `utf8`, `coroutine`) et la mesure du temps (`os.clock`,
+/// `os.time`, `os.date`, `os.difftime`) ; `load`/`dofile`/`loadfile` sont retirés
+/// (ils contournent aussi le chargement texte seul de `simulation.rs`).
+pub(super) fn sandbox(lua: &Lua) -> mlua::Result<()> {
+    let g = lua.globals();
+    let os: mlua::Table = g.get("os")?;
+    let safe_os = lua.create_table()?;
+    for name in ["clock", "time", "date", "difftime"] {
+        safe_os.set(name, os.get::<mlua::Value>(name)?)?;
+    }
+    g.set("os", safe_os)?;
+    for name in ["io", "package", "require", "dofile", "loadfile", "load"] {
+        g.set(name, mlua::Value::Nil)?;
+    }
+    lua.set_memory_limit(LUA_MEMORY_LIMIT)?;
+    Ok(())
+}
+
+/// Budget de lignes actif tant qu'il vit (cf. `LuaBreakpoints::line_budget`).
+pub(super) struct LineBudget(std::sync::Arc<std::sync::Mutex<BreakpointState>>);
+
+impl Drop for LineBudget {
+    fn drop(&mut self) {
+        lock_breakpoints(&self.0).lines_left = None;
+    }
 }
 
 fn lock_breakpoints(
@@ -774,6 +818,13 @@ impl LuaBreakpoints {
         lines
     }
 
+    /// Limite le script d'objet sur le point d'être appelé à `LUA_LINE_BUDGET`
+    /// lignes, jusqu'à la destruction du garde renvoyé.
+    pub(super) fn line_budget(&self) -> LineBudget {
+        lock_breakpoints(&self.0).lines_left = Some(LUA_LINE_BUDGET);
+        LineBudget(self.0.clone())
+    }
+
     /// Retire et renvoie tous les arrêts enregistrés depuis le dernier appel —
     /// consommé une fois (par l'éditeur), pas relu indéfiniment.
     pub(super) fn take_hits(&self) -> Vec<BreakpointHit> {
@@ -793,6 +844,16 @@ impl LuaBreakpoints {
             };
             let line = line as u32;
             let mut state = lock_breakpoints(&shared);
+            if let Some(left) = state.lines_left.as_mut() {
+                if *left == 0 {
+                    state.lines_left = None;
+                    return Err(mlua::Error::RuntimeError(format!(
+                        "script interrompu : plus de {LUA_LINE_BUDGET} lignes exécutées en un \
+                         seul appel (boucle infinie ?)"
+                    )));
+                }
+                *left -= 1;
+            }
             if state.lines.contains(&line) {
                 let source = debug
                     .source()
@@ -833,6 +894,43 @@ impl super::AppState {
 mod tests {
     use super::*;
     use crate::scene::{MeshKind, Scene, SceneObject};
+
+    /// Audit 2026-10-20, 1.5 : une scène partagée ne doit plus pouvoir toucher
+    /// au disque ni lancer de commande ; le calcul et la mesure du temps restent.
+    #[test]
+    fn the_sandbox_keeps_computation_and_removes_system_access() {
+        let lua = Lua::new();
+        sandbox(&lua).unwrap();
+        lua.load(
+            r#"assert(io == nil, "io") assert(package == nil and require == nil, "package")
+             assert(load == nil and dofile == nil and loadfile == nil, "load")
+             assert(os.execute == nil and os.remove == nil and os.getenv == nil, "os")
+             assert(type(os.clock) == "function" and type(os.time) == "function", "temps")
+             assert(string.format("%d", 3) == "3" and math.floor(2.5) == 2, "calcul")"#,
+        )
+        .exec()
+        .unwrap();
+    }
+
+    /// Audit 2026-10-20, 1.5 : une boucle infinie dans un script d'objet est
+    /// interrompue par une erreur au lieu de figer l'application, et le budget
+    /// ne s'applique qu'à l'appel en cours.
+    #[test]
+    fn an_endless_script_is_interrupted_by_the_line_budget() {
+        let lua = Lua::new();
+        let breakpoints = LuaBreakpoints::new();
+        breakpoints.install(&lua).unwrap();
+        let endless = lua.load("while true do end").into_function().unwrap();
+        let err = {
+            let _budget = breakpoints.line_budget();
+            endless.call::<()>(()).unwrap_err()
+        };
+        assert!(err.to_string().contains("boucle infinie"), "{err}");
+        // Hors budget (console, chargement), un long calcul n'est pas coupé.
+        lua.load("local n = 0 for i = 1, 12000000 do n = n + 1 end")
+            .exec()
+            .unwrap();
+    }
 
     /// Sprint 128 : un breakpoint sur une ligne précise interrompt l'exécution
     /// **avant** cette ligne (rien après ne s'exécute) et enregistre l'arrêt —

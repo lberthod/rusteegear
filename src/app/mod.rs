@@ -1634,6 +1634,10 @@ impl AppState {
         #[cfg(not(target_arch = "wasm32"))]
         let lua = Lua::new();
         #[cfg(not(target_arch = "wasm32"))]
+        if let Err(e) = scripting::sandbox(&lua) {
+            log::error!("Bac à sable Lua incomplet : {e}");
+        }
+        #[cfg(not(target_arch = "wasm32"))]
         let lua_breakpoints = scripting::LuaBreakpoints::new();
         #[cfg(not(target_arch = "wasm32"))]
         if let Err(e) = lua_breakpoints.install(&lua) {
@@ -1658,6 +1662,8 @@ impl AppState {
         // collecte complète repart de zéro et n'a pas cet écueil.
         #[cfg(target_arch = "wasm32")]
         lua_web.gc_stop();
+        #[cfg(target_arch = "wasm32")]
+        scripting_web::sandbox(&mut lua_web);
         AppState {
             scene: Scene::demo(),
             selection: None,

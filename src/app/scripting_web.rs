@@ -158,6 +158,20 @@ fn ensure_host_functions(lua: &mut Lua) -> LuaResult<()> {
     lua.set_global("__rustee_hosts", true)
 }
 
+/// Bac à sable du backend web, même périmètre que `scripting::sandbox` (audit
+/// 2026-10-20, 1.5) : `rilua::Lua::new()` ouvre toutes les bibliothèques. Dans
+/// le navigateur, `io`/`os.execute` n'atteignent aucun disque, mais les deux
+/// backends doivent offrir la même API : un script qui marche sur le web doit
+/// marcher dans l'éditeur, et inversement.
+pub(super) fn sandbox(lua: &mut rilua::Lua) {
+    const SANDBOX: &str = "local o = os \
+        os = { clock = o.clock, time = o.time, date = o.date, difftime = o.difftime } \
+        io, package, require, dofile, loadfile, load, loadstring = nil";
+    if let Err(e) = lua.exec(SANDBOX) {
+        log::error!("Bac à sable Lua (web) incomplet : {e}");
+    }
+}
+
 /// Déclenche une collecte complète (`Lua::gc_collect`) tous les `GC_PERIOD` appels.
 /// Le GC incrémental de `rilua` est désactivé une fois pour toutes à la création de
 /// `Lua` (`AppState::new`, `lua_web.gc_stop()`) : l'API bas niveau utilisée par ce
@@ -952,6 +966,21 @@ pub(super) fn run_script_web(
 mod tests {
     use super::*;
     use crate::scene::{MeshKind, Scene, SceneObject};
+
+    /// Même bac à sable que le backend natif (audit 2026-10-20, 1.5).
+    #[test]
+    fn the_web_sandbox_matches_the_native_one() {
+        let mut lua = Lua::new().unwrap();
+        sandbox(&mut lua);
+        lua.exec(
+            r#"assert(io == nil, "io") assert(package == nil and require == nil, "package")
+             assert(load == nil and dofile == nil and loadfile == nil, "load")
+             assert(os.execute == nil and os.remove == nil and os.getenv == nil, "os")
+             assert(type(os.clock) == "function" and type(os.time) == "function", "temps")
+             assert(string.format("%d", 3) == "3" and math.floor(2.5) == 2, "calcul")"#,
+        )
+        .unwrap();
+    }
 
     #[allow(clippy::too_many_arguments)]
     fn run(
