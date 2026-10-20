@@ -564,6 +564,9 @@ unsafe fn wrap_swapchain_image(
         depth_or_array_layers: VIEW_COUNT,
     };
     let hal_texture = {
+        // `device` sort de `create_gpu`, qui le crée toujours par
+        // `create_device_from_hal` sur le Vulkan du runtime OpenXR : il est donc
+        // forcément adossé à Vulkan (budget unwrap, audit 2026-10-20).
         let hal_device =
             unsafe { device.as_hal::<hal::api::Vulkan>() }.expect("device wgpu adossé à Vulkan");
         unsafe {

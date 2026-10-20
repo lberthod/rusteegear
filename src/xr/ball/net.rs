@@ -159,16 +159,22 @@ mod native {
             let urls = urls.to_vec();
             let st = status.clone();
             let err = last_error.clone();
-            std::thread::Builder::new()
+            // Sans thread ni runtime, la liaison reste « hors ligne » et la
+            // cause s'affiche dans le casque (`last_error`), comme un échec réseau.
+            let spawned = std::thread::Builder::new()
                 .name("ball-link".into())
                 .spawn(move || {
-                    let rt = tokio::runtime::Builder::new_current_thread()
+                    match tokio::runtime::Builder::new_current_thread()
                         .enable_all()
                         .build()
-                        .expect("runtime tokio");
-                    rt.block_on(run(urls, role, in_tx, out_rx, st, err));
-                })
-                .expect("thread réseau");
+                    {
+                        Ok(rt) => rt.block_on(run(urls, role, in_tx, out_rx, st, err)),
+                        Err(e) => set_error(&err, format!("runtime réseau : {e}")),
+                    }
+                });
+            if let Err(e) = spawned {
+                set_error(&last_error, format!("thread réseau : {e}"));
+            }
             Self {
                 inbox: Mutex::new(in_rx),
                 outbox: out_tx,
@@ -210,6 +216,14 @@ mod native {
     }
 
     /// Erreur de connexion en clair, avec sa cause profonde (DNS, TLS…).
+    /// Échec avant toute tentative de connexion (thread ou runtime).
+    fn set_error(last_error: &Mutex<String>, e: String) {
+        log::error!("Ball : {e}");
+        if let Ok(mut le) = last_error.lock() {
+            *le = e;
+        }
+    }
+
     fn describe(e: &tokio_tungstenite::tungstenite::Error) -> String {
         use std::error::Error as _;
         let mut text = e.to_string();

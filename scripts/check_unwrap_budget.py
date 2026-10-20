@@ -34,6 +34,16 @@ WHITELIST = {
     # toujours. Pré-existant, hors scope Sprint 9.
     ("src/app/console.rs", "expect"): 1,
     ("src/bin/glbviewer.rs", "expect"): 5,
+    # Variantes multiview des shaders de scène (VR) : le source WGSL est une
+    # constante du dépôt, et chaque variante est validée par naga dans les tests
+    # de `gfx::multiview` ; une dérive casse donc la CI, jamais un joueur.
+    # À remplacer par des points d'insertion explicites (roadmap audit
+    # 2026-10-20, 3.5).
+    ("src/gfx/multiview.rs", "expect"): 3,
+    ("src/gfx/multiview.rs", "panic"): 1,
+    # `xr::hello::wrap_swapchain_image` : le device wgpu est toujours créé sur
+    # le Vulkan du runtime OpenXR (`create_gpu`), cf. commentaire au site.
+    ("src/xr/hello.rs", "expect"): 1,
 }
 
 

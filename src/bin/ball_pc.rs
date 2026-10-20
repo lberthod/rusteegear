@@ -653,7 +653,7 @@ fn snapshot(path: &str, wall: bool) -> Result<(), String> {
     Ok(())
 }
 
-fn main() {
+fn main() -> Result<(), Box<dyn std::error::Error>> {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
     let args: Vec<String> = std::env::args().collect();
     if let Some(i) = args.iter().position(|a| a == "--snapshot") {
@@ -668,9 +668,9 @@ fn main() {
                 std::process::exit(1);
             }
         }
-        return;
+        return Ok(());
     }
-    let event_loop = EventLoop::new().expect("boucle d'événements");
+    let event_loop = EventLoop::new()?;
     event_loop.set_control_flow(ControlFlow::Poll);
     let mut app = App {
         player: Player::new(&relay_urls()),
@@ -680,5 +680,6 @@ fn main() {
         cursor: None,
         title_at: 0.0,
     };
-    event_loop.run_app(&mut app).expect("boucle");
+    event_loop.run_app(&mut app)?;
+    Ok(())
 }

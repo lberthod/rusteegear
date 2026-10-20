@@ -436,8 +436,9 @@ impl World {
     fn spawn_ball(&mut self, at: Vec3) -> RigidBodyHandle {
         if self.balls.len() >= MAX_BALLS {
             let held: Vec<RigidBodyHandle> = self.grabbers.iter().filter_map(|g| g.held).collect();
-            if let Some(i) = self.balls.iter().position(|b| !held.contains(b)) {
-                let old = self.balls.remove(i).expect("indice valide");
+            if let Some(i) = self.balls.iter().position(|b| !held.contains(b))
+                && let Some(old) = self.balls.remove(i)
+            {
                 self.remove(old);
             }
         }
