@@ -100,7 +100,21 @@ impl Connection {
             eprintln!("clone du flux impossible ({e})");
             ExitCode::from(1)
         })?);
-        Ok(Self { stream, reader })
+        let mut conn = Self { stream, reader };
+        // Jeton exigé en tête de connexion (audit 2026-10-20, 1.6).
+        let Some(token) = motor3derust::pilot::read_token(port) else {
+            eprintln!(
+                "jeton du pont introuvable ({}, ou RUSTEEGEAR_PILOT_TOKEN)",
+                motor3derust::pilot::token_path(port).display()
+            );
+            return Err(ExitCode::from(1));
+        };
+        let reply = conn.ask(&serde_json::json!({"cmd": "auth", "token": token}).to_string())?;
+        if !reply.contains("\"ok\":true") {
+            eprint!("authentification refusée : {reply}");
+            return Err(ExitCode::from(1));
+        }
+        Ok(conn)
     }
 
     fn ask(&mut self, request: &str) -> Result<String, ExitCode> {

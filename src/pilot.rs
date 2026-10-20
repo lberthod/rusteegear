@@ -8,7 +8,13 @@
 //!
 //! Sécurité : **jamais actif par défaut** (l'éval Lua est de l'exécution de code
 //! arbitraire). Activation explicite par `--pilot[=PORT]` ou `RUSTEEGEAR_PILOT`,
-//! écoute sur `127.0.0.1` uniquement.
+//! écoute sur `127.0.0.1` uniquement. Depuis l'audit 2026-10-20 (1.6), chaque
+//! connexion commence par `{"cmd": "auth", "token": "…"}` : le jeton est tiré au
+//! hasard au démarrage (ou imposé par `RUSTEEGEAR_PILOT_TOKEN`) et écrit dans
+//! `token_path(port)`, lisible par le seul utilisateur. Une ligne qui n'est pas
+//! un objet JSON ferme la connexion : une page web qui viserait le port par un
+//! `fetch` (requête HTTP, dont la première ligne n'est jamais du JSON) ne peut
+//! donc plus rien faire exécuter.
 //!
 //! Protocole : une requête JSON par ligne, une réponse JSON par ligne.
 //! Requête : `{"cmd": "console"|"lua"|"logs"|"scene"|"state"|"input"|"screenshot"
@@ -46,6 +52,49 @@ const MAX_REQUESTS_PER_POLL: usize = 32;
 /// qui pompent `poll` en continu.
 pub type Waker = Box<dyn Fn() + Send + Sync>;
 
+/// Fichier où le jeton du pont écoutant sur `port` est écrit, et où le client
+/// `pilot` le relit (dossier temporaire de l'utilisateur).
+pub fn token_path(port: u16) -> std::path::PathBuf {
+    std::env::temp_dir().join(format!("rusteegear-pilot-{port}.token"))
+}
+
+/// Jeton à présenter au pont de `port` : `RUSTEEGEAR_PILOT_TOKEN`, sinon le
+/// fichier `token_path(port)`.
+pub fn read_token(port: u16) -> Option<String> {
+    std::env::var("RUSTEEGEAR_PILOT_TOKEN")
+        .ok()
+        .or_else(|| std::fs::read_to_string(token_path(port)).ok())
+        .map(|t| t.trim().to_string())
+        .filter(|t| !t.is_empty())
+}
+
+/// 128 bits tirés des clés aléatoires que la bibliothèque standard demande à
+/// l'OS pour `HashMap` (aucune dépendance de plus).
+fn random_token() -> String {
+    use std::hash::{BuildHasher, Hasher};
+    let half = || {
+        let mut h = std::collections::hash_map::RandomState::new().build_hasher();
+        h.write_u128(
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0),
+        );
+        h.finish()
+    };
+    format!("{:016x}{:016x}", half(), half())
+}
+
+/// Écrit le jeton, lisible par le seul utilisateur sur Unix.
+fn write_token_file(path: &std::path::Path, token: &str) -> std::io::Result<()> {
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
+    let mut file = options.open(path)?;
+    file.write_all(token.as_bytes())
+}
+
 /// Une requête reçue sur une connexion, en attente de traitement sur le thread
 /// principal (seul détenteur de `AppState`/`Renderer`).
 struct PilotRequest {
@@ -61,6 +110,8 @@ pub struct PilotServer {
     rx: Receiver<PilotRequest>,
     /// Adresse réellement liée (utile avec le port 0 des tests).
     pub local_addr: std::net::SocketAddr,
+    /// Jeton exigé en tête de chaque connexion (cf. la doc du module).
+    pub token: String,
 }
 
 impl PilotServer {
@@ -74,8 +125,21 @@ impl PilotServer {
         let local_addr = listener
             .local_addr()
             .map_err(|e| format!("pilot : adresse locale illisible ({e})"))?;
+        let token = std::env::var("RUSTEEGEAR_PILOT_TOKEN")
+            .ok()
+            .filter(|t| !t.trim().is_empty())
+            .map(|t| t.trim().to_string())
+            .unwrap_or_else(random_token);
+        let token_file = token_path(local_addr.port());
+        write_token_file(&token_file, &token).map_err(|e| {
+            format!(
+                "pilot : écriture du jeton dans {} impossible ({e})",
+                token_file.display()
+            )
+        })?;
         let (tx, rx) = std::sync::mpsc::channel::<PilotRequest>();
         let waker = waker.map(std::sync::Arc::new);
+        let accept_token = std::sync::Arc::new(token.clone());
         // Tick de réveil à ~30 Hz tant que le pont est actif : masquée ou
         // occultée, l'application est mise en App Nap par macOS (plus de
         // redraws, boucle d'événements endormie entre deux requêtes) — la
@@ -101,13 +165,18 @@ impl PilotServer {
                     let Ok(stream) = stream else { continue };
                     let tx = tx.clone();
                     let waker = waker.clone();
+                    let token = accept_token.clone();
                     let _ = std::thread::Builder::new()
                         .name("pilot-conn".into())
-                        .spawn(move || serve_connection(stream, tx, waker));
+                        .spawn(move || serve_connection(stream, tx, waker, &token));
                 }
             })
             .map_err(|e| format!("pilot : démarrage du thread accepteur impossible ({e})"))?;
-        Ok(Self { rx, local_addr })
+        Ok(Self {
+            rx,
+            local_addr,
+            token,
+        })
     }
 
     /// Draine et traite toutes les requêtes en attente — à appeler à chaque tour
@@ -131,15 +200,41 @@ fn serve_connection(
     stream: TcpStream,
     tx: Sender<PilotRequest>,
     waker: Option<std::sync::Arc<Waker>>,
+    token: &str,
 ) {
     let Ok(mut writer) = stream.try_clone() else {
         return;
     };
     let reader = BufReader::new(stream);
+    let mut authenticated = false;
     for line in reader.lines() {
         let Ok(line) = line else { break };
         if line.trim().is_empty() {
             continue;
+        }
+        match check_line(&line, token, authenticated) {
+            LineCheck::Request => {}
+            LineCheck::Authenticated => {
+                authenticated = true;
+                if writeln!(
+                    writer,
+                    "{}",
+                    serde_json::json!({"ok": true, "result": "auth"})
+                )
+                .is_err()
+                {
+                    break;
+                }
+                continue;
+            }
+            LineCheck::Refused(error) => {
+                let _ = writeln!(
+                    writer,
+                    "{}",
+                    serde_json::json!({"ok": false, "error": error})
+                );
+                break;
+            }
         }
         let (reply_tx, reply_rx) = std::sync::mpsc::sync_channel(1);
         if tx
@@ -168,6 +263,36 @@ fn serve_connection(
         if writeln!(writer, "{response}").is_err() {
             break;
         }
+    }
+}
+
+enum LineCheck {
+    /// Requête à faire traiter par le thread principal.
+    Request,
+    /// Ligne d'authentification valide.
+    Authenticated,
+    /// Connexion à fermer, avec la raison renvoyée au client.
+    Refused(&'static str),
+}
+
+/// Contrôle d'une ligne reçue avant tout traitement (1.6) : un objet JSON, et
+/// `{"cmd": "auth", "token": …}` correct en premier.
+fn check_line(line: &str, token: &str, authenticated: bool) -> LineCheck {
+    let Ok(serde_json::Value::Object(req)) = serde_json::from_str::<serde_json::Value>(line) else {
+        return LineCheck::Refused("ligne qui n'est pas un objet JSON : connexion fermée");
+    };
+    if authenticated {
+        return LineCheck::Request;
+    }
+    let is_auth = req.get("cmd").and_then(|c| c.as_str()) == Some("auth");
+    let given = req.get("token").and_then(|t| t.as_str());
+    if is_auth && given == Some(token) {
+        LineCheck::Authenticated
+    } else {
+        LineCheck::Refused(
+            "authentification requise : première ligne {\"cmd\": \"auth\", \"token\": …} \
+             (jeton dans le fichier indiqué par le journal de l'application)",
+        )
     }
 }
 
@@ -758,6 +883,34 @@ fn state_dump(app: &AppState) -> serde_json::Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 1.6 (audit 2026-10-20) : une requête HTTP envoyée par une page web
+    /// (première ligne `POST / HTTP/1.1`) est refusée d'emblée, comme une
+    /// première ligne JSON sans le bon jeton.
+    #[test]
+    fn only_an_authenticated_json_connection_is_served() {
+        let t = "secret";
+        let refused =
+            |line: &str, auth: bool| matches!(check_line(line, t, auth), LineCheck::Refused(_));
+        assert!(refused("POST / HTTP/1.1", false));
+        assert!(refused(r#"{"cmd": "lua", "src": "return 1"}"#, false));
+        assert!(refused(r#"{"cmd": "auth", "token": "faux"}"#, false));
+        assert!(matches!(
+            check_line(r#"{"cmd": "auth", "token": "secret"}"#, t, false),
+            LineCheck::Authenticated
+        ));
+        assert!(matches!(
+            check_line(r#"{"cmd": "state"}"#, t, true),
+            LineCheck::Request
+        ));
+        assert!(refused("Host: 127.0.0.1", true));
+    }
+
+    #[test]
+    fn random_tokens_differ() {
+        assert_ne!(random_token(), random_token());
+        assert_eq!(random_token().len(), 32);
+    }
 
     /// Toute entrée malformée doit produire une réponse JSON `ok: false` avec un
     /// message explicite — jamais une panique ni une ligne non-JSON (le client en

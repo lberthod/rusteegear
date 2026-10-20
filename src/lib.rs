@@ -2256,9 +2256,10 @@ pub fn run() {
         match pilot::PilotServer::start(port, Some(waker)) {
             Ok(server) => {
                 log::info!(
-                    "Pont de pilotage actif sur {} — toute commande locale (console, Lua, \
-                     captures) est acceptée sur ce port.",
-                    server.local_addr
+                    "Pont de pilotage actif sur {} — jeton d'accès dans {} (lu automatiquement \
+                     par le client `pilot`).",
+                    server.local_addr,
+                    pilot::token_path(server.local_addr.port()).display()
                 );
                 app.pilot = Some(server);
             }

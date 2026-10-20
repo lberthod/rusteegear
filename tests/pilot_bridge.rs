@@ -64,8 +64,18 @@ fn ask(
 #[cfg(feature = "net_tests")]
 fn connect(addr: std::net::SocketAddr) -> (BufReader<TcpStream>, TcpStream) {
     let stream = TcpStream::connect(addr).expect("connexion au pont");
-    let reader = BufReader::new(stream.try_clone().expect("clone du flux"));
-    (reader, stream)
+    let mut reader = BufReader::new(stream.try_clone().expect("clone du flux"));
+    let mut writer = stream;
+    // Jeton exigé en tête de connexion (audit 2026-10-20, 1.6), relu comme le
+    // fait le client `pilot`.
+    let token = motor3derust::pilot::read_token(addr.port()).expect("jeton du pont");
+    let auth = ask(
+        &mut reader,
+        &mut writer,
+        serde_json::json!({"cmd": "auth", "token": token}),
+    );
+    assert_eq!(auth["ok"], true, "authentification : {auth}");
+    (reader, writer)
 }
 
 #[cfg(feature = "net_tests")]
@@ -140,7 +150,7 @@ fn pilot_bridge_drives_lua_play_scene_and_inputs_over_tcp() {
 /// malformée ne doit ni tuer le pont ni l'application.
 #[cfg(feature = "net_tests")]
 #[test]
-fn pilot_bridge_reports_lua_errors_and_survives_malformed_requests() {
+fn pilot_bridge_reports_lua_errors_and_closes_on_malformed_requests() {
     let mut app = AppState::new();
     let server = PilotServer::start(0, None).expect("démarrage du pont");
 
@@ -151,13 +161,22 @@ fn pilot_bridge_reports_lua_errors_and_survives_malformed_requests() {
             &mut writer,
             serde_json::json!({"cmd": "lua", "src": "error('boom C1')"}),
         );
-        // Ligne non-JSON : le serveur doit répondre une erreur, pas fermer.
+        // Ligne non-JSON : réponse d'erreur explicite, puis fermeture (audit
+        // 2026-10-20, 1.6 : c'est ce qui arrête une requête HTTP envoyée par
+        // une page web). Une nouvelle connexion repart normalement.
         writeln!(writer, "n'importe quoi").expect("envoi");
         let mut line = String::new();
         reader
             .read_line(&mut line)
             .expect("réponse à la ligne malformée");
         let malformed: serde_json::Value = serde_json::from_str(&line).expect("JSON");
+        let mut rest = String::new();
+        let closed = matches!(reader.read_line(&mut rest), Ok(0));
+        assert!(
+            closed,
+            "la connexion doit être fermée après une ligne non-JSON"
+        );
+        let (mut reader, mut writer) = connect(addr);
         let still_alive = ask(
             &mut reader,
             &mut writer,
@@ -348,5 +367,43 @@ fn advance_steps_moves_the_hamlet_player_even_without_a_prior_render_frame() {
     assert!(
         (after - before).length() > 0.3,
         "le joueur du hameau doit bouger"
+    );
+}
+
+/// Audit 2026-10-20, 1.6 : sans le jeton, rien ne s'exécute — ni une requête
+/// JSON directe, ni une requête HTTP telle qu'un `fetch` de page web l'envoie.
+#[cfg(feature = "net_tests")]
+#[test]
+fn pilot_bridge_refuses_connections_without_the_token() {
+    let mut app = AppState::new();
+    let server = PilotServer::start(0, None).expect("démarrage du pont");
+    let (direct, http) = drive(&mut app, &server, |addr| {
+        let refused = |first: &str| {
+            let mut stream = TcpStream::connect(addr).expect("connexion");
+            let mut reader = BufReader::new(stream.try_clone().expect("clone"));
+            writeln!(stream, "{first}").expect("envoi");
+            let mut line = String::new();
+            reader.read_line(&mut line).expect("réponse");
+            let reply: serde_json::Value = serde_json::from_str(&line).expect("JSON");
+            let mut rest = String::new();
+            assert!(
+                matches!(reader.read_line(&mut rest), Ok(0)),
+                "connexion fermée"
+            );
+            reply
+        };
+        (
+            refused(r#"{"cmd": "lua", "src": "obj_cree_sans_jeton = true"}"#),
+            refused("POST / HTTP/1.1"),
+        )
+    });
+    assert_eq!(direct["ok"], false);
+    assert_eq!(http["ok"], false);
+    assert!(
+        app.eval_lua("return tostring(obj_cree_sans_jeton)")
+            .ok()
+            .as_deref()
+            == Some("nil"),
+        "aucune ligne non authentifiée ne doit atteindre l'application"
     );
 }

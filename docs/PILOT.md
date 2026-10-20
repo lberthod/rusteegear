@@ -31,7 +31,7 @@ cargo run --bin pilot -- state
 ```
 
 Au démarrage, l'application annonce en clair :
-`Pont de pilotage actif sur 127.0.0.1:4517 — toute commande locale (console, Lua, captures) est acceptée sur ce port.`
+`Pont de pilotage actif sur 127.0.0.1:4517 — jeton d'accès dans <dossier temporaire>/rusteegear-pilot-4517.token (lu automatiquement par le client `pilot`).`
 
 ## Les verbes du client `pilot`
 
@@ -109,9 +109,16 @@ pilot undo                                    # ou revenir en arrière
 
 ## Protocole (pour écrire son propre client)
 
-TCP `127.0.0.1:4517`, **une requête JSON par ligne, une réponse JSON par ligne** :
+TCP `127.0.0.1:4517`, **une requête JSON par ligne, une réponse JSON par ligne**.
+La première ligne de chaque connexion est l'authentification : le jeton se lit
+dans `rusteegear-pilot-<port>.token` du dossier temporaire de l'utilisateur
+(`std::env::temp_dir()`, `$TMPDIR` sur macOS), ou se fixe à l'avance par
+`RUSTEEGEAR_PILOT_TOKEN` côté application et client. Une ligne qui n'est pas un
+objet JSON reçoit une erreur puis ferme la connexion.
 
 ```
+→ {"cmd": "auth", "token": "3f9c…"}
+← {"ok": true, "result": "auth"}
 → {"cmd": "console", "arg": "play"}
 ← {"ok": true, "result": "Play démarré"}
 → {"cmd": "lua", "src": "return 1 +"}
@@ -177,6 +184,13 @@ cargo test --features net_tests --test pilot_bridge
   `RUSTEEGEAR_PILOT`), annoncée en clair dans les logs au démarrage.
 - Écoute **`127.0.0.1` uniquement** — jamais exposé au réseau. Pour un accès
   distant volontaire, passer par un tunnel SSH, pas par un bind public.
+- **Jeton par session** (audit 2026-10-20, 1.6) : tiré au hasard au démarrage,
+  écrit dans un fichier lisible par le seul utilisateur (mode 600), exigé en
+  première ligne. Avant, n'importe quelle page web ouverte pendant une session
+  `--pilot` pouvait viser `http://127.0.0.1:4517` par un `fetch` : les en-têtes
+  HTTP échouaient, mais la ligne JSON du corps était exécutée (verbe `lua`). Une
+  première ligne non JSON ferme désormais la connexion, et sans le jeton rien
+  ne s'exécute.
 - `RUSTEEGEAR_PILOT=0` et l'absence de flag désactivent tout (l'état de tous
   les builds distribués).
 
