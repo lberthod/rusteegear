@@ -223,12 +223,18 @@ mod tests {
         let mut g = Grabber::default();
         let dt = 1.0 / 72.0;
         let mut w = Vec3::new(0.2, 1.2, 0.0);
-        assert!(matches!(g.step(0.0, &frame(w, 1.0, 0.5), true), Grab::Start(_)));
+        assert!(matches!(
+            g.step(0.0, &frame(w, 1.0, 0.5), true),
+            Grab::Start(_)
+        ));
         let mut t = 0.0;
         for _ in 0..10 {
             t += dt;
             w.z -= 5.0 * dt;
-            assert!(matches!(g.step(t, &frame(w, 1.0, 0.5), true), Grab::Hold(_)));
+            assert!(matches!(
+                g.step(t, &frame(w, 1.0, 0.5), true),
+                Grab::Hold(_)
+            ));
         }
         t += dt;
         w.z -= 5.0 * dt;
@@ -242,9 +248,18 @@ mod tests {
     fn a_fist_grab_releases_when_the_fingers_open() {
         let mut g = Grabber::default();
         let w = Vec3::new(0.2, 1.2, 0.0);
-        assert!(matches!(g.step(0.0, &frame(w, 0.0, 1.0), true), Grab::Start(_)));
-        assert!(matches!(g.step(0.02, &frame(w, 0.0, 1.0), true), Grab::Hold(_)));
-        assert!(matches!(g.step(0.04, &frame(w, 0.0, 0.0), true), Grab::Release(_)));
+        assert!(matches!(
+            g.step(0.0, &frame(w, 0.0, 1.0), true),
+            Grab::Start(_)
+        ));
+        assert!(matches!(
+            g.step(0.02, &frame(w, 0.0, 1.0), true),
+            Grab::Hold(_)
+        ));
+        assert!(matches!(
+            g.step(0.04, &frame(w, 0.0, 0.0), true),
+            Grab::Release(_)
+        ));
     }
 
     #[test]

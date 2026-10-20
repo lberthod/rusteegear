@@ -20,7 +20,11 @@ fn main() {
     println!(
         "Scène de départ : {} objets ({} scriptés)",
         app.scene.objects.len(),
-        app.scene.objects.iter().filter(|o| !o.script.trim().is_empty()).count()
+        app.scene
+            .objects
+            .iter()
+            .filter(|o| !o.script.trim().is_empty())
+            .count()
     );
 
     // Simule ~90 s de jeu (5400 pas fixes à 60 Hz) : le joueur avance vers le
@@ -56,11 +60,18 @@ fn main() {
         }
     }
 
-    println!("\n--- Bilan sur {n} pas ({:.1} s simulées) ---", n as f32 * FIXED_DT);
+    println!(
+        "\n--- Bilan sur {n} pas ({:.1} s simulées) ---",
+        n as f32 * FIXED_DT
+    );
     println!(
         "objets finaux : {} (scriptés : {})",
         app.scene.objects.len(),
-        app.scene.objects.iter().filter(|o| !o.script.trim().is_empty()).count()
+        app.scene
+            .objects
+            .iter()
+            .filter(|o| !o.script.trim().is_empty())
+            .count()
     );
     println!(
         "scripts  : moy {:.3} ms, pire {:.3} ms",

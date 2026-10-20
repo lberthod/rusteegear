@@ -17,13 +17,13 @@ use winit::window::Window;
 use file_dialogs::{DialogTarget, FileDialogs};
 use hierarchy::hierarchy_panel;
 use hud::{
-    HudImageCache, HudWidgetValues, RosterEntry, TopButtons, ability_bar, ally_down_banner, world_health_labels,
+    HudImageCache, HudWidgetValues, RosterEntry, TopButtons, ability_bar, ally_down_banner,
     boss_health_bar, collectibles_hud, crosshair, damage_vignette, defeated_banner, health_bar,
     hud_preview_overlays, hud_widgets, item_inventory_panel, kills_hud, lose_banner,
     mobile_overlay, mobile_top_buttons, multiplayer_roster_panel, net_event_banner,
     net_status_pill, palier_banner, pause_menu, pause_veil, restart_button, roster_overlay,
     round_summary_banner, scene_has_ranged_weapon, touch_feedback, wave_hud, wave_start_banner,
-    weapon_hud, weapon_inventory_panel,
+    weapon_hud, weapon_inventory_panel, world_health_labels,
 };
 use menus::{menu_aide, menu_ajouter, menu_edition, menu_fichier, menu_outils};
 use windows::{
@@ -1490,7 +1490,13 @@ impl Editor {
                         locale,
                     );
                 }
-                windows::help_window(ctx, help_open, locale, touch_ui && mobile.any(), scene.ability_bar);
+                windows::help_window(
+                    ctx,
+                    help_open,
+                    locale,
+                    touch_ui && mobile.any(),
+                    scene.ability_bar,
+                );
                 windows::crash_log_window(ctx, crash_open, crash_log_text, crash_confirm, locale);
                 return;
             }
@@ -1560,7 +1566,14 @@ impl Editor {
             // pas de panneau 👁 Aperçu HUD — copies locales, `scene` n'est pas `&mut`.
             let mut layout = scene.hud_layout;
             if !arcade {
-                world_health_labels(ctx, area, view_proj, world_labels, hud_scale, settings.colorblind);
+                world_health_labels(
+                    ctx,
+                    area,
+                    view_proj,
+                    world_labels,
+                    hud_scale,
+                    settings.colorblind,
+                );
                 wave_hud(ctx, area, scene, wave, locale, hud_scale);
                 for (row, &(boss_name, phase_label)) in hud::BOSSES.iter().enumerate() {
                     boss_health_bar(
@@ -1831,7 +1844,13 @@ impl Editor {
             // dernier n'était câblé que dans l'éditeur : un plantage en mode
             // joueur restait muet. Section « Tactile » sur le même critère que
             // le stick (roadmap v2 1.1).
-            windows::help_window(ctx, help_open, locale, touch_ui && mobile.any(), scene.ability_bar);
+            windows::help_window(
+                ctx,
+                help_open,
+                locale,
+                touch_ui && mobile.any(),
+                scene.ability_bar,
+            );
             windows::crash_log_window(ctx, crash_open, crash_log_text, crash_confirm, locale);
             // Carte (Phase carte plein écran) : mini-carte permanente en coin,
             // remplacée par la carte plein écran pendant que `M` la garde ouverte
@@ -2311,9 +2330,9 @@ fn build_ui(
     leaderboard: &[crate::app::network_client::LeaderboardLine],
     online_players: &[String],
     weapon_label: &str,
-        ability: Option<crate::app::ability_hud::AbilityHud>,
-        view_proj: glam::Mat4,
-        world_labels: &[crate::app::world_labels::WorldLabel],
+    ability: Option<crate::app::ability_hud::AbilityHud>,
+    view_proj: glam::Mat4,
+    world_labels: &[crate::app::world_labels::WorldLabel],
     defeated: bool,
     death_cause: Option<crate::net::protocol::DeathCause>,
     kills: u32,
@@ -2428,7 +2447,13 @@ fn build_ui(
     }
     // Aide en jeu (F1, roadmap 5.5) — en Play depuis l'éditeur.
     if *playing {
-        windows::help_window(root.ctx(), &mut panels.help, locale, false, scene.ability_bar);
+        windows::help_window(
+            root.ctx(),
+            &mut panels.help,
+            locale,
+            false,
+            scene.ability_bar,
+        );
     } else {
         panels.help = false;
     }
@@ -2831,9 +2856,9 @@ fn play_area_and_in_game_hud(
     wave: u32,
     locale: crate::app::locale::Locale,
     weapon_label: &str,
-        ability: Option<crate::app::ability_hud::AbilityHud>,
-        view_proj: glam::Mat4,
-        world_labels: &[crate::app::world_labels::WorldLabel],
+    ability: Option<crate::app::ability_hud::AbilityHud>,
+    view_proj: glam::Mat4,
+    world_labels: &[crate::app::world_labels::WorldLabel],
     kills: u32,
     assists: u32,
     roster: &[RosterEntry],
@@ -2932,7 +2957,8 @@ fn play_area_and_in_game_hud(
                 hud_scale,
             );
         }
-        let kills_extra_offset = hud::boss_hud_extra_offset(play_rect, scene, hud_scale, play_rect.right());
+        let kills_extra_offset =
+            hud::boss_hud_extra_offset(play_rect, scene, hud_scale, play_rect.right());
         kills_hud(
             root.ctx(),
             play_rect,

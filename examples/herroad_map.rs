@@ -9,9 +9,9 @@ use motor3derust::racing::{Track, TrackSpec};
 fn main() {
     let spec = TrackSpec::herroad();
     let track = Track::build(&spec);
-    let out = std::env::args().nth(1).unwrap_or_else(|| {
-        format!("{}/docs/img/herroad_map.png", env!("CARGO_MANIFEST_DIR"))
-    });
+    let out = std::env::args()
+        .nth(1)
+        .unwrap_or_else(|| format!("{}/docs/img/herroad_map.png", env!("CARGO_MANIFEST_DIR")));
     let n = track.frames.len();
     println!("longueur {:.0} m, {} repères", track.length, n);
 
@@ -22,7 +22,11 @@ fn main() {
         let g = &track.frames[(i + 6) % n];
         let ang = f.fwd.x * g.fwd.z - f.fwd.z * g.fwd.x;
         let ds = 6.0 * 2.0;
-        let radius = if ang.abs() < 1e-3 { f32::INFINITY } else { ds / ang.asin().abs() };
+        let radius = if ang.abs() < 1e-3 {
+            f32::INFINITY
+        } else {
+            ds / ang.asin().abs()
+        };
         println!(
             "{:>4.0}% i={:<4} x={:>7.1} z={:>7.1} y={:>5.1} rayon={:>7.0} {}",
             k as f32 * 2.0,

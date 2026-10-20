@@ -111,16 +111,15 @@ impl AppState {
 
     /// Jauges à dessiner cette frame (cf. la doc du module).
     pub fn world_health_labels(&self) -> Vec<WorldLabel> {
-        let center = self
-            .player_position()
-            .unwrap_or(self.camera.target);
+        let center = self.player_position().unwrap_or(self.camera.target);
         let mut labels = Vec::new();
         for index in 0..self.scene.objects.len() {
             let Some((health, hp_text, kind, name)) = self.labeled_health(index) else {
                 continue;
             };
             let o = &self.scene.objects[index];
-            if o.transform.position.distance_squared(center) > LABEL_MAX_DISTANCE * LABEL_MAX_DISTANCE
+            if o.transform.position.distance_squared(center)
+                > LABEL_MAX_DISTANCE * LABEL_MAX_DISTANCE
             {
                 continue;
             }
@@ -178,7 +177,10 @@ mod tests {
         assert_eq!(type_name("Renard enragé 1"), "Renard enragé");
         assert_eq!(type_name("Créature 26"), "Créature");
         assert_eq!(type_name("Champignon mordeur"), "Champignon mordeur");
-        assert_eq!(type_name("Blob des sous-bois (vert)"), "Blob des sous-bois (vert)");
+        assert_eq!(
+            type_name("Blob des sous-bois (vert)"),
+            "Blob des sous-bois (vert)"
+        );
         assert_eq!(type_name("Créature"), "Créature");
         assert_eq!(type_name(""), "");
     }
@@ -213,12 +215,20 @@ mod tests {
         let mut app = AppState::new();
         app.scene = scene_with_monster(3);
         let labels = app.world_health_labels();
-        assert_eq!(labels.len(), 1, "un seul monstre étiqueté, jamais le joueur local");
+        assert_eq!(
+            labels.len(),
+            1,
+            "un seul monstre étiqueté, jamais le joueur local"
+        );
         let l = &labels[0];
         assert_eq!(l.kind, LabelKind::Monster);
         assert_eq!(l.hp_text, "3/3");
         assert!((l.health - 1.0).abs() < 1e-6);
-        assert!(l.anchor.y > 1.0, "ancre au-dessus du cube (haut à 1.0) : {}", l.anchor.y);
+        assert!(
+            l.anchor.y > 1.0,
+            "ancre au-dessus du cube (haut à 1.0) : {}",
+            l.anchor.y
+        );
         assert_eq!(l.hit_flash, 0.0);
 
         app.update_label_hit_flashes(0.016);
@@ -230,7 +240,11 @@ mod tests {
         for _ in 0..40 {
             app.update_label_hit_flashes(0.016);
         }
-        assert_eq!(app.world_health_labels()[0].hit_flash, 0.0, "le flash s'éteint seul");
+        assert_eq!(
+            app.world_health_labels()[0].hit_flash,
+            0.0,
+            "le flash s'éteint seul"
+        );
     }
 
     #[test]
@@ -241,6 +255,9 @@ mod tests {
         assert!(app.world_health_labels().is_empty());
         app.scene.objects[1].visible = true;
         app.scene.objects[1].transform.position.z = -200.0;
-        assert!(app.world_health_labels().is_empty(), "hors de portée d'affichage");
+        assert!(
+            app.world_health_labels().is_empty(),
+            "hors de portée d'affichage"
+        );
     }
 }

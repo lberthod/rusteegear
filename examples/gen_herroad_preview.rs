@@ -29,7 +29,12 @@ fn main() {
     shot(&mut renderer, &mut app, "depart");
 
     let mut bot = Bot::new(3);
-    let marks = [(9.0_f32, "vitesse"), (17.5, "pont"), (26.0, "virage"), (38.0, "saut")];
+    let marks = [
+        (9.0_f32, "vitesse"),
+        (17.5, "pont"),
+        (26.0, "virage"),
+        (38.0, "saut"),
+    ];
     let mut next = 0;
     for _ in 0..(60 * 90) {
         let inp = {

@@ -259,7 +259,11 @@ impl World {
             if self.stopped.contains(&ball) {
                 continue;
             }
-            let Some(c) = self.bodies.get(ball).and_then(|b| b.colliders().first().copied()) else {
+            let Some(c) = self
+                .bodies
+                .get(ball)
+                .and_then(|b| b.colliders().first().copied())
+            else {
                 continue;
             };
             let hit = remote.iter().any(|&r| {
@@ -431,8 +435,7 @@ impl World {
 
     fn spawn_ball(&mut self, at: Vec3) -> RigidBodyHandle {
         if self.balls.len() >= MAX_BALLS {
-            let held: Vec<RigidBodyHandle> =
-                self.grabbers.iter().filter_map(|g| g.held).collect();
+            let held: Vec<RigidBodyHandle> = self.grabbers.iter().filter_map(|g| g.held).collect();
             if let Some(i) = self.balls.iter().position(|b| !held.contains(b)) {
                 let old = self.balls.remove(i).expect("indice valide");
                 self.remove(old);
@@ -597,7 +600,11 @@ mod tests {
     fn a_pc_wall_stops_a_throw() {
         for with_wall in [false, true] {
             let mut w = World::new();
-            w.add_static(Vec3::new(0.0, -0.05, 0.0), Vec3::new(10.0, 0.05, 10.0), Vec4::ONE);
+            w.add_static(
+                Vec3::new(0.0, -0.05, 0.0),
+                Vec3::new(10.0, 0.05, 10.0),
+                Vec4::ONE,
+            );
             let walls = if with_wall {
                 vec![(Vec3::new(0.0, 0.0, -1.5), 0.0)]
             } else {

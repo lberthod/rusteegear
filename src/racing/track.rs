@@ -214,7 +214,11 @@ fn smoothstep(e0: f32, e1: f32, x: f32) -> f32 {
 fn ease(x: f32) -> f32 {
     const E: f32 = 0.3;
     let x = x.clamp(0.0, 1.0);
-    let v = if x < E { x * x / (2.0 * E) } else { x - E * 0.5 };
+    let v = if x < E {
+        x * x / (2.0 * E)
+    } else {
+        x - E * 0.5
+    };
     v / (1.0 - E * 0.5)
 }
 
@@ -242,7 +246,10 @@ fn catmull(p0: Vec2, p1: Vec2, p2: Vec2, p3: Vec2, u: f32) -> Vec2 {
 }
 
 fn cell_of(x: f32, z: f32) -> (i32, i32) {
-    ((x / GRID_CELL).floor() as i32, (z / GRID_CELL).floor() as i32)
+    (
+        (x / GRID_CELL).floor() as i32,
+        (z / GRID_CELL).floor() as i32,
+    )
 }
 
 impl Track {
@@ -307,7 +314,10 @@ impl Track {
         }
         for j in &spec.jumps {
             let s0 = j.at * length;
-            zones.push((s0 + (j.ramp + j.gap + j.land) * 0.5, (j.ramp + j.gap + j.land) * 0.5 + 40.0));
+            zones.push((
+                s0 + (j.ramp + j.gap + j.land) * 0.5,
+                (j.ramp + j.gap + j.land) * 0.5 + 40.0,
+            ));
         }
         let height = |s: f32| -> f32 {
             let f = s / length;
@@ -317,8 +327,7 @@ impl Track {
             }
             let tau = std::f32::consts::TAU;
             let hills = spec.hills
-                * (0.62 * (tau * (f * 2.0 + 0.13)).sin()
-                    + 0.38 * (tau * (f * 5.0 + 0.41)).sin());
+                * (0.62 * (tau * (f * 2.0 + 0.13)).sin() + 0.38 * (tau * (f * 5.0 + 0.41)).sin());
             let mut h = hills * mask;
             if let Some((_, j)) = crossing {
                 let d = wrap_dist(s, s_of(j), length);
@@ -376,7 +385,11 @@ impl Track {
             let s = s_of(i);
             let f = s / length;
             let pos = Vec3::new(xz[i].x, ys[i], xz[i].y);
-            let prev = Vec3::new(xz[(i + n - 1) % n].x, ys[(i + n - 1) % n], xz[(i + n - 1) % n].y);
+            let prev = Vec3::new(
+                xz[(i + n - 1) % n].x,
+                ys[(i + n - 1) % n],
+                xz[(i + n - 1) % n].y,
+            );
             let next = Vec3::new(xz[(i + 1) % n].x, ys[(i + 1) % n], xz[(i + 1) % n].y);
             let fwd = (next - prev).normalize_or_zero();
             let right0 = fwd.cross(Vec3::Y).normalize_or_zero();
@@ -547,7 +560,10 @@ impl Track {
             if !self.quad_exists(i) {
                 continue;
             }
-            for (side, on) in [(-1.0_f32, self.frames[i].wall_l), (1.0, self.frames[i].wall_r)] {
+            for (side, on) in [
+                (-1.0_f32, self.frames[i].wall_l),
+                (1.0, self.frames[i].wall_r),
+            ] {
                 if !on {
                     continue;
                 }
@@ -673,12 +689,7 @@ impl Track {
 
     // ------------------------------------------------------------------ maillages
 
-    fn push_quad(
-        out: &mut MeshData,
-        p: [Vec3; 4],
-        n: [Vec3; 4],
-        color: [f32; 3],
-    ) {
+    fn push_quad(out: &mut MeshData, p: [Vec3; 4], n: [Vec3; 4], color: [f32; 3]) {
         let base = out.vertices.len() as u32;
         for k in 0..4 {
             out.vertices.push(Vertex {
@@ -712,7 +723,11 @@ impl Track {
                     let o0 = -hw + 2.0 * hw * c as f32 / cols as f32;
                     let o1 = -hw + 2.0 * hw * (c + 1) as f32 / cols as f32;
                     let black = (c + i) % 2 == 0;
-                    let color = if black { [0.05, 0.05, 0.05] } else { [0.95, 0.95, 0.95] };
+                    let color = if black {
+                        [0.05, 0.05, 0.05]
+                    } else {
+                        [0.95, 0.95, 0.95]
+                    };
                     let p = |f: &Frame, o: f32| f.pos + f.right * o + f.up * 0.01;
                     Self::push_quad(
                         &mut mesh,
@@ -730,7 +745,11 @@ impl Track {
             let groove = [asphalt[0] * 0.86, asphalt[1] * 0.86, asphalt[2] * 0.88];
             let line = 0.35;
             let inner = hw - CURB_W;
-            let curb = if stripe { [0.86, 0.10, 0.08] } else { [0.92, 0.92, 0.92] };
+            let curb = if stripe {
+                [0.86, 0.10, 0.08]
+            } else {
+                [0.92, 0.92, 0.92]
+            };
             let white = [0.9, 0.9, 0.86];
             let paved = f0.surface == Surface::Asphalt;
             let strips: Vec<(f32, f32, [f32; 3])> = if paved {
@@ -910,7 +929,12 @@ mod tests {
             let g = t
                 .ground_at(f.pos.x, f.pos.z, f.pos.y + 1.0)
                 .unwrap_or_else(|| panic!("pas de sol sous le repère {i}"));
-            assert!((g.y - f.pos.y).abs() < 0.3, "repère {i} : {} vs {}", g.y, f.pos.y);
+            assert!(
+                (g.y - f.pos.y).abs() < 0.3,
+                "repère {i} : {} vs {}",
+                g.y,
+                f.pos.y
+            );
         }
     }
 
@@ -945,7 +969,9 @@ mod tests {
         let f = t.frames[i];
         assert!(f.wall_l && f.wall_r);
         let outside = f.pos + f.right * (f.half_width - 0.2);
-        let hit = t.wall_hit(outside, 1.2).expect("collision attendue au bord");
+        let hit = t
+            .wall_hit(outside, 1.2)
+            .expect("collision attendue au bord");
         assert!(hit.depth > 0.5);
         let inward = -f.right;
         assert!(hit.normal.dot(Vec2::new(inward.x, inward.z)) > 0.8);

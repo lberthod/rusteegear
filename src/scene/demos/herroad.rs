@@ -85,7 +85,11 @@ fn load_model(imported: &mut Vec<ImportedMesh>, file: &str) -> Option<(u32, f32,
         },
     };
     let m = &imported[idx];
-    Some((idx as u32, (m.aabb_max.y - m.aabb_min.y).max(0.01), m.aabb_min.y))
+    Some((
+        idx as u32,
+        (m.aabb_max.y - m.aabb_min.y).max(0.01),
+        m.aabb_min.y,
+    ))
 }
 
 fn hash2(x: f32, z: f32) -> f32 {
@@ -129,34 +133,174 @@ fn car_model() -> Vec<Part> {
         part
     };
     let mut parts = vec![
-        p("Caisse", MeshKind::Cube, [0.0, 0.5, 0.0], [1.9, 0.42, 4.4], red),
-        tilted(p("Capot", MeshKind::Cube, [0.0, 0.5, 1.65], [1.74, 0.28, 1.5], red), 0.09),
-        p("Habitacle", MeshKind::Cube, [0.0, 0.93, -0.35], [1.46, 0.42, 1.7], glass),
-        p("Toit", MeshKind::Cube, [0.0, 1.16, -0.4], [1.36, 0.08, 1.35], red),
-        tilted(p("Pare-brise", MeshKind::Cube, [0.0, 0.98, 0.72], [1.4, 0.05, 0.95], glass), -0.62),
-        tilted(p("Lunette", MeshKind::Cube, [0.0, 0.98, -1.4], [1.3, 0.05, 0.7], glass), 0.55),
-        p("Bande capot", MeshKind::Cube, [0.0, 0.66, 1.62], [0.34, 0.02, 1.5], white),
-        p("Bande toit", MeshKind::Cube, [0.0, 1.21, -0.4], [0.34, 0.02, 1.36], white),
-        p("Jupe G", MeshKind::Cube, [0.99, 0.3, 0.0], [0.08, 0.16, 3.7], dark),
-        p("Jupe D", MeshKind::Cube, [-0.99, 0.3, 0.0], [0.08, 0.16, 3.7], dark),
-        p("Lame avant", MeshKind::Cube, [0.0, 0.2, 2.3], [1.95, 0.06, 0.6], dark),
-        p("Diffuseur", MeshKind::Cube, [0.0, 0.24, -2.25], [1.6, 0.16, 0.45], dark),
-        p("Aileron", MeshKind::Cube, [0.0, 1.28, -2.05], [2.1, 0.07, 0.6], dark),
-        p("Support G", MeshKind::Cube, [0.7, 0.98, -2.0], [0.08, 0.52, 0.12], dark),
-        p("Support D", MeshKind::Cube, [-0.7, 0.98, -2.0], [0.08, 0.52, 0.12], dark),
-        p("Dérive G", MeshKind::Cube, [1.06, 1.22, -2.05], [0.05, 0.3, 0.6], red),
-        p("Dérive D", MeshKind::Cube, [-1.06, 1.22, -2.05], [0.05, 0.3, 0.6], red),
-        p("Rétroviseur G", MeshKind::Cube, [1.06, 0.86, 0.55], [0.2, 0.1, 0.14], red),
-        p("Rétroviseur D", MeshKind::Cube, [-1.06, 0.86, 0.55], [0.2, 0.1, 0.14], red),
+        p(
+            "Caisse",
+            MeshKind::Cube,
+            [0.0, 0.5, 0.0],
+            [1.9, 0.42, 4.4],
+            red,
+        ),
+        tilted(
+            p(
+                "Capot",
+                MeshKind::Cube,
+                [0.0, 0.5, 1.65],
+                [1.74, 0.28, 1.5],
+                red,
+            ),
+            0.09,
+        ),
+        p(
+            "Habitacle",
+            MeshKind::Cube,
+            [0.0, 0.93, -0.35],
+            [1.46, 0.42, 1.7],
+            glass,
+        ),
+        p(
+            "Toit",
+            MeshKind::Cube,
+            [0.0, 1.16, -0.4],
+            [1.36, 0.08, 1.35],
+            red,
+        ),
+        tilted(
+            p(
+                "Pare-brise",
+                MeshKind::Cube,
+                [0.0, 0.98, 0.72],
+                [1.4, 0.05, 0.95],
+                glass,
+            ),
+            -0.62,
+        ),
+        tilted(
+            p(
+                "Lunette",
+                MeshKind::Cube,
+                [0.0, 0.98, -1.4],
+                [1.3, 0.05, 0.7],
+                glass,
+            ),
+            0.55,
+        ),
+        p(
+            "Bande capot",
+            MeshKind::Cube,
+            [0.0, 0.66, 1.62],
+            [0.34, 0.02, 1.5],
+            white,
+        ),
+        p(
+            "Bande toit",
+            MeshKind::Cube,
+            [0.0, 1.21, -0.4],
+            [0.34, 0.02, 1.36],
+            white,
+        ),
+        p(
+            "Jupe G",
+            MeshKind::Cube,
+            [0.99, 0.3, 0.0],
+            [0.08, 0.16, 3.7],
+            dark,
+        ),
+        p(
+            "Jupe D",
+            MeshKind::Cube,
+            [-0.99, 0.3, 0.0],
+            [0.08, 0.16, 3.7],
+            dark,
+        ),
+        p(
+            "Lame avant",
+            MeshKind::Cube,
+            [0.0, 0.2, 2.3],
+            [1.95, 0.06, 0.6],
+            dark,
+        ),
+        p(
+            "Diffuseur",
+            MeshKind::Cube,
+            [0.0, 0.24, -2.25],
+            [1.6, 0.16, 0.45],
+            dark,
+        ),
+        p(
+            "Aileron",
+            MeshKind::Cube,
+            [0.0, 1.28, -2.05],
+            [2.1, 0.07, 0.6],
+            dark,
+        ),
+        p(
+            "Support G",
+            MeshKind::Cube,
+            [0.7, 0.98, -2.0],
+            [0.08, 0.52, 0.12],
+            dark,
+        ),
+        p(
+            "Support D",
+            MeshKind::Cube,
+            [-0.7, 0.98, -2.0],
+            [0.08, 0.52, 0.12],
+            dark,
+        ),
+        p(
+            "Dérive G",
+            MeshKind::Cube,
+            [1.06, 1.22, -2.05],
+            [0.05, 0.3, 0.6],
+            red,
+        ),
+        p(
+            "Dérive D",
+            MeshKind::Cube,
+            [-1.06, 1.22, -2.05],
+            [0.05, 0.3, 0.6],
+            red,
+        ),
+        p(
+            "Rétroviseur G",
+            MeshKind::Cube,
+            [1.06, 0.86, 0.55],
+            [0.2, 0.1, 0.14],
+            red,
+        ),
+        p(
+            "Rétroviseur D",
+            MeshKind::Cube,
+            [-1.06, 0.86, 0.55],
+            [0.2, 0.1, 0.14],
+            red,
+        ),
     ];
-    for (x, z, front) in [(1.03, 1.45, true), (-1.03, 1.45, true), (1.03, -1.45, false), (-1.03, -1.45, false)] {
-        let mut tyre = p("Roue", MeshKind::Cylinder, [x, 0.42, z], [0.86, 0.46, 0.86], dark);
+    for (x, z, front) in [
+        (1.03, 1.45, true),
+        (-1.03, 1.45, true),
+        (1.03, -1.45, false),
+        (-1.03, -1.45, false),
+    ] {
+        let mut tyre = p(
+            "Roue",
+            MeshKind::Cylinder,
+            [x, 0.42, z],
+            [0.86, 0.46, 0.86],
+            dark,
+        );
         tyre.rot = wheel_rot;
         tyre.front_wheel = front;
         tyre.roughness = 0.95;
         tyre.metallic = 0.05;
         parts.push(tyre);
-        let mut rim = p("Jante", MeshKind::Cylinder, [x * 1.045, 0.42, z], [0.5, 0.47, 0.5], [0.78, 0.8, 0.86]);
+        let mut rim = p(
+            "Jante",
+            MeshKind::Cylinder,
+            [x * 1.045, 0.42, z],
+            [0.5, 0.47, 0.5],
+            [0.78, 0.8, 0.86],
+        );
         rim.rot = wheel_rot;
         rim.front_wheel = front;
         rim.metallic = 0.9;
@@ -164,10 +308,22 @@ fn car_model() -> Vec<Part> {
         parts.push(rim);
     }
     for x in [0.62, -0.62] {
-        let mut head = p("Phare", MeshKind::Cube, [x, 0.62, 2.36], [0.42, 0.16, 0.06], [1.0, 0.97, 0.8]);
+        let mut head = p(
+            "Phare",
+            MeshKind::Cube,
+            [x, 0.62, 2.36],
+            [0.42, 0.16, 0.06],
+            [1.0, 0.97, 0.8],
+        );
         head.emissive = 3.2;
         parts.push(head);
-        let mut tail = p("Feu arrière", MeshKind::Cube, [x, 0.68, -2.22], [0.44, 0.14, 0.06], [1.0, 0.08, 0.05]);
+        let mut tail = p(
+            "Feu arrière",
+            MeshKind::Cube,
+            [x, 0.68, -2.22],
+            [0.44, 0.14, 0.06],
+            [1.0, 0.08, 0.05],
+        );
         tail.emissive = 2.8;
         parts.push(tail);
     }
@@ -198,19 +354,31 @@ pub fn herroad_build() -> (Scene, RaceLayout, Track) {
     ground.roughness = 1.0;
     objects.push(ground);
     imported.push(generated_mesh("relief", terrain.mesh()));
-    let mut relief = demo_obj("Relief", MeshKind::Imported(imported.len() as u32 - 1), Vec3::ZERO);
+    let mut relief = demo_obj(
+        "Relief",
+        MeshKind::Imported(imported.len() as u32 - 1),
+        Vec3::ZERO,
+    );
     relief.roughness = 0.95;
     relief.group = "Décor".into();
     objects.push(relief);
 
     // Route et barrières.
     imported.push(generated_mesh("route", track.road_mesh()));
-    let mut road = demo_obj("Route", MeshKind::Imported(imported.len() as u32 - 1), Vec3::ZERO);
+    let mut road = demo_obj(
+        "Route",
+        MeshKind::Imported(imported.len() as u32 - 1),
+        Vec3::ZERO,
+    );
     road.roughness = 0.8;
     road.group = "Circuit".into();
     objects.push(road);
     imported.push(generated_mesh("barrieres", track.wall_mesh()));
-    let mut walls = demo_obj("Barrières", MeshKind::Imported(imported.len() as u32 - 1), Vec3::ZERO);
+    let mut walls = demo_obj(
+        "Barrières",
+        MeshKind::Imported(imported.len() as u32 - 1),
+        Vec3::ZERO,
+    );
     walls.roughness = 0.6;
     walls.group = "Circuit".into();
     objects.push(walls);
@@ -256,10 +424,14 @@ pub fn herroad_build() -> (Scene, RaceLayout, Track) {
             ("riviere/rocher_b.glb", 2.0, 5.0),
             ("riviere/rocher_c.glb", 2.0, 5.5),
         ];
-        let trees: Vec<Option<(u32, f32, f32)>> =
-            SPECIES.iter().map(|(f, _, _)| load_model(&mut imported, f)).collect();
-        let rocks: Vec<Option<(u32, f32, f32)>> =
-            ROCKS.iter().map(|(f, _, _)| load_model(&mut imported, f)).collect();
+        let trees: Vec<Option<(u32, f32, f32)>> = SPECIES
+            .iter()
+            .map(|(f, _, _)| load_model(&mut imported, f))
+            .collect();
+        let rocks: Vec<Option<(u32, f32, f32)>> = ROCKS
+            .iter()
+            .map(|(f, _, _)| load_model(&mut imported, f))
+            .collect();
         let frames: Vec<Vec3> = track.frames.iter().step_by(2).map(|f| f.pos).collect();
         let bridge_frames: Vec<Vec3> = track
             .crossing
@@ -320,7 +492,11 @@ pub fn herroad_build() -> (Scene, RaceLayout, Track) {
                     let (hmin, hmax) = (SPECIES[k].1, SPECIES[k].2);
                     let target = hmin + (hmax - hmin) * hash2(jx * 3.1, jz * 2.3);
                     let sc = target / h0;
-                    let mut t = demo_obj("Arbre", MeshKind::Imported(mesh), Vec3::new(jx, h - floor * sc - 0.25, jz));
+                    let mut t = demo_obj(
+                        "Arbre",
+                        MeshKind::Imported(mesh),
+                        Vec3::new(jx, h - floor * sc - 0.25, jz),
+                    );
                     t.transform = t.transform.with_scale(Vec3::splat(sc));
                     t.transform.rotation = Quat::from_rotation_y(yaw);
                     t.group = "Forêt".into();
@@ -334,7 +510,11 @@ pub fn herroad_build() -> (Scene, RaceLayout, Track) {
                     };
                     let target = ROCKS[k].1 + (ROCKS[k].2 - ROCKS[k].1) * hash2(jx * 0.7, jz * 1.9);
                     let sc = target / h0;
-                    let mut t = demo_obj("Rocher", MeshKind::Imported(mesh), Vec3::new(jx, h - floor * sc - 0.3, jz));
+                    let mut t = demo_obj(
+                        "Rocher",
+                        MeshKind::Imported(mesh),
+                        Vec3::new(jx, h - floor * sc - 0.3, jz),
+                    );
                     t.transform = t.transform.with_scale(Vec3::splat(sc));
                     t.transform.rotation = Quat::from_rotation_y(yaw);
                     t.group = "Décor".into();
@@ -383,7 +563,8 @@ pub fn herroad_build() -> (Scene, RaceLayout, Track) {
         for (k, z) in [1.2_f32, -1.2].into_iter().enumerate() {
             for side in [-1.0_f32, 1.0] {
                 let local = Vec3::new(side * 0.85, 0.05, z);
-                let mut bar = demo_obj("Chevron", MeshKind::Cube, b.pos + rot * local + b.up * 0.03);
+                let mut bar =
+                    demo_obj("Chevron", MeshKind::Cube, b.pos + rot * local + b.up * 0.03);
                 bar.transform = bar.transform.with_scale(Vec3::new(0.5, 0.06, 3.0));
                 bar.transform.rotation = rot * Quat::from_rotation_y(-side * 0.6);
                 bar.color = [1.0, 0.95, 0.6];
@@ -407,7 +588,11 @@ pub fn herroad_build() -> (Scene, RaceLayout, Track) {
         let rot = basis_rotation(f.fwd, f.up);
         let hw = f.half_width + 1.0;
         let top = if finish { 7.5 } else { 6.5 };
-        let (color, emissive) = if finish { ([1.0, 1.0, 1.0], 1.0) } else { GATE_IDLE };
+        let (color, emissive) = if finish {
+            ([1.0, 1.0, 1.0], 1.0)
+        } else {
+            GATE_IDLE
+        };
         let mut ids = Vec::new();
         for side in [-1.0_f32, 1.0] {
             let p = f.pos + f.right * side * hw + f.up * top * 0.5;
@@ -441,7 +626,11 @@ pub fn herroad_build() -> (Scene, RaceLayout, Track) {
                 );
                 tile.transform = tile.transform.with_scale(Vec3::new(w, 1.1, 0.2));
                 tile.transform.rotation = rot;
-                tile.color = if c % 2 == 0 { [0.05, 0.05, 0.05] } else { [0.95, 0.95, 0.95] };
+                tile.color = if c % 2 == 0 {
+                    [0.05, 0.05, 0.05]
+                } else {
+                    [0.95, 0.95, 0.95]
+                };
                 tile.group = "Portiques".into();
                 ids.push(objects.len());
                 objects.push(tile);
@@ -487,7 +676,11 @@ pub fn herroad_build() -> (Scene, RaceLayout, Track) {
                 while d < len * 0.5 - 0.6 {
                     let c = palette[(crowd.next() * palette.len() as f32) as usize % palette.len()];
                     let pos = centre + f.fwd * d;
-                    let mut fan = demo_obj("Spectateur", MeshKind::Cube, Vec3::new(pos.x, top + 0.45, pos.z));
+                    let mut fan = demo_obj(
+                        "Spectateur",
+                        MeshKind::Cube,
+                        Vec3::new(pos.x, top + 0.45, pos.z),
+                    );
                     fan.transform = fan.transform.with_scale(Vec3::new(0.7, 0.9, 0.6));
                     fan.transform.rotation = rot;
                     fan.color = c;
@@ -501,7 +694,11 @@ pub fn herroad_build() -> (Scene, RaceLayout, Track) {
             let lateral = f.half_width + 6.5 + 1.5 * 1.8;
             let centre = f.pos + f.right * side * (lateral + 0.8);
             let roof_y = f.pos.y + 7.4;
-            let mut roof = demo_obj("Auvent", MeshKind::Cube, Vec3::new(centre.x, roof_y, centre.z));
+            let mut roof = demo_obj(
+                "Auvent",
+                MeshKind::Cube,
+                Vec3::new(centre.x, roof_y, centre.z),
+            );
             roof.transform = roof.transform.with_scale(Vec3::new(9.0, 0.35, len + 2.0));
             roof.transform.rotation = rot;
             roof.color = [0.92, 0.92, 0.95];
@@ -511,7 +708,11 @@ pub fn herroad_build() -> (Scene, RaceLayout, Track) {
                 let base = f.pos + f.right * side * (lateral + 4.0) + f.fwd * d;
                 let bottom = terrain.height(base.x, base.z) - 1.0;
                 let h = roof_y - bottom;
-                let mut post = demo_obj("Pilotis", MeshKind::Cube, Vec3::new(base.x, bottom + h * 0.5, base.z));
+                let mut post = demo_obj(
+                    "Pilotis",
+                    MeshKind::Cube,
+                    Vec3::new(base.x, bottom + h * 0.5, base.z),
+                );
                 post.transform = post.transform.with_scale(Vec3::new(0.5, h, 0.5));
                 post.color = [0.55, 0.55, 0.6];
                 post.group = "Tribunes".into();
@@ -522,7 +723,12 @@ pub fn herroad_build() -> (Scene, RaceLayout, Track) {
 
     // Banderoles derrière les barrières, sur les lignes droites.
     {
-        let colors = [[0.95, 0.2, 0.2], [0.2, 0.55, 0.95], [1.0, 0.8, 0.15], [0.2, 0.8, 0.4]];
+        let colors = [
+            [0.95, 0.2, 0.2],
+            [0.2, 0.55, 0.95],
+            [1.0, 0.8, 0.15],
+            [0.2, 0.8, 0.4],
+        ];
         let n = track.frames.len();
         let mut k = 40usize;
         let mut idx = 0usize;
@@ -571,7 +777,11 @@ pub fn herroad_build() -> (Scene, RaceLayout, Track) {
             o.emissive = part.emissive;
             o.metallic = part.metallic;
             o.roughness = part.roughness;
-            o.group = if ghost { "Fantôme".into() } else { "Voiture".into() };
+            o.group = if ghost {
+                "Fantôme".into()
+            } else {
+                "Voiture".into()
+            };
             if ghost {
                 o.color = [0.35, 0.85, 1.0];
                 o.emissive = 0.8;
@@ -659,26 +869,57 @@ pub fn herroad_build() -> (Scene, RaceLayout, Track) {
     // Fichiers du dépôt : natif seulement (le web n'embarque pas ce dossier).
     #[cfg(not(target_arch = "wasm32"))]
     {
-        let panel = |id: &str, anchor: HudAnchor, offset: [f32; 2], size: [f32; 2], file: &str| HudWidget {
-            id: id.into(),
-            anchor,
-            offset,
-            size,
-            kind: HudWidgetKind::Image {
-                path: format!("{}/assets/herroad/{file}", env!("CARGO_MANIFEST_DIR")),
-            },
-        };
-        hud_widgets.push(panel("hr_panel_time", HudAnchor::TopLeft, [14.0, 12.0], [460.0, 176.0], "panel_time.png"));
-        hud_widgets.push(panel("hr_panel_speed", HudAnchor::BottomRight, [-14.0, -14.0], [320.0, 138.0], "panel_speed.png"));
+        let panel =
+            |id: &str, anchor: HudAnchor, offset: [f32; 2], size: [f32; 2], file: &str| HudWidget {
+                id: id.into(),
+                anchor,
+                offset,
+                size,
+                kind: HudWidgetKind::Image {
+                    path: format!("{}/assets/herroad/{file}", env!("CARGO_MANIFEST_DIR")),
+                },
+            };
+        hud_widgets.push(panel(
+            "hr_panel_time",
+            HudAnchor::TopLeft,
+            [14.0, 12.0],
+            [460.0, 176.0],
+            "panel_time.png",
+        ));
+        hud_widgets.push(panel(
+            "hr_panel_speed",
+            HudAnchor::BottomRight,
+            [-14.0, -14.0],
+            [320.0, 138.0],
+            "panel_speed.png",
+        ));
     }
     hud_widgets.extend([
         hud("hr_time", HudAnchor::TopLeft, [40.0, 26.0], 42.0, ""),
         hud("hr_lap", HudAnchor::TopLeft, [40.0, 80.0], 22.0, ""),
         hud("hr_best", HudAnchor::TopLeft, [40.0, 110.0], 17.0, ""),
         hud("hr_cp", HudAnchor::TopLeft, [40.0, 140.0], 21.0, ""),
-        hud("hr_speed", HudAnchor::BottomRight, [-112.0, -52.0], 66.0, ""),
-        hud("hr_unit", HudAnchor::BottomRight, [-36.0, -58.0], 22.0, "km/h"),
-        hud("hr_turbo", HudAnchor::BottomRight, [-36.0, -112.0], 20.0, ""),
+        hud(
+            "hr_speed",
+            HudAnchor::BottomRight,
+            [-112.0, -52.0],
+            66.0,
+            "",
+        ),
+        hud(
+            "hr_unit",
+            HudAnchor::BottomRight,
+            [-36.0, -58.0],
+            22.0,
+            "km/h",
+        ),
+        hud(
+            "hr_turbo",
+            HudAnchor::BottomRight,
+            [-36.0, -112.0],
+            20.0,
+            "",
+        ),
         HudWidget {
             id: "hr_gauge".into(),
             anchor: HudAnchor::BottomRight,
@@ -734,7 +975,10 @@ mod tests {
     #[test]
     fn scene_has_car_ghost_gates_and_generated_meshes() {
         let (scene, layout, track) = herroad_build();
-        assert!(scene.imported.len() >= 3, "relief + route + barrières au moins");
+        assert!(
+            scene.imported.len() >= 3,
+            "relief + route + barrières au moins"
+        );
         assert!(scene.imported.iter().all(|m| !m.data.vertices.is_empty()));
         assert_eq!(layout.gates.len(), track.checkpoints.len() + 1);
         assert!(layout.car.len() >= 10);

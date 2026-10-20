@@ -233,8 +233,7 @@ fn main() {
         let idle_deadline = Instant::now() + Duration::from_millis(150);
         while Instant::now() < idle_deadline {
             send_input(&client, 0.0, 0.0, 0.0, false, false, false);
-            if let Ok(ServerMsg::Snapshot(s)) =
-                client.inbox.recv_timeout(Duration::from_millis(40))
+            if let Ok(ServerMsg::Snapshot(s)) = client.inbox.recv_timeout(Duration::from_millis(40))
                 && let Some(e) = s.entities.iter().find(|e| e.player_id == Some(my_id))
             {
                 current_pos = e.position;
@@ -346,7 +345,10 @@ fn main() {
              on tente quand même quelques attaques depuis la position actuelle."
         );
     } else {
-        println!("[{:>6.2}s] à portée de mêlée de l'entité {target_index}", elapsed(start));
+        println!(
+            "[{:>6.2}s] à portée de mêlée de l'entité {target_index}",
+            elapsed(start)
+        );
     }
 
     // Boucle d'attaque : martèle `attack: true` à 50 ms, suit la vie
@@ -491,7 +493,11 @@ fn main() {
         }
     }
     for (label, expect, min_hp_hint) in [
-        ("Boss 1 « L'Aîné de la Cascade »", boss_expect, "hp brut attendu 60"),
+        (
+            "Boss 1 « L'Aîné de la Cascade »",
+            boss_expect,
+            "hp brut attendu 60",
+        ),
         (
             "Boss 2 « Le Roi-Champignon du Sous-bois »",
             boss2_expect,
@@ -521,7 +527,9 @@ fn main() {
                     );
                 }
             }
-            None => println!("  ⚠️  BUG POTENTIEL : aucune entité avec vie trouvée près de {label}."),
+            None => {
+                println!("  ⚠️  BUG POTENTIEL : aucune entité avec vie trouvée près de {label}.")
+            }
         }
     }
 

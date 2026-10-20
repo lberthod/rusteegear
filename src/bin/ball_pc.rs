@@ -18,7 +18,9 @@ use std::sync::Arc;
 use glam::{EulerRot, Quat, Vec3, Vec4};
 use motor3derust::time_compat::Instant;
 use motor3derust::xr::ball::gfx::{Gfx, Instance};
-use motor3derust::xr::ball::net::{Link, LinkStatus, Msg, NetBox, NetWall, PcState, Role, Snapshot};
+use motor3derust::xr::ball::net::{
+    Link, LinkStatus, Msg, NetBox, NetWall, PcState, Role, Snapshot,
+};
 use motor3derust::xr::ball::relay_urls;
 use motor3derust::xr::math::{EyeView, Fov};
 use winit::application::ApplicationHandler;
@@ -191,9 +193,15 @@ impl Player {
         };
         let recharge = (WALL_COOLDOWN - (self.clock - self.last_wall)).max(0.0);
         let walls = if recharge > 0.0 {
-            format!("murs {}/{MAX_WALLS} (recharge {recharge:.1} s)", self.walls.len())
+            format!(
+                "murs {}/{MAX_WALLS} (recharge {recharge:.1} s)",
+                self.walls.len()
+            )
         } else {
-            format!("murs {}/{MAX_WALLS} — clic gauche pour poser", self.walls.len())
+            format!(
+                "murs {}/{MAX_WALLS} — clic gauche pour poser",
+                self.walls.len()
+            )
         };
         format!("Ball — ordinateur · {status} · {walls}")
     }
@@ -229,7 +237,12 @@ impl Player {
                     ),
                     _ => (Vec3::from(b.p), Quat::from_array(b.q)),
                 };
-                cubes.push(Instance::boxed(p, Vec3::from(b.half), q, Vec4::from(b.color)));
+                cubes.push(Instance::boxed(
+                    p,
+                    Vec3::from(b.half),
+                    q,
+                    Vec4::from(b.color),
+                ));
             }
             let same = prev.spheres.len() == cur.spheres.len();
             for (i, s) in cur.spheres.iter().enumerate() {
@@ -290,10 +303,22 @@ impl Player {
             let base = Vec3::new(w.x, self.origin.y, w.z);
             // Contour : deux montants et deux traverses.
             for (off, half) in [
-                (Vec3::new(-WALL_HALF.x, WALL_HALF.y, 0.0), Vec3::new(0.012, WALL_HALF.y, 0.012)),
-                (Vec3::new(WALL_HALF.x, WALL_HALF.y, 0.0), Vec3::new(0.012, WALL_HALF.y, 0.012)),
-                (Vec3::new(0.0, 0.01, 0.0), Vec3::new(WALL_HALF.x, 0.012, 0.012)),
-                (Vec3::new(0.0, WALL_HALF.y * 2.0, 0.0), Vec3::new(WALL_HALF.x, 0.012, 0.012)),
+                (
+                    Vec3::new(-WALL_HALF.x, WALL_HALF.y, 0.0),
+                    Vec3::new(0.012, WALL_HALF.y, 0.012),
+                ),
+                (
+                    Vec3::new(WALL_HALF.x, WALL_HALF.y, 0.0),
+                    Vec3::new(0.012, WALL_HALF.y, 0.012),
+                ),
+                (
+                    Vec3::new(0.0, 0.01, 0.0),
+                    Vec3::new(WALL_HALF.x, 0.012, 0.012),
+                ),
+                (
+                    Vec3::new(0.0, WALL_HALF.y * 2.0, 0.0),
+                    Vec3::new(WALL_HALF.x, 0.012, 0.012),
+                ),
             ] {
                 cubes.push(Instance::boxed(base + r * off, half, r, c));
             }
@@ -380,12 +405,14 @@ impl Gpu {
         self.config.width = w.max(1);
         self.config.height = h.max(1);
         self.surface.configure(&self.device, &self.config);
-        self.gfx.resize(&self.device, self.config.width, self.config.height);
+        self.gfx
+            .resize(&self.device, self.config.width, self.config.height);
     }
 
     fn render(&mut self, player: &Player) {
         let frame = match self.surface.get_current_texture() {
-            wgpu::CurrentSurfaceTexture::Success(f) | wgpu::CurrentSurfaceTexture::Suboptimal(f) => f,
+            wgpu::CurrentSurfaceTexture::Success(f)
+            | wgpu::CurrentSurfaceTexture::Suboptimal(f) => f,
             _ => {
                 self.surface.configure(&self.device, &self.config);
                 return;
@@ -630,7 +657,10 @@ fn main() {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
     let args: Vec<String> = std::env::args().collect();
     if let Some(i) = args.iter().position(|a| a == "--snapshot") {
-        let path = args.get(i + 1).cloned().unwrap_or_else(|| "ball_pc.png".into());
+        let path = args
+            .get(i + 1)
+            .cloned()
+            .unwrap_or_else(|| "ball_pc.png".into());
         match snapshot(&path, args.iter().any(|a| a == "--wall")) {
             Ok(()) => println!("{path}"),
             Err(e) => {

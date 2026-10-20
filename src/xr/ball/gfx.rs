@@ -144,7 +144,10 @@ impl Instance {
     }
 
     pub fn boxed(center: Vec3, half: Vec3, rot: Quat, color: Vec4) -> Self {
-        Self::new(Mat4::from_scale_rotation_translation(half, rot, center), color)
+        Self::new(
+            Mat4::from_scale_rotation_translation(half, rot, center),
+            color,
+        )
     }
 }
 
@@ -562,13 +565,22 @@ fn sphere_vertices(rings: u32, segments: u32) -> Vec<[f32; 6]> {
     let point = |r: u32, s: u32| {
         let theta = std::f32::consts::PI * r as f32 / rings as f32;
         let phi = std::f32::consts::TAU * s as f32 / segments as f32;
-        let p = Vec3::new(theta.sin() * phi.cos(), theta.cos(), -theta.sin() * phi.sin());
+        let p = Vec3::new(
+            theta.sin() * phi.cos(),
+            theta.cos(),
+            -theta.sin() * phi.sin(),
+        );
         [p.x, p.y, p.z, p.x, p.y, p.z]
     };
     let mut out = Vec::with_capacity((rings * segments * 6) as usize);
     for r in 0..rings {
         for s in 0..segments {
-            let (a, b, c, d) = (point(r, s), point(r + 1, s), point(r + 1, s + 1), point(r, s + 1));
+            let (a, b, c, d) = (
+                point(r, s),
+                point(r + 1, s),
+                point(r + 1, s + 1),
+                point(r, s + 1),
+            );
             out.extend([a, b, c, a, c, d]);
         }
     }

@@ -72,9 +72,19 @@ pub enum RaceEvent {
     Beep(u32),
     Go,
     /// Point de passage `index` franchi ; `delta` = écart au meilleur tour (s, < 0 = en avance).
-    Checkpoint { index: usize, delta: Option<f32> },
-    LapDone { lap: u32, time: f32, best: bool },
-    Finished { total: f32, record: bool },
+    Checkpoint {
+        index: usize,
+        delta: Option<f32>,
+    },
+    LapDone {
+        lap: u32,
+        time: f32,
+        best: bool,
+    },
+    Finished {
+        total: f32,
+        record: bool,
+    },
     Respawn,
     Restart,
 }
@@ -229,7 +239,8 @@ impl Race {
                 let before = self.clock;
                 if self.beeps == 0 {
                     self.beeps = 1;
-                    self.events.push(RaceEvent::Beep(COUNTDOWN_SECS.ceil() as u32));
+                    self.events
+                        .push(RaceEvent::Beep(COUNTDOWN_SECS.ceil() as u32));
                 }
                 self.clock += dt;
                 let digit = (COUNTDOWN_SECS - self.clock).ceil() as i32;
@@ -287,7 +298,8 @@ impl Race {
             let delta = self.best_splits.get(gate).map(|b| lap_time - b);
             self.splits.push(lap_time);
             self.last_delta = delta;
-            self.events.push(RaceEvent::Checkpoint { index: gate, delta });
+            self.events
+                .push(RaceEvent::Checkpoint { index: gate, delta });
             self.spawn = Spawn {
                 pos: f.pos + f.up * 0.05,
                 fwd: f.fwd,

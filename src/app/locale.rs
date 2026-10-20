@@ -392,9 +392,7 @@ pub fn class_description(
         (Locale::En, C::Support) => {
             "Support: healing ×2.5, the only one who revives — speed −15%, damage −30%"
         }
-        (Locale::En, C::Tank) => {
-            "Tank: reinforced shield, max HP +60%, ranged damage −20%"
-        }
+        (Locale::En, C::Tank) => "Tank: reinforced shield, max HP +60%, ranged damage −20%",
         (Locale::En, C::Berserker) => {
             "Berserker: melee damage ×1.4, faster attacks, shield unusable"
         }

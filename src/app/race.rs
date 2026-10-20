@@ -294,7 +294,11 @@ impl RaceSession {
         {
             self.armed = true;
         }
-        self.last_throttle = if self.race.phase == Phase::Running { input.throttle } else { 0.0 };
+        self.last_throttle = if self.race.phase == Phase::Running {
+            input.throttle
+        } else {
+            0.0
+        };
         let prev = self.car.pos;
         match self.race.phase {
             Phase::Countdown => {
@@ -403,7 +407,8 @@ impl RaceSession {
                     out.sfx.push(Sfx::Pickup);
                     let total = self.track.checkpoints.len();
                     let lap_time = self.race.splits.last().copied().unwrap_or(0.0);
-                    let head = delta.map_or_else(|| format!("PASSAGE {}/{total}", index + 1), fmt_delta);
+                    let head =
+                        delta.map_or_else(|| format!("PASSAGE {}/{total}", index + 1), fmt_delta);
                     self.split = Some((head, fmt_time(lap_time), 2.6));
                 }
                 RaceEvent::LapDone { lap, time, best } => {
@@ -472,7 +477,10 @@ impl RaceSession {
         if let Some(o) = self.layout.smoke.and_then(|i| scene.objects.get_mut(i)) {
             o.transform.position = rear;
             if let Some(em) = o.particle_emitter.as_mut() {
-                let on = car.grounded && (car.drift > 0.3 || car.surface != crate::racing::track::Surface::Asphalt && car.speed() > 15.0);
+                let on = car.grounded
+                    && (car.drift > 0.3
+                        || car.surface != crate::racing::track::Surface::Asphalt
+                            && car.speed() > 15.0);
                 em.enabled = on;
                 em.rate = if on { 40.0 + 90.0 * car.drift } else { 0.0 };
                 if car.surface == crate::racing::track::Surface::Dirt {
@@ -491,7 +499,11 @@ impl RaceSession {
                 em.direction = (-car.fwd).to_array();
             }
         }
-        if let Some(l) = self.layout.headlight.and_then(|i| scene.point_lights.get_mut(i)) {
+        if let Some(l) = self
+            .layout
+            .headlight
+            .and_then(|i| scene.point_lights.get_mut(i))
+        {
             l.position = (car.pos + car.up * 2.5 + car.fwd * 9.0).to_array();
         }
     }
@@ -544,12 +556,19 @@ impl RaceSession {
             .map_or_else(String::new, |t| format!("   RECORD {}", fmt_time(t)));
         set("hr_best", format!("MEILLEUR TOUR {best}{rec}"));
         // Dernier point de passage : écart au meilleur tour, coloré par le signe dans le texte.
-        let split = self.split.as_ref().map_or_else(String::new, |s| format!("{}    {}", s.0, s.1));
+        let split = self
+            .split
+            .as_ref()
+            .map_or_else(String::new, |s| format!("{}    {}", s.0, s.1));
         set("hr_cp", split);
         set("hr_speed", format!("{:.0}", self.car.kmh()));
         set(
             "hr_turbo",
-            if self.car.boost > 0.0 { "TURBO !".into() } else { String::new() },
+            if self.car.boost > 0.0 {
+                "TURBO !".into()
+            } else {
+                String::new()
+            },
         );
         let (mut center, mut sub, mut sub2) = (String::new(), String::new(), String::new());
         if !self.armed && r.phase == Phase::Countdown {
@@ -564,12 +583,17 @@ impl RaceSession {
             }
             if r.phase == Phase::Finished {
                 center = "ARRIVÉE".into();
-                sub = format!("MÉDAILLE {}  ·  {}", r.medal.label(), fmt_time(r.total.unwrap_or(0.0)));
+                sub = format!(
+                    "MÉDAILLE {}  ·  {}",
+                    r.medal.label(),
+                    fmt_time(r.total.unwrap_or(0.0))
+                );
                 let laps: Vec<String> = r.lap_times.iter().map(|t| fmt_time(*t)).collect();
                 sub2 = format!("{}   —   maintiens X ou + pour rejouer", laps.join("  /  "));
             } else if self.wrong_way > 1.0 {
                 sub = "SENS INTERDIT — FAIS DEMI-TOUR".into();
-                sub2 = "Maintiens Y (ou Retour arrière) pour revenir au dernier point de passage".into();
+                sub2 = "Maintiens Y (ou Retour arrière) pour revenir au dernier point de passage"
+                    .into();
             } else if let Some((t, s, _)) = &self.banner {
                 sub = format!("{t}   {s}");
             }
@@ -633,9 +657,14 @@ impl AppState {
             crate::runtime::sfx::play(&mut self.audio, s);
         }
         let (rate, gain, skid) = session.sound_state();
-        self.audio.loop_voice(VOICE_ENGINE, &session.engine_wav, rate, gain);
         self.audio
-            .loop_voice(VOICE_SKID, &session.skid_wav, 1.0 + session.car.drift * 0.25, skid);
+            .loop_voice(VOICE_ENGINE, &session.engine_wav, rate, gain);
+        self.audio.loop_voice(
+            VOICE_SKID,
+            &session.skid_wav,
+            1.0 + session.car.drift * 0.25,
+            skid,
+        );
         if out.shake > 0.0 {
             self.fx.camera_shake = self.fx.camera_shake.max(out.shake);
         }
@@ -664,7 +693,12 @@ impl AppState {
         let s = self.race.as_ref()?;
         let alpha = (self.sim_poses.sim_accumulator * 60.0).clamp(0.0, 1.0); // pas fixe 1/60 s
         let car = &s.car;
-        Some((car.prev_pos.lerp(car.pos, alpha), car.fwd, car.up, car.kmh()))
+        Some((
+            car.prev_pos.lerp(car.pos, alpha),
+            car.fwd,
+            car.up,
+            car.kmh(),
+        ))
     }
 
     /// Caméra de poursuite, au rythme des frames (interpolée entre deux pas fixes).
@@ -750,13 +784,23 @@ mod tests {
             app.race_step(1.0 / 60.0);
         }
         let s = app.race.as_ref().unwrap();
-        assert!(s.car.kmh() > 60.0, "la voiture doit rouler ({} km/h)", s.car.kmh());
+        assert!(
+            s.car.kmh() > 60.0,
+            "la voiture doit rouler ({} km/h)",
+            s.car.kmh()
+        );
         // Le HUD reflète la vitesse et le chrono.
         assert!(app.hud_texts["hr_speed"].parse::<f32>().unwrap() > 60.0);
         assert!(app.hud_texts["hr_time"].starts_with("0:0"));
         // La scène suit la voiture.
         let body = s.layout.car[0].index;
-        assert!(app.scene.objects[body].transform.position.distance(s.car.pos) < 3.0);
+        assert!(
+            app.scene.objects[body]
+                .transform
+                .position
+                .distance(s.car.pos)
+                < 3.0
+        );
     }
 
     #[test]
@@ -783,7 +827,10 @@ mod tests {
         app.playing = true;
         app.input_state.race.throttle = 1.0;
         assert!(app.advance_steps(240));
-        let s = app.race.as_ref().expect("la course ne doit pas être abandonnée");
+        let s = app
+            .race
+            .as_ref()
+            .expect("la course ne doit pas être abandonnée");
         assert_eq!(s.race.phase, Phase::Running, "le 3-2-1 doit se terminer");
         assert!(app.hud_texts.contains_key("hr_time"));
     }
@@ -800,7 +847,11 @@ mod tests {
             app.race_step(1.0 / 60.0);
         }
         let s = app.race.as_ref().unwrap();
-        assert_eq!(s.race.phase, Phase::Running, "le 3-2-1 doit aller à son terme");
+        assert_eq!(
+            s.race.phase,
+            Phase::Running,
+            "le 3-2-1 doit aller à son terme"
+        );
         assert_eq!(s.race.respawns, 0);
     }
 
@@ -810,7 +861,10 @@ mod tests {
         for _ in 0..(5.0 * 60.0) as usize {
             app.race_step(1.0 / 60.0);
         }
-        assert_eq!(app.hud_texts["hr_center"], "PRÊT ?", "écran d'attente sans geste");
+        assert_eq!(
+            app.hud_texts["hr_center"], "PRÊT ?",
+            "écran d'attente sans geste"
+        );
         assert_eq!(app.race.as_ref().unwrap().race.phase, Phase::Countdown);
         app.input_state.race.throttle = 1.0;
         for _ in 0..(3.2 * 60.0) as usize {
@@ -840,7 +894,11 @@ mod tests {
             s.car.vel = -f.fwd * 30.0;
             app.race_step(1.0 / 60.0);
         }
-        assert!(app.hud_texts["hr_sub"].contains("SENS INTERDIT"), "{:?}", app.hud_texts["hr_sub"]);
+        assert!(
+            app.hud_texts["hr_sub"].contains("SENS INTERDIT"),
+            "{:?}",
+            app.hud_texts["hr_sub"]
+        );
     }
 
     #[test]

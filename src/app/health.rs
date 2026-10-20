@@ -328,7 +328,11 @@ impl AppState {
             .network_classes
             .get(&id)
             .map_or(BLOCK_DAMAGE_MULT, |c| c.block_damage_mult());
-        let damage = if blocking { raw_damage * block_mult } else { raw_damage };
+        let damage = if blocking {
+            raw_damage * block_mult
+        } else {
+            raw_damage
+        };
         let was_alive = self
             .network
             .network_health
@@ -729,7 +733,8 @@ impl AppState {
                         )
                         .map(|hit| hit.point.y)
                     };
-                    if let (Some(g0), Some(g1)) = (ground(origin.x, origin.z), ground(pos.x, pos.z)) {
+                    if let (Some(g0), Some(g1)) = (ground(origin.x, origin.z), ground(pos.x, pos.z))
+                    {
                         pos.y = g1 + (origin.y - g0);
                     }
                 }
@@ -962,16 +967,27 @@ mod tests {
                 app.update_network_respawn(dt);
             }
             if ability {
-                assert_eq!(app.network_player_health(2), Some(MAX_HEALTH), "revenu à pleine vie");
+                assert_eq!(
+                    app.network_player_health(2),
+                    Some(MAX_HEALTH),
+                    "revenu à pleine vie"
+                );
                 assert!(app.scene.objects[idx2].visible, "de nouveau visible");
                 let p = app.scene.objects[idx2].transform.position;
                 assert!(
                     p.distance(Vec3::new(0.0, 1.0, 0.0)) < 4.0,
                     "réapparu près du point de départ, pas là où il est tombé : {p:?}"
                 );
-                assert!(app.network.network_spawn_grace[&2] > 0.0, "grâce d'apparition relancée");
+                assert!(
+                    app.network.network_spawn_grace[&2] > 0.0,
+                    "grâce d'apparition relancée"
+                );
             } else {
-                assert_eq!(app.network_player_health(2), Some(0.0), "coop : reste à terre");
+                assert_eq!(
+                    app.network_player_health(2),
+                    Some(0.0),
+                    "coop : reste à terre"
+                );
                 assert!(!app.scene.objects[idx2].visible);
             }
         }

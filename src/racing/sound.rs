@@ -123,7 +123,10 @@ mod tests {
     use super::*;
 
     fn samples(wav: &[u8]) -> Vec<i16> {
-        wav[44..].chunks(2).map(|c| i16::from_le_bytes([c[0], c[1]])).collect()
+        wav[44..]
+            .chunks(2)
+            .map(|c| i16::from_le_bytes([c[0], c[1]]))
+            .collect()
     }
 
     #[test]
@@ -134,7 +137,8 @@ mod tests {
             let data_len = u32::from_le_bytes(wav[40..44].try_into().unwrap()) as usize;
             assert_eq!(wav.len(), 44 + data_len);
             assert!(
-                kira::sound::static_sound::StaticSoundData::from_cursor(std::io::Cursor::new(wav)).is_ok(),
+                kira::sound::static_sound::StaticSoundData::from_cursor(std::io::Cursor::new(wav))
+                    .is_ok(),
                 "kira doit décoder le WAV synthétisé"
             );
         }
@@ -143,12 +147,25 @@ mod tests {
     #[test]
     fn loops_are_seamless() {
         let e = samples(&engine_wav());
-        assert!((e[0] as i32 - e[e.len() - 1] as i32).abs() < 1500, "raccord moteur");
+        assert!(
+            (e[0] as i32 - e[e.len() - 1] as i32).abs() < 1500,
+            "raccord moteur"
+        );
         let k = samples(&skid_wav());
         let jump = (k[0] as i32 - k[k.len() - 1] as i32).abs();
-        let typical = k.windows(2).map(|w| (w[1] as i32 - w[0] as i32).abs()).sum::<i32>() / k.len() as i32;
-        assert!(jump < typical * 12 + 600, "raccord crissement : {jump} vs {typical}");
-        assert!(e.iter().any(|&s| s.abs() > 6000), "le moteur doit avoir du niveau");
+        let typical = k
+            .windows(2)
+            .map(|w| (w[1] as i32 - w[0] as i32).abs())
+            .sum::<i32>()
+            / k.len() as i32;
+        assert!(
+            jump < typical * 12 + 600,
+            "raccord crissement : {jump} vs {typical}"
+        );
+        assert!(
+            e.iter().any(|&s| s.abs() > 6000),
+            "le moteur doit avoir du niveau"
+        );
     }
 
     #[test]
@@ -158,7 +175,10 @@ mod tests {
         assert!(b > a, "le régime monte dans un rapport");
         let (before, _) = engine_voice(29.9, 1.0, false);
         let (after, _) = engine_voice(30.1, 1.0, false);
-        assert!(after < before, "il retombe au passage du rapport ({before} → {after})");
+        assert!(
+            after < before,
+            "il retombe au passage du rapport ({before} → {after})"
+        );
         let (idle, g_idle) = engine_voice(0.0, 0.0, false);
         let (full, g_full) = engine_voice(60.0, 1.0, false);
         assert!(full > idle && g_full > g_idle);

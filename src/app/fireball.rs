@@ -389,7 +389,12 @@ impl AppState {
     /// 1,5, exact) au lieu de 2,2,2,2 (moyenne 2,0, le bug). Cf.
     /// `sniper_pve_dps_matches_one_point_five_not_two_ratio` pour la
     /// non-régression contre le bestiaire réel de `riviere_demo`.
-    fn apply_ranged_damage_mult_pve(&mut self, target: usize, damage: u32, class: PlayerClass) -> u32 {
+    fn apply_ranged_damage_mult_pve(
+        &mut self,
+        target: usize,
+        damage: u32,
+        class: PlayerClass,
+    ) -> u32 {
         let mult = class.ranged_damage_mult();
         if mult <= 1.0 {
             return ((damage as f32) * mult).round().max(1.0) as u32;
@@ -1027,7 +1032,11 @@ mod tests {
 
         let mut sniper_app = app_with(scene_with_monster_ahead(false));
         sniper_app.hide_local_player_template();
-        sniper_app.scene.objects[MONSTER].combat.as_mut().unwrap().hp = 10;
+        sniper_app.scene.objects[MONSTER]
+            .combat
+            .as_mut()
+            .unwrap()
+            .hp = 10;
         let index = sniper_app
             .spawn_network_player(1, PlayerClass::Sniper)
             .unwrap();
@@ -1095,7 +1104,11 @@ mod tests {
 
         let mut sniper_app = app_with(scene_with_monster_ahead(false));
         sniper_app.hide_local_player_template();
-        sniper_app.scene.objects[MONSTER].combat.as_mut().unwrap().hp = HIGH_HP;
+        sniper_app.scene.objects[MONSTER]
+            .combat
+            .as_mut()
+            .unwrap()
+            .hp = HIGH_HP;
         let index = sniper_app
             .spawn_network_player(1, PlayerClass::Sniper)
             .unwrap();

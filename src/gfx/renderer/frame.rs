@@ -498,9 +498,9 @@ impl Renderer {
             let net_connected = app.is_connected();
             let has_firebase_account = app.has_firebase_account();
             let weapon_label = app.selected_weapon_label();
-                let ability = app.ability_hud();
-                let view_proj = app.camera.view_proj();
-                let world_labels = app.world_health_labels();
+            let ability = app.ability_hud();
+            let view_proj = app.camera.view_proj();
+            let world_labels = app.world_health_labels();
             let defeated = app.is_locally_defeated();
             let kills = app.displayed_kill_count();
             let assists = app.displayed_assist_count();

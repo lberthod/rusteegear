@@ -323,7 +323,12 @@ pub(super) fn weapon_hud(
 /// Hors de cette branche (barres à côté des boutons, `y` bien plus haut,
 /// desktop ou mobile assez large) : aucun décalage, la disposition existante
 /// n'a jamais chevauché `kills_hud`.
-pub(super) fn boss_hud_extra_offset(area: egui::Rect, scene: &Scene, scale: f32, buttons_left: f32) -> f32 {
+pub(super) fn boss_hud_extra_offset(
+    area: egui::Rect,
+    scene: &Scene,
+    scale: f32,
+    buttons_left: f32,
+) -> f32 {
     let scale = clamp_hud_scale(scale);
     let margin = 8.0;
     let left_limit = area.left() + margin;
@@ -395,7 +400,8 @@ pub(super) fn kills_hud(
     // bord : centrer sur une largeur supposée débordait par-dessus
     // l'Inspecteur en mode Édition, la largeur réelle n'étant pas prise en
     // compte dans le calcul du centre.
-    let galley = painter.layout_no_wrap(text.clone(), font.clone(), Color32::from_rgb(255, 170, 130));
+    let galley =
+        painter.layout_no_wrap(text.clone(), font.clone(), Color32::from_rgb(255, 170, 130));
     let padding = egui::vec2(24.0, 12.0) * scale;
     // Bordé aux deux bords de `area` (roadmap post-audit UX 2026-09-15) :
     // `box_size.x` mesuré sur le texte réel évite déjà le débordement à
@@ -407,11 +413,20 @@ pub(super) fn kills_hud(
     // elle-même — et donc le point d'ancrage de repositionnement — reste
     // toujours dans `area`.
     let max_box_w = (area.width() - 16.0).max(1.0);
-    let box_size = egui::vec2((galley.size().x + padding.x).min(max_box_w), galley.size().y + padding.y);
-    let base = egui::pos2(area.right() - 8.0 - box_size.x / 2.0, area.top() + 112.0 + extra_offset);
+    let box_size = egui::vec2(
+        (galley.size().x + padding.x).min(max_box_w),
+        galley.size().y + padding.y,
+    );
+    let base = egui::pos2(
+        area.right() - 8.0 - box_size.x / 2.0,
+        area.top() + 112.0 + extra_offset,
+    );
     let pos = hud_anchor(ctx, "hud_kills", base, offset, box_size, draggable);
     let pos = egui::pos2(
-        pos.x.clamp(area.left() + box_size.x / 2.0, area.right() - box_size.x / 2.0),
+        pos.x.clamp(
+            area.left() + box_size.x / 2.0,
+            area.right() - box_size.x / 2.0,
+        ),
         pos.y,
     );
     let bg = egui::Rect::from_center_size(pos, box_size);
@@ -734,7 +749,17 @@ pub(super) fn hud_preview_overlays(
         // Pas de boss dessiné dans cet aperçu HUD d'éditeur (valeurs
         // d'exemple hors Play, cf. la doc de `hud_preview_overlays`) : aucun
         // décalage à appliquer, `0.0` reproduit l'ancrage historique.
-        kills_hud(ctx, area, 3, 1, &mut hud_layout.kills, drag, locale, scale, 0.0);
+        kills_hud(
+            ctx,
+            area,
+            3,
+            1,
+            &mut hud_layout.kills,
+            drag,
+            locale,
+            scale,
+            0.0,
+        );
     }
     if preview.crosshair {
         crosshair(ctx, area, &mut hud_layout.crosshair, drag, scale);
@@ -1013,7 +1038,11 @@ pub(super) fn world_health_labels(
             area.top() + (1.0 - ndc.y) * 0.5 * area.height(),
         );
         let (w, h, fill) = match l.kind {
-            LabelKind::Player => (56.0 * scale, 7.0 * scale, health_color(l.health, colorblind)),
+            LabelKind::Player => (
+                56.0 * scale,
+                7.0 * scale,
+                health_color(l.health, colorblind),
+            ),
             LabelKind::Monster => (40.0 * scale, 6.0 * scale, Color32::from_rgb(220, 70, 60)),
         };
         // Glisse `p.x` pour rester dans `area` plutôt que de laisser le nom/la
@@ -1048,12 +1077,21 @@ pub(super) fn world_health_labels(
         let max_x = (area.right() - margin - right_extent).max(min_x);
         p.x = p.x.clamp(min_x, max_x);
         let bar = egui::Rect::from_center_size(p, egui::vec2(w, h));
-        painter.rect_filled(bar.expand(1.5 * scale), 3.0 * scale, Color32::from_black_alpha(150));
-        let filled = egui::Rect::from_min_size(bar.min, egui::vec2(w * l.health.clamp(0.0, 1.0), h));
+        painter.rect_filled(
+            bar.expand(1.5 * scale),
+            3.0 * scale,
+            Color32::from_black_alpha(150),
+        );
+        let filled =
+            egui::Rect::from_min_size(bar.min, egui::vec2(w * l.health.clamp(0.0, 1.0), h));
         painter.rect_filled(filled, 2.0 * scale, fill);
         if l.hit_flash > 0.0 {
             let a = (l.hit_flash / 0.4).clamp(0.0, 1.0);
-            painter.rect_filled(bar, 2.0 * scale, Color32::from_white_alpha((200.0 * a) as u8));
+            painter.rect_filled(
+                bar,
+                2.0 * scale,
+                Color32::from_white_alpha((200.0 * a) as u8),
+            );
         }
         painter.rect(
             bar,
@@ -1218,7 +1256,11 @@ pub(super) fn boss_health_bar(
 ) {
     use egui::{Align2, Color32, FontId, Stroke};
     let scale = clamp_hud_scale(scale);
-    let Some(boss) = scene.objects.iter().find(|o| o.name == boss_name && o.visible) else {
+    let Some(boss) = scene
+        .objects
+        .iter()
+        .find(|o| o.name == boss_name && o.visible)
+    else {
         return;
     };
     let Some(c) = boss.combat.as_ref() else {
@@ -1242,7 +1284,8 @@ pub(super) fn boss_health_bar(
     // en `release`, reproduirait exactement ce chevauchement pour la rangée
     // suivante : signalé en `debug` pour l'attraper avant qu'un nom de boss
     // plus long ou un changement de police ne le fasse réapparaître.
-    let (block_top, block_bottom) = boss_bar_vertical_extent(&painter, &boss.name, phase_label, scale);
+    let (block_top, block_bottom) =
+        boss_bar_vertical_extent(&painter, &boss.name, phase_label, scale);
     let block_height = block_bottom - block_top;
     let row_height = BOSS_BAR_ROW_HEIGHT * scale;
     if block_height > row_height {
@@ -1267,32 +1310,32 @@ pub(super) fn boss_health_bar(
     let margin = 8.0;
     let left_limit = area.left() + margin;
     let beside_buttons_right_limit = (buttons_left.min(area.right()) - margin).max(left_limit);
-    let (w, center_x, bar_top) =
-        if beside_buttons_right_limit - left_limit >= min_w_beside_buttons {
-            let w = nominal_w.min(beside_buttons_right_limit - left_limit);
-            let center_x = area
-                .center()
-                .x
-                .clamp(left_limit + w / 2.0, beside_buttons_right_limit - w / 2.0);
-            (w, center_x, area.top() + 30.0 * scale + row_offset)
-        } else {
-            // Passe sous la rangée de boutons/pastille réseau (hauteur
-            // `TOUCH_TARGET`, même ancrage vertical qu'eux) : toute la largeur
-            // de `area` redevient disponible, comme sur un écran assez large.
-            let right_limit = (area.right() - margin).max(left_limit);
-            let w = nominal_w.min(right_limit - left_limit);
-            let center_x = area
-                .center()
-                .x
-                .clamp(left_limit + w / 2.0, right_limit - w / 2.0);
-            // Décalage resserré (22, pas 30) : juste assez pour ne pas coller à
-            // la rangée de boutons, en laissant le plus de marge possible avant
-            // `kills_hud` juste en dessous (`area.top() + 112`, indépendant de
-            // ce widget) — les deux n'ont qu'une quarantaine de points pour
-            // tenir nom + jauge + libellé de phase sur un écran très étroit.
-            let below_buttons = area.top() + TOUCH_TARGET + 8.0 + 22.0 * scale + row_offset;
-            (w, center_x, below_buttons)
-        };
+    let (w, center_x, bar_top) = if beside_buttons_right_limit - left_limit >= min_w_beside_buttons
+    {
+        let w = nominal_w.min(beside_buttons_right_limit - left_limit);
+        let center_x = area
+            .center()
+            .x
+            .clamp(left_limit + w / 2.0, beside_buttons_right_limit - w / 2.0);
+        (w, center_x, area.top() + 30.0 * scale + row_offset)
+    } else {
+        // Passe sous la rangée de boutons/pastille réseau (hauteur
+        // `TOUCH_TARGET`, même ancrage vertical qu'eux) : toute la largeur
+        // de `area` redevient disponible, comme sur un écran assez large.
+        let right_limit = (area.right() - margin).max(left_limit);
+        let w = nominal_w.min(right_limit - left_limit);
+        let center_x = area
+            .center()
+            .x
+            .clamp(left_limit + w / 2.0, right_limit - w / 2.0);
+        // Décalage resserré (22, pas 30) : juste assez pour ne pas coller à
+        // la rangée de boutons, en laissant le plus de marge possible avant
+        // `kills_hud` juste en dessous (`area.top() + 112`, indépendant de
+        // ce widget) — les deux n'ont qu'une quarantaine de points pour
+        // tenir nom + jauge + libellé de phase sur un écran très étroit.
+        let below_buttons = area.top() + TOUCH_TARGET + 8.0 + 22.0 * scale + row_offset;
+        (w, center_x, below_buttons)
+    };
     let bar = egui::Rect::from_center_size(egui::pos2(center_x, bar_top), egui::vec2(w, h));
     painter.text(
         egui::pos2(bar.center().x, bar.top() - 9.0 * scale),
@@ -1301,7 +1344,11 @@ pub(super) fn boss_health_bar(
         FontId::proportional(15.0 * scale),
         Color32::from_white_alpha(235),
     );
-    painter.rect_filled(bar.expand(2.0 * scale), 4.0 * scale, Color32::from_black_alpha(170));
+    painter.rect_filled(
+        bar.expand(2.0 * scale),
+        4.0 * scale,
+        Color32::from_black_alpha(170),
+    );
     let filled = egui::Rect::from_min_size(bar.min, egui::vec2(w * ratio, h));
     painter.rect_filled(filled, 3.0 * scale, health_color(ratio, colorblind));
     painter.rect(
@@ -2559,15 +2606,26 @@ mod tests {
         );
 
         // Un seul boss visible : pas de décalage (cf. la doc de la fonction).
-        if let Some(o) = scene.objects.iter_mut().find(|o| o.name == crate::app::boss2::BOSS2_NAME) {
+        if let Some(o) = scene
+            .objects
+            .iter_mut()
+            .find(|o| o.name == crate::app::boss2::BOSS2_NAME)
+        {
             o.visible = false;
         }
-        assert_eq!(boss_hud_extra_offset(area, &scene, scale, buttons_left), 0.0);
+        assert_eq!(
+            boss_hud_extra_offset(area, &scene, scale, buttons_left),
+            0.0
+        );
 
         // Écran large : `boss_health_bar` reste à côté des boutons, jamais
         // de collision avec `kills_hud` (bien plus haut), même avec les deux
         // boss visibles.
-        if let Some(o) = scene.objects.iter_mut().find(|o| o.name == crate::app::boss2::BOSS2_NAME) {
+        if let Some(o) = scene
+            .objects
+            .iter_mut()
+            .find(|o| o.name == crate::app::boss2::BOSS2_NAME)
+        {
             o.visible = true;
         }
         let wide_area = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(1280.0, 800.0));

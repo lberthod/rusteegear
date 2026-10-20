@@ -3,7 +3,6 @@
 
 pub mod ability_hud;
 pub mod ai;
-pub mod world_labels;
 pub mod asset_ops;
 mod autosave;
 pub mod boss;
@@ -25,6 +24,7 @@ mod picking;
 pub mod race;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod scripting;
+pub mod world_labels;
 // Backend Lua du player web (Sprint 137) : symétrique de `scripting` (mlua, natif),
 // sur `rilua` (pur Rust, compile aussi nativement — `cfg(test)` en plus de wasm32
 // permet les tests différentiels contre `mlua`, cf. `scripting_web::tests`).

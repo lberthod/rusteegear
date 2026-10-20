@@ -578,7 +578,10 @@ impl App {
         // Zone morte des gâchettes : une manette qui bruite ou repose légèrement appuyée ne
         // doit pas freiner/accélérer toute seule.
         let trigger = |v: f32| if v < 0.15 { 0.0 } else { v };
-        let (lt, rt) = (trigger(self.gamepad_triggers.0), trigger(self.gamepad_triggers.1));
+        let (lt, rt) = (
+            trigger(self.gamepad_triggers.0),
+            trigger(self.gamepad_triggers.1),
+        );
         // Stick : zone morte 10 % puis courbe douce (précis au centre, plein à la butée).
         let curve = |v: f32| {
             let m = ((v.abs() - 0.1) / 0.9).clamp(0.0, 1.0);
@@ -596,8 +599,9 @@ impl App {
             k(K::ArrowRight) || k(K::KeyD),
         );
         let digital = |b: bool| if b { 1.0_f32 } else { 0.0 };
-        let throttle = rt
-            .max(digital(h(B::RightTrigger2) || h(B::East) || k(K::ArrowUp) || k(K::KeyW)));
+        let throttle = rt.max(digital(
+            h(B::RightTrigger2) || h(B::East) || k(K::ArrowUp) || k(K::KeyW),
+        ));
         let brake = lt.max(digital(
             h(B::LeftTrigger2) || h(B::South) || k(K::ArrowDown) || k(K::KeyS),
         ));
@@ -774,9 +778,16 @@ impl App {
         self.state.gamepad_hud.unavailable = false;
         let coop = self.state.scene.platformer.is_some_and(|p| p.coop);
         let strongest = |a: (f32, f32), b: (f32, f32)| {
-            if b.0.hypot(b.1) > a.0.hypot(a.1) { b } else { a }
+            if b.0.hypot(b.1) > a.0.hypot(a.1) {
+                b
+            } else {
+                a
+            }
         };
-        let (mut held, mut held2) = (std::collections::HashSet::new(), std::collections::HashSet::new());
+        let (mut held, mut held2) = (
+            std::collections::HashSet::new(),
+            std::collections::HashSet::new(),
+        );
         let (mut axes, mut axes2, mut right) = ((0.0, 0.0), (0.0, 0.0), (0.0, 0.0));
         let mut trig = (0.0_f32, 0.0_f32);
         for (i, p) in pads.iter().enumerate() {
@@ -792,7 +803,8 @@ impl App {
                 trig = (trig.0.max(p.lt), trig.1.max(p.rt));
             }
         }
-        let near = |a: (f32, f32), b: (f32, f32)| (a.0 - b.0).abs() < 0.01 && (a.1 - b.1).abs() < 0.01;
+        let near =
+            |a: (f32, f32), b: (f32, f32)| (a.0 - b.0).abs() < 0.01 && (a.1 - b.1).abs() < 0.01;
         let changed = held != self.gamepad_held
             || held2 != self.gamepad_held2
             || !near(axes, self.gamepad_axes)
@@ -807,7 +819,12 @@ impl App {
             names.sort();
             log::info!(
                 "PAD boutons={names:?} stickG=({:.2},{:.2}) stickD=({:.2},{:.2}) ZL={:.2} ZR={:.2} | course : gaz={:.2} frein={:.2} volant={:.2}",
-                axes.0, axes.1, right.0, right.1, trig.0, trig.1,
+                axes.0,
+                axes.1,
+                right.0,
+                right.1,
+                trig.0,
+                trig.1,
                 self.state.input_state.race.throttle,
                 self.state.input_state.race.brake,
                 self.state.input_state.race.steer
@@ -832,7 +849,11 @@ impl App {
         if self.state.gamepad_hud.pads != names {
             log::info!(
                 "Manettes (GameController) : {}",
-                names.iter().map(|(n, _)| n.as_str()).collect::<Vec<_>>().join(", ")
+                names
+                    .iter()
+                    .map(|(n, _)| n.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
             );
             self.state.gamepad_hud.pads = names;
         }

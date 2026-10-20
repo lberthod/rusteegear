@@ -1843,12 +1843,7 @@ mod tests {
         app.spawn_network_player(2, PlayerClass::Tank).unwrap();
         app.network.network_inputs.get_mut(&2).unwrap().block = true;
         let before = app.network_player_health(2).unwrap();
-        app.apply_network_damage(
-            2,
-            0.1,
-            crate::net::protocol::DeathCauseKind::Player,
-            idx1,
-        );
+        app.apply_network_damage(2, 0.1, crate::net::protocol::DeathCauseKind::Player, idx1);
         let lost = before - app.network_player_health(2).unwrap();
         assert!(
             (lost - 0.1 * 0.10).abs() < 1e-5,
@@ -1866,12 +1861,7 @@ mod tests {
         app.spawn_network_player(2, PlayerClass::Berserker).unwrap();
         app.network.network_inputs.get_mut(&2).unwrap().block = true;
         let before = app.network_player_health(2).unwrap();
-        app.apply_network_damage(
-            2,
-            0.1,
-            crate::net::protocol::DeathCauseKind::Player,
-            idx1,
-        );
+        app.apply_network_damage(2, 0.1, crate::net::protocol::DeathCauseKind::Player, idx1);
         let lost = before - app.network_player_health(2).unwrap();
         assert!(
             (lost - 0.1).abs() < 1e-5,
@@ -1910,13 +1900,10 @@ mod tests {
         let mut app = AppState::new();
         app.scene = scene;
         app.playing = true;
-        let attacker = app
-            .spawn_network_player(1, PlayerClass::Berserker)
-            .unwrap();
+        let attacker = app.spawn_network_player(1, PlayerClass::Berserker).unwrap();
         let target = app.spawn_network_player(2, PlayerClass::Assault).unwrap();
-        app.scene.objects[target].transform.position = app.scene.objects[attacker]
-            .transform
-            .position;
+        app.scene.objects[target].transform.position =
+            app.scene.objects[attacker].transform.position;
         // Grâce d'apparition à zéro : sans ça, la cible fraîchement spawnée
         // serait protégée du PvP par `SPAWN_GRACE_S` et ce test mesurerait
         // zéro dégât au lieu du multiplicateur de Brasier (cf. `in_grace`
@@ -2767,8 +2754,17 @@ mod tests {
             animation: Some(crate::scene::AnimationState::default()),
             ..Default::default()
         });
-        let idx = app.spawn_network_player(7, PlayerClass::Assault).expect("gabarit pilotable");
-        let clip = |app: &AppState| app.scene.objects[idx].animation.as_ref().unwrap().clip.clone();
+        let idx = app
+            .spawn_network_player(7, PlayerClass::Assault)
+            .expect("gabarit pilotable");
+        let clip = |app: &AppState| {
+            app.scene.objects[idx]
+                .animation
+                .as_ref()
+                .unwrap()
+                .clip
+                .clone()
+        };
         let input = NetworkInput {
             attack: true,
             ..Default::default()
@@ -2793,7 +2789,11 @@ mod tests {
         for _ in 0..40 {
             app.sim_step(1.0 / 60.0);
         }
-        assert_eq!(clip(&app), "Idle", "minuteur écoulé : Walk/Idle reprend la main");
+        assert_eq!(
+            clip(&app),
+            "Idle",
+            "minuteur écoulé : Walk/Idle reprend la main"
+        );
         // Une fois le minuteur écoulé, la fonction ne touche plus au clip
         // (Walk/Idle reprennent la main dans `sim_step`).
         let t = app.network.network_ability_anims[&7];
@@ -2856,7 +2856,11 @@ mod tests {
             );
             app.update_network_attacks(1.0 / 60.0);
             let hp = app.network_player_health(2).unwrap();
-            assert_eq!(hp < 1.0, expect_hit, "distance {dist} m : vie de la cible {hp}");
+            assert_eq!(
+                hp < 1.0,
+                expect_hit,
+                "distance {dist} m : vie de la cible {hp}"
+            );
         }
     }
 
@@ -3125,13 +3129,19 @@ mod tests {
             app.scene.objects[target_index].visible,
             "une cible à 3 PV ne doit pas tomber en un seul coup de mêlée réseau"
         );
-        assert_eq!(app.scene.objects[target_index].combat.as_ref().unwrap().hp, 2);
+        assert_eq!(
+            app.scene.objects[target_index].combat.as_ref().unwrap().hp,
+            2
+        );
 
         // Recharge écoulée : deuxième coup, entame encore.
         app.network.network_attack_cooldowns.insert(1, 0.0);
         app.update_network_attacks(1.0 / 60.0);
         assert!(app.scene.objects[target_index].visible);
-        assert_eq!(app.scene.objects[target_index].combat.as_ref().unwrap().hp, 1);
+        assert_eq!(
+            app.scene.objects[target_index].combat.as_ref().unwrap().hp,
+            1
+        );
 
         // Troisième coup : achève enfin la cible.
         app.network.network_attack_cooldowns.insert(1, 0.0);

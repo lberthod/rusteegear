@@ -3741,14 +3741,21 @@ fn a_brief_attack_tap_keeps_the_attack_clip_playing_for_a_while() {
     assert_eq!(clip(&app), "Attack");
     for _ in 0..12 {
         app.apply_ability_animations(1.0 / 60.0);
-        assert_eq!(clip(&app), "Attack", "le coup doit rester visible après le relâchement");
+        assert_eq!(
+            clip(&app),
+            "Attack",
+            "le coup doit rester visible après le relâchement"
+        );
         assert_eq!(app.player_ability_anim, Some("Attack"));
     }
     // Une fois le minuteur écoulé, la locomotion reprend la main.
     for _ in 0..40 {
         app.apply_ability_animations(1.0 / 60.0);
     }
-    assert_eq!(app.player_ability_anim, None, "retour à la locomotion après le coup");
+    assert_eq!(
+        app.player_ability_anim, None,
+        "retour à la locomotion après le coup"
+    );
 
     // Même chose pour le sort (K/3) et le soin (H) : clip `Cast`.
     app.input_state.fire = true;
@@ -3889,7 +3896,11 @@ fn holding_heal_restores_solo_health_in_an_ability_bar_scene() {
     app.scene.ability_bar = false;
     app.input_state.heal = true;
     app.update_self_heal(1.0);
-    assert_eq!(app.hud_health, Some(0.5), "hors kit de capacités : comportement historique");
+    assert_eq!(
+        app.hud_health,
+        Some(0.5),
+        "hors kit de capacités : comportement historique"
+    );
 }
 
 /// Pendant en ligne (côté serveur) : un joueur réseau **seul** dans une scène
@@ -3948,7 +3959,10 @@ fn a_lone_network_player_heals_themself_with_the_ability_bar() {
 
     let (mut app, id) = build(false);
     app.update_network_heal(1.0);
-    assert_eq!(app.network.network_health[&id], 0.5, "monde coopératif : inchangé");
+    assert_eq!(
+        app.network.network_health[&id], 0.5,
+        "monde coopératif : inchangé"
+    );
 }
 
 /// Table Lua `vr` (roadmap VR, phase 6) : hors VR `vr.active` est faux ; en
@@ -3994,7 +4008,11 @@ fn lua_vr_table_exposes_the_headset_and_requests_haptics() {
     assert_eq!(p.x, 3.0, "vr.head.x");
     assert!((p.y - 0.8).abs() < 1e-6, "vr.right.trigger");
     assert!((p.z - 0.5).abs() < 1e-6, "vr.head.yaw");
-    assert_eq!(take_vr_haptics(), vec![(0, 0.7, 0.1)], "vr.haptic(\"left\", …)");
+    assert_eq!(
+        take_vr_haptics(),
+        vec![(0, 0.7, 0.1)],
+        "vr.haptic(\"left\", …)"
+    );
 }
 
 /// Roadmap VR, phase 8 : le corps et les mains synthétisés depuis le casque

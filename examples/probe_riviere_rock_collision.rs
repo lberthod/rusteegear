@@ -10,8 +10,8 @@
 //! Usage : `cargo run --example probe_riviere_rock_collision`
 
 use glam::Vec3;
-use motor3derust::runtime::physics::{ColliderShape, PhysicsKind};
 use motor3derust::runtime::physics::Physics;
+use motor3derust::runtime::physics::{ColliderShape, PhysicsKind};
 use motor3derust::scene::{MeshKind, Scene};
 
 /// Tout décor rond/quasi-convexe planté par `place()` : galets, troncs
@@ -73,7 +73,10 @@ fn main() {
     // APRÈS sur `galet_*`.
     let mut shape_counts: Vec<(String, ColliderShape, u32)> = Vec::new();
     for (_, _, _, _, group, shape) in &galets {
-        match shape_counts.iter_mut().find(|(g, s, _)| g == group && s == shape) {
+        match shape_counts
+            .iter_mut()
+            .find(|(g, s, _)| g == group && s == shape)
+        {
             Some((_, _, n)) => *n += 1,
             None => shape_counts.push((group.clone(), *shape, 1)),
         }
@@ -92,7 +95,10 @@ fn main() {
         .expect("joueur");
     let (plmin, plmax) = scene.local_aabb(scene.objects[player_idx].mesh);
     let player_r = (plmax.x - plmin.x).max(plmax.z - plmin.z) * 0.5;
-    println!("\nRayon capsule joueur ≈ {player_r:.3} m (diamètre ≈ {:.3} m).", player_r * 2.0);
+    println!(
+        "\nRayon capsule joueur ≈ {player_r:.3} m (diamètre ≈ {:.3} m).",
+        player_r * 2.0
+    );
 
     // ------------------------------------------------------------------
     // SYMPTÔME 1 : paires de galets dont le PASSAGE (distance centre à
@@ -115,7 +121,10 @@ fn main() {
         }
     }
     pairs.sort_by(|x, y| x.0.partial_cmp(&y.0).unwrap());
-    println!("{} paire(s) dans un voisinage de 6m analysées, 10 plus étroites :", pairs.len());
+    println!(
+        "{} paire(s) dans un voisinage de 6m analysées, 10 plus étroites :",
+        pairs.len()
+    );
     for (gap, a, b, d) in pairs.iter().take(10) {
         let (ia, pa, ra, _, ga, _) = &galets[*a];
         let (ib, pb, rb, _, gb, _) = &galets[*b];
@@ -167,7 +176,9 @@ fn main() {
                 "  posé=({sx:.2},{sy:.2},{sz:.2}) poussée {label:6} 3s -> fin=({ex:.2},{ey:.2},{ez:.2}) | déplacement net={net:.3}m"
             );
             if net < 0.15 {
-                println!("    -> BLOQUÉ quasi sur place dans cette direction (déplacement net {net:.3}m < 0.15m).");
+                println!(
+                    "    -> BLOQUÉ quasi sur place dans cette direction (déplacement net {net:.3}m < 0.15m)."
+                );
             }
         }
     }
@@ -249,8 +260,10 @@ fn main() {
         rows.push((obj_i, group.clone(), exposed, climbed));
     }
 
-    let climbed_rows: Vec<&(usize, String, f32, f32)> = rows.iter().filter(|r| r.3 > 0.15).collect();
-    let blocked_rows: Vec<&(usize, String, f32, f32)> = rows.iter().filter(|r| r.3 <= 0.15).collect();
+    let climbed_rows: Vec<&(usize, String, f32, f32)> =
+        rows.iter().filter(|r| r.3 > 0.15).collect();
+    let blocked_rows: Vec<&(usize, String, f32, f32)> =
+        rows.iter().filter(|r| r.3 <= 0.15).collect();
     let max_climbed_exposed = climbed_rows.iter().map(|r| r.2).fold(f32::MIN, f32::max);
     let min_blocked_exposed = blocked_rows.iter().map(|r| r.2).fold(f32::MAX, f32::min);
     println!(
@@ -260,9 +273,13 @@ fn main() {
         rows.len()
     );
     if !climbed_rows.is_empty() {
-        println!("  Plus haut galet quand même MONTÉ : hors-sol={max_climbed_exposed:.3}m (seuil autostep=0.300m)");
+        println!(
+            "  Plus haut galet quand même MONTÉ : hors-sol={max_climbed_exposed:.3}m (seuil autostep=0.300m)"
+        );
         if max_climbed_exposed > 0.35 {
-            println!("  -> ANOMALIE : un galet monté a un hors-sol nettement supérieur à l'autostep (0.3m) : possible rampe/artefact ConvexHull.");
+            println!(
+                "  -> ANOMALIE : un galet monté a un hors-sol nettement supérieur à l'autostep (0.3m) : possible rampe/artefact ConvexHull."
+            );
         } else {
             println!("  -> cohérent avec un autostep normal (0.3m), pas d'anomalie détectée.");
         }
@@ -281,7 +298,9 @@ fn main() {
     // artefact du ConvexHull mais de la géométrie arrondie + l'angle de
     // pente franchissable.
     // ------------------------------------------------------------------
-    println!("\n== 2c. Même approche frontale, collider TriMesh (silhouette exacte) au lieu de ConvexHull ==");
+    println!(
+        "\n== 2c. Même approche frontale, collider TriMesh (silhouette exacte) au lieu de ConvexHull =="
+    );
     for row in climbed_rows.iter() {
         let (obj_i, _group, exposed, dy_hull) = (row.0, &row.1, row.2, row.3);
         let pos = galets.iter().find(|g| g.0 == obj_i).unwrap().1;
@@ -304,8 +323,11 @@ fn main() {
         let dy_trimesh = s.objects[player_idx].transform.position.y - ground_before;
         println!(
             "  obj#{obj_i} hors-sol≈{exposed:.3}m : Δy avec ConvexHull={dy_hull:+.3}m  vs  Δy avec TriMesh={dy_trimesh:+.3}m  {}",
-            if dy_trimesh > 0.15 { "-> TOUJOURS monté avec TriMesh (pas un artefact ConvexHull)" }
-            else { "-> BLOQUÉ avec TriMesh (le ConvexHull est bien la cause de la montée)" }
+            if dy_trimesh > 0.15 {
+                "-> TOUJOURS monté avec TriMesh (pas un artefact ConvexHull)"
+            } else {
+                "-> BLOQUÉ avec TriMesh (le ConvexHull est bien la cause de la montée)"
+            }
         );
     }
 

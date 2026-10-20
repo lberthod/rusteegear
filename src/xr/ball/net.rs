@@ -18,7 +18,10 @@ use serde::{Deserialize, Serialize};
 /// qu'une, ex. `ws://127.0.0.1:7790/ball` en local) : chiffrée d'abord, puis
 /// en clair sur le port 80 si le TLS échoue sur l'appareil (repli ajouté
 /// après le 1er essai au casque : « relais injoignable »).
-pub const DEFAULT_URLS: [&str; 2] = ["wss://ws.loicberthod.ch/ball", "ws://ws.loicberthod.ch/ball"];
+pub const DEFAULT_URLS: [&str; 2] = [
+    "wss://ws.loicberthod.ch/ball",
+    "ws://ws.loicberthod.ch/ball",
+];
 /// Incrémenté à chaque changement de format des messages.
 pub const PROTOCOL_VERSION: u32 = 1;
 
@@ -80,11 +83,18 @@ pub struct PcState {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum Msg {
     /// Premier message d'un client au relais.
-    Hello { role: Role, version: u32 },
+    Hello {
+        role: Role,
+        version: u32,
+    },
     /// Relais → client : l'autre joueur est là (ou vient de partir).
-    Peer { present: bool },
+    Peer {
+        present: bool,
+    },
     /// Relais → client : version incompatible.
-    Refused { reason: String },
+    Refused {
+        reason: String,
+    },
     Snapshot(Snapshot),
     Pc(PcState),
 }
@@ -169,7 +179,10 @@ mod native {
 
         /// Pourquoi la dernière tentative a échoué (vide une fois connecté).
         pub fn last_error(&self) -> String {
-            self.last_error.lock().map(|e| e.clone()).unwrap_or_default()
+            self.last_error
+                .lock()
+                .map(|e| e.clone())
+                .unwrap_or_default()
         }
 
         pub fn status(&self) -> LinkStatus {
@@ -222,7 +235,11 @@ mod native {
                 log::warn!("Ball : relais {url} : {e}");
             }
             if let Ok(mut le) = last_error.lock() {
-                *le = if e.is_empty() { e } else { format!("{url} : {e}") };
+                *le = if e.is_empty() {
+                    e
+                } else {
+                    format!("{url} : {e}")
+                };
             }
         };
         let mut attempt = 0usize;
@@ -244,7 +261,11 @@ mod native {
                         role,
                         version: PROTOCOL_VERSION,
                     };
-                    if tx.send(Message::Binary(hello.encode().into())).await.is_ok() {
+                    if tx
+                        .send(Message::Binary(hello.encode().into()))
+                        .await
+                        .is_ok()
+                    {
                         // Vide ce qui s'est accumulé hors ligne (vieux états).
                         while outbox.try_recv().is_ok() {}
                         loop {

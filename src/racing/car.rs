@@ -114,7 +114,11 @@ impl Car {
         // Braquage lissé : un stick analogique arrive déjà progressif, un clavier saute de
         // 0 à ±1 — dans les deux cas la direction ne claque jamais.
         let target = inp.steer.clamp(-1.0, 1.0);
-        let rate = if target.abs() >= self.steer.abs() { 7.5 } else { 11.0 };
+        let rate = if target.abs() >= self.steer.abs() {
+            7.5
+        } else {
+            11.0
+        };
         self.steer += (target - self.steer).clamp(-rate * dt, rate * dt);
 
         if self.grounded {
@@ -206,7 +210,11 @@ impl Car {
         vf += acc * dt;
         // Résistances (roulement + air), sans jamais inverser le sens de la marche.
         let drag = (1.2 + 0.0009 * vf * vf) * dt;
-        vf = if drag >= vf.abs() { 0.0 } else { vf - drag * vf.signum() };
+        vf = if drag >= vf.abs() {
+            0.0
+        } else {
+            vf - drag * vf.signum()
+        };
 
         // Direction : rayon de braquage qui s'ouvre avec la vitesse.
         let sp = vf.abs();
@@ -257,7 +265,10 @@ impl Car {
             self.fwd = self.fwd.lerp(want, (1.6 * dt).min(1.0)).normalize_or_zero();
         }
         let flat_up = (Vec3::Y - self.fwd * self.fwd.dot(Vec3::Y)).normalize_or_zero();
-        self.up = self.up.lerp(flat_up, (0.7 * dt).min(1.0)).normalize_or_zero();
+        self.up = self
+            .up
+            .lerp(flat_up, (0.7 * dt).min(1.0))
+            .normalize_or_zero();
         self.up = (self.up - self.fwd * self.fwd.dot(self.up)).normalize_or_zero();
     }
 }
@@ -307,10 +318,17 @@ mod tests {
                 }
                 car.step(inp, &t, 1.0 / 60.0);
                 assert!(
-                    car.pos.is_finite() && car.vel.is_finite() && car.fwd.is_finite() && car.up.is_finite(),
+                    car.pos.is_finite()
+                        && car.vel.is_finite()
+                        && car.fwd.is_finite()
+                        && car.up.is_finite(),
                     "valeur non finie (graine {seed}, pas {step}) : {car:?}"
                 );
-                assert!(car.speed() < 160.0, "vitesse absurde {} (graine {seed}, pas {step})", car.speed());
+                assert!(
+                    car.speed() < 160.0,
+                    "vitesse absurde {} (graine {seed}, pas {step})",
+                    car.speed()
+                );
                 assert!((car.fwd.length() - 1.0).abs() < 0.01, "cap dénormalisé");
                 if car.pos.y < t.min_y - 12.0 {
                     // Tombée : la course l'aurait replacée, on repart de la ligne.
@@ -330,7 +348,8 @@ mod tests {
                 // Un tronçon droit et protégé sur les 45 repères (90 m) qui suivent.
                 let i = (0..t.frames.len() - 50)
                     .find(|&i| {
-                        (i..i + 45).all(|k| t.frames[k].wall_l && t.frames[k].wall_r && !t.frames[k].void)
+                        (i..i + 45)
+                            .all(|k| t.frames[k].wall_l && t.frames[k].wall_r && !t.frames[k].void)
                             && t.frames[i].fwd.dot(t.frames[i + 45].fwd) > 0.995
                     })
                     .expect("un tronçon protégé assez long");
@@ -340,7 +359,14 @@ mod tests {
                 car.vel = (f.fwd * a.cos() + f.right * (side * a.sin())) * 105.0;
                 car.fwd = car.vel.normalize();
                 for _ in 0..40 {
-                    car.step(CarInput { throttle: 1.0, ..Default::default() }, &t, 1.0 / 60.0);
+                    car.step(
+                        CarInput {
+                            throttle: 1.0,
+                            ..Default::default()
+                        },
+                        &t,
+                        1.0 / 60.0,
+                    );
                     let fr = &t.frames[t.frame_near(car.pos, i, 20)];
                     let lateral = (car.pos - fr.pos).dot(fr.right).abs();
                     assert!(
@@ -467,8 +493,10 @@ mod tests {
             car.step(inp, &t, 1.0 / 60.0);
             let f = &t.frames[t.frame_near(car.pos, car.frame, 12)];
             let lateral = (car.pos - f.pos).dot(f.right).abs();
-            assert!(lateral < f.half_width + 0.5, "sortie de piste ({lateral} m)");
+            assert!(
+                lateral < f.half_width + 0.5,
+                "sortie de piste ({lateral} m)"
+            );
         }
     }
 }
-

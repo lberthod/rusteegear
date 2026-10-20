@@ -47,7 +47,9 @@ fn noise(x: f32, z: f32) -> f32 {
 }
 
 fn fbm(x: f32, z: f32) -> f32 {
-    noise(x, z) * 0.55 + noise(x * 2.1 + 7.0, z * 2.1 - 3.0) * 0.3 + noise(x * 4.3 - 5.0, z * 4.3 + 9.0) * 0.15
+    noise(x, z) * 0.55
+        + noise(x * 2.1 + 7.0, z * 2.1 - 3.0) * 0.3
+        + noise(x * 4.3 - 5.0, z * 4.3 + 9.0) * 0.15
 }
 
 fn smoothstep(e0: f32, e1: f32, x: f32) -> f32 {
@@ -126,7 +128,8 @@ impl Terrain {
                             if !carries((i + 1) % n) {
                                 continue;
                             }
-                            let (a2, b2) = (Vec2::new(a.pos.x, a.pos.z), Vec2::new(b.pos.x, b.pos.z));
+                            let (a2, b2) =
+                                (Vec2::new(a.pos.x, a.pos.z), Vec2::new(b.pos.x, b.pos.z));
                             let ab = b2 - a2;
                             let len = ab.length().max(1e-4);
                             let dir = ab / len;
@@ -160,7 +163,9 @@ impl Terrain {
                 let dmin = far.iter().map(|q| q.distance(p)).fold(f32::MAX, f32::min);
                 // Prairie vallonnée + montagnes qui montent avec l'éloignement.
                 let meadow = base + 1.5 * fbm(x * 0.012, z * 0.012) + 1.2 * fbm(x * 0.04, z * 0.04);
-                let ridge = 85.0 * smoothstep(150.0, 330.0, dmin) * (0.45 + 0.9 * fbm(x * 0.006 + 3.0, z * 0.006 - 1.0));
+                let ridge = 85.0
+                    * smoothstep(150.0, 330.0, dmin)
+                    * (0.45 + 0.9 * fbm(x * 0.006 + 3.0, z * 0.006 - 1.0));
                 // Près de la route le relief suit le talus (la prairie est arasée sous la
                 // chaussée) ; il rejoint la prairie à quelques dizaines de mètres.
                 let blend = smoothstep(11.0, 48.0, near);
@@ -228,7 +233,8 @@ impl Terrain {
                     c[k] += ([0.20, 0.10, -0.03][k]) * dry;
                 }
                 // Roche sur les pentes fortes, neige en altitude.
-                let rock = smoothstep(0.12, 0.3, slope) + smoothstep(38.0, 60.0, h - self.base) * 0.6;
+                let rock =
+                    smoothstep(0.12, 0.3, slope) + smoothstep(38.0, 60.0, h - self.base) * 0.6;
                 let rock = rock.clamp(0.0, 1.0);
                 let rock_c = [0.42, 0.39, 0.36];
                 for k in 0..3 {
@@ -276,12 +282,22 @@ mod tests {
             let h = terrain.height(f.pos.x, f.pos.z);
             // Jamais au-dessus de la chaussée (sinon elle serait enterrée) ; le pont surplombe
             // la vallée, les portions porteuses restent à ~1 m dessous.
-            assert!(h < f.pos.y - 0.2, "relief au-dessus de la route à s={} : {h} vs {}", f.s, f.pos.y);
+            assert!(
+                h < f.pos.y - 0.2,
+                "relief au-dessus de la route à s={} : {h} vs {}",
+                f.s,
+                f.pos.y
+            );
             // Et sous les deux bords (dévers).
             for side in [-1.0_f32, 1.0] {
                 let e = f.pos + f.right * side * (f.half_width - 0.3);
                 let he = terrain.height(e.x, e.z);
-                assert!(he < e.y - 0.1, "bord enterré à s={} côté {side} : {he} vs {}", f.s, e.y);
+                assert!(
+                    he < e.y - 0.1,
+                    "bord enterré à s={} côté {side} : {he} vs {}",
+                    f.s,
+                    e.y
+                );
             }
             checked += 1;
         }
@@ -296,7 +312,14 @@ mod tests {
         assert!(mesh.vertices.len() > 5000);
         let max = mesh.vertices.len() as u32;
         assert!(mesh.indices.iter().all(|&i| i < max));
-        let peak = mesh.vertices.iter().map(|v| v.position[1]).fold(f32::MIN, f32::max);
-        assert!(peak - terrain.base > 40.0, "des montagnes à l'horizon ({peak})");
+        let peak = mesh
+            .vertices
+            .iter()
+            .map(|v| v.position[1])
+            .fold(f32::MIN, f32::max);
+        assert!(
+            peak - terrain.base > 40.0,
+            "des montagnes à l'horizon ({peak})"
+        );
     }
 }

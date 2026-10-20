@@ -2722,7 +2722,10 @@ fn embedded_player_spawns_clear_of_the_communal_fire() {
     };
     let (joueur, feu) = (pos("Joueur"), pos("Feu communal"));
     let flat = |a: Vec3, b: Vec3| Vec3::new(a.x - b.x, 0.0, a.z - b.z).length();
-    assert!(flat(joueur, feu) > 5.0, "joueur à {joueur:?}, feu à {feu:?}");
+    assert!(
+        flat(joueur, feu) > 5.0,
+        "joueur à {joueur:?}, feu à {feu:?}"
+    );
     for o in &scene.objects {
         if o.name != "Joueur" && o.name != "Sol" && o.physics != PhysicsKind::None {
             assert!(

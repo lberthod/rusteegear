@@ -60,8 +60,8 @@
 
 use glam::{Quat, Vec3};
 
-use super::creature_attack;
 use super::AppState;
+use super::creature_attack;
 use crate::runtime::physics::PhysicsKind;
 
 /// Nom de l'objet de scène du boss (`Scene::riviere_demo`) — sert aussi de
@@ -247,7 +247,10 @@ impl AppState {
     /// pour `RANGED_CREATURE_ATTACKS`, consulté par `sim_step_inner` pour ne
     /// pas laisser la chasse IA écraser le gel.
     pub(super) fn boss_is_frozen(&self, idx: usize) -> bool {
-        self.scene.objects.get(idx).is_some_and(|o| o.name == BOSS_NAME)
+        self.scene
+            .objects
+            .get(idx)
+            .is_some_and(|o| o.name == BOSS_NAME)
             && self.boss.ranged.stopped_until.is_some()
     }
 
@@ -526,7 +529,9 @@ impl AppState {
             BOSS_NAME,
         );
         self.boss.boss_idx_cache = boss_idx;
-        let Some(boss_visible) = boss_idx.and_then(|i| self.scene.objects.get(i)).map(|o| o.visible)
+        let Some(boss_visible) = boss_idx
+            .and_then(|i| self.scene.objects.get(i))
+            .map(|o| o.visible)
         else {
             return;
         };
@@ -569,7 +574,10 @@ mod tests {
         let veille = telegraph_pulse_frequency(BossPhase::Veille);
         let courroux = telegraph_pulse_frequency(BossPhase::Courroux);
         let dernier = telegraph_pulse_frequency(BossPhase::DernierSursaut);
-        assert!(courroux > veille, "Courroux doit pulser plus vite que Veille");
+        assert!(
+            courroux > veille,
+            "Courroux doit pulser plus vite que Veille"
+        );
         assert!(
             dernier > courroux,
             "Dernier sursaut doit pulser plus vite que Courroux : l'attaque la plus \
@@ -605,8 +613,14 @@ mod tests {
             .position(|o| o.name == BOSS_NAME)
             .expect("boss absent de la démo Rivière");
         let boss = &app_scene.objects[idx];
-        assert!(boss.visible, "le boss doit apparaître visible dès le départ");
-        assert_eq!(boss.tag, "boss", "le boss ne doit pas partager le tag \"monstre\"");
+        assert!(
+            boss.visible,
+            "le boss doit apparaître visible dès le départ"
+        );
+        assert_eq!(
+            boss.tag, "boss",
+            "le boss ne doit pas partager le tag \"monstre\""
+        );
         assert_eq!(boss.group, "Boss");
         let combat = boss.combat.as_ref().expect("le boss doit être attaquable");
         assert!(combat.attackable);
@@ -628,7 +642,10 @@ mod tests {
             .iter()
             .find(|o| o.name == BOSS_LOOT_NAME)
             .expect("butin du boss absent de la démo Rivière");
-        assert!(!loot.visible, "le butin garanti doit être masqué tant que le boss est vivant");
+        assert!(
+            !loot.visible,
+            "le butin garanti doit être masqué tant que le boss est vivant"
+        );
         assert!(loot.weapon_pickup.is_some());
     }
 
@@ -766,14 +783,20 @@ mod tests {
         // Premier appel (pleine vie) : observe seulement la phase initiale,
         // ne doit rien déclencher (pas de phase précédente à comparer).
         app.update_boss(1.0 / 60.0, 0.0);
-        assert_eq!(app.fx.damage_flash, 0.0, "premier appel : pas de transition");
+        assert_eq!(
+            app.fx.damage_flash, 0.0,
+            "premier appel : pas de transition"
+        );
 
         // Toujours en Veille (51 % PV) : pas de franchissement.
         app.fx.damage_flash = 0.0;
         app.scene.objects[idx].combat.as_mut().unwrap().max_hp = 100;
         app.scene.objects[idx].combat.as_mut().unwrap().hp = 51;
         app.update_boss(1.0 / 60.0, 1.0);
-        assert_eq!(app.fx.damage_flash, 0.0, "reste en Veille : pas de transition");
+        assert_eq!(
+            app.fx.damage_flash, 0.0,
+            "reste en Veille : pas de transition"
+        );
 
         // Franchit le seuil des 50 % : Courroux, doit flasher.
         app.scene.objects[idx].combat.as_mut().unwrap().hp = 50;

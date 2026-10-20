@@ -1156,7 +1156,11 @@ impl AppState {
                     // `a.gain` (Sprint 126) : normalisation de loudness calculée à
                     // l'import, composée avec l'atténuation spatiale plutôt que
                     // l'écraser — les deux sont des facteurs multiplicatifs indépendants.
-                    Some((a.clip.clone(), a.gain, a.spatial.then_some(o.transform.position)))
+                    Some((
+                        a.clip.clone(),
+                        a.gain,
+                        a.spatial.then_some(o.transform.position),
+                    ))
                 })
                 .collect();
             for (c, gain, source) in clips {

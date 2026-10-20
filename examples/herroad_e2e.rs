@@ -3,8 +3,8 @@
 //! À lancer avec un `HOME` jetable pour ne pas toucher aux vraies données :
 //! `HOME=/tmp/hr cargo run --release --example herroad_e2e`
 use motor3derust::app::AppState;
-use motor3derust::racing::bot::Bot;
 use motor3derust::racing::Phase;
+use motor3derust::racing::bot::Bot;
 
 fn drive_to_the_end(app: &mut AppState) {
     let mut bot = Bot::new(3);
@@ -29,7 +29,10 @@ fn main() {
     println!("HOME = {:?}", std::env::var("HOME"));
     let mut app = AppState::default();
     app.load_herroad_demo();
-    assert!(app.race.as_ref().unwrap().race.ghost.is_empty(), "session vierge attendue");
+    assert!(
+        app.race.as_ref().unwrap().race.ghost.is_empty(),
+        "session vierge attendue"
+    );
     drive_to_the_end(&mut app);
     let total = app.race.as_ref().unwrap().race.total.unwrap();
     println!("course terminée en {total:.2} s");

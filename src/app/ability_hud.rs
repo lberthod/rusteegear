@@ -87,10 +87,7 @@ impl AppState {
             },
             dash: AbilitySlot {
                 active: inp.dash || a.roll_anim_remaining > 0.0,
-                cooldown: frac(
-                    a.dash_cooldown_remaining,
-                    super::multiplayer::DASH_COOLDOWN,
-                ),
+                cooldown: frac(a.dash_cooldown_remaining, super::multiplayer::DASH_COOLDOWN),
             },
             heal: AbilitySlot {
                 active: inp.heal,

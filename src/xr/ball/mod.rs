@@ -53,7 +53,9 @@ enum State {
     Lobby,
     Playing,
     /// Toutes les cibles sont tombées ; passage au trou suivant à `until`.
-    HoleDone { until: f32 },
+    HoleDone {
+        until: f32,
+    },
     /// Parcours fini : bilan.
     CourseDone,
 }
@@ -134,7 +136,12 @@ pub fn relay_urls() -> Vec<String> {
         )
 }
 impl BallGame {
-    pub fn new(device: &wgpu::Device, format: wgpu::TextureFormat, width: u32, height: u32) -> Self {
+    pub fn new(
+        device: &wgpu::Device,
+        format: wgpu::TextureFormat,
+        width: u32,
+        height: u32,
+    ) -> Self {
         let mut g = Self {
             world: World::new(),
             gfx: Gfx::new(device, format, width, height),
@@ -353,9 +360,10 @@ impl BallGame {
             if self.repaint[WRIST] > 0 {
                 self.repaint[WRIST] -= 1;
                 let text = self.painted[WRIST].clone();
-                self.ui.paint(device, queue, WRIST, Pointer::default(), |ui| {
-                    banner_ui(ui, &text);
-                });
+                self.ui
+                    .paint(device, queue, WRIST, Pointer::default(), |ui| {
+                        banner_ui(ui, &text);
+                    });
             }
         }
 
@@ -371,8 +379,13 @@ impl BallGame {
             self.fade,
         );
         if self.fade > 0.5 {
-            self.ui
-                .draw(device, queue, eyes_world, targets, [menu.map(|m| m.0), banner]);
+            self.ui.draw(
+                device,
+                queue,
+                eyes_world,
+                targets,
+                [menu.map(|m| m.0), banner],
+            );
         }
 
         for a in actions {
@@ -545,7 +558,12 @@ impl BallGame {
                 boxes.push(nb(w.position(m.body), w.rotation(m.body), m.half, m.color));
             }
             for b in &w.blocks {
-                boxes.push(nb(w.position(b.body), w.rotation(b.body), b.half, self.block_color(b)));
+                boxes.push(nb(
+                    w.position(b.body),
+                    w.rotation(b.body),
+                    b.half,
+                    self.block_color(b),
+                ));
             }
             let mut spheres: Vec<net::NetSphere> = w
                 .balls
@@ -625,7 +643,11 @@ impl BallGame {
         let c = &COURSES[self.course];
         let mut lines = match self.state {
             State::Lobby => vec!["Le joueur VR choisit un parcours…".to_string()],
-            State::CourseDone => vec![format!("{} terminé : {} coups", c.name, self.total_strokes())],
+            State::CourseDone => vec![format!(
+                "{} terminé : {} coups",
+                c.name,
+                self.total_strokes()
+            )],
             _ => {
                 let h = &c.holes[self.hole];
                 let (down, total) = self.targets();
@@ -761,7 +783,10 @@ impl BallGame {
             1 => "Bogey",
             _ => "Trou réussi",
         };
-        format!("{verdict}\n{s} coup{} · par {par}", if s > 1 { "s" } else { "" })
+        format!(
+            "{verdict}\n{s} coup{} · par {par}",
+            if s > 1 { "s" } else { "" }
+        )
     }
 
     fn instances(&self, input: &XrInput) -> (Vec<Instance>, Vec<Instance>) {
@@ -795,8 +820,18 @@ impl BallGame {
             let rot = Quat::from_rotation_y(yaw);
             if k == 0 {
                 let half = world::AVATAR_HALF;
-                cubes.push(Instance::boxed(feet + Vec3::Y * (half.y * 0.8), Vec3::new(half.x, half.y * 0.8, half.z), rot, REMOTE_COLOR));
-                spheres.push(Instance::boxed(feet + Vec3::Y * 1.62, Vec3::splat(0.14), rot, REMOTE_COLOR));
+                cubes.push(Instance::boxed(
+                    feet + Vec3::Y * (half.y * 0.8),
+                    Vec3::new(half.x, half.y * 0.8, half.z),
+                    rot,
+                    REMOTE_COLOR,
+                ));
+                spheres.push(Instance::boxed(
+                    feet + Vec3::Y * 1.62,
+                    Vec3::splat(0.14),
+                    rot,
+                    REMOTE_COLOR,
+                ));
                 // Visière : où il regarde.
                 cubes.push(Instance::boxed(
                     feet + Vec3::Y * 1.64 + rot * Vec3::new(0.0, 0.0, -0.12),
@@ -805,7 +840,12 @@ impl BallGame {
                     Vec4::new(0.9, 0.95, 1.0, 0.5),
                 ));
             } else {
-                cubes.push(Instance::boxed(feet + Vec3::Y * world::WALL_HALF.y, world::WALL_HALF, rot, WALL_COLOR));
+                cubes.push(Instance::boxed(
+                    feet + Vec3::Y * world::WALL_HALF.y,
+                    world::WALL_HALF,
+                    rot,
+                    WALL_COLOR,
+                ));
             }
         }
         for &ball in &w.balls {
@@ -942,7 +982,10 @@ fn menu_ui(root: &mut egui::Ui, v: &MenuView, actions: &mut Vec<Action>) {
     let frame = egui::Frame::NONE
         .fill(BG)
         .corner_radius(26)
-        .stroke(egui::Stroke::new(2.0_f32, egui::Color32::from_rgb(44, 52, 64)))
+        .stroke(egui::Stroke::new(
+            2.0_f32,
+            egui::Color32::from_rgb(44, 52, 64),
+        ))
         .inner_margin(24);
     egui::CentralPanel::default()
         .frame(frame)
@@ -956,7 +999,12 @@ fn menu_ui(root: &mut egui::Ui, v: &MenuView, actions: &mut Vec<Action>) {
                     if big_button(ui, "Reprendre", "", 52.0) {
                         actions.push(Action::Resume);
                     }
-                    if big_button(ui, "Recommencer le trou", "les coups déjà joués restent", 60.0) {
+                    if big_button(
+                        ui,
+                        "Recommencer le trou",
+                        "les coups déjà joués restent",
+                        60.0,
+                    ) {
                         actions.push(Action::RestartHole);
                     }
                     if big_button(ui, "Menu des parcours", "abandonner ce parcours", 60.0) {
@@ -979,7 +1027,12 @@ fn menu_ui(root: &mut egui::Ui, v: &MenuView, actions: &mut Vec<Action>) {
 }
 
 fn lobby_ui(ui: &mut egui::Ui, v: &MenuView, actions: &mut Vec<Action>) {
-    ui.label(egui::RichText::new("BALL").size(38.0).strong().color(ACCENT));
+    ui.label(
+        egui::RichText::new("BALL")
+            .size(38.0)
+            .strong()
+            .color(ACCENT),
+    );
     ui.label(
         egui::RichText::new("Ferme la main : une balle apparaît. Ouvre-la en lançant.")
             .size(15.0)
@@ -990,7 +1043,12 @@ fn lobby_ui(ui: &mut egui::Ui, v: &MenuView, actions: &mut Vec<Action>) {
         let par = course::course_par(i);
         let best = v.best[i].map_or_else(
             || format!("{} · par {par}", c.blurb),
-            |b| format!("Record {b} coups (par {par}) {}", stars_text(course::stars(b, par))),
+            |b| {
+                format!(
+                    "Record {b} coups (par {par}) {}",
+                    stars_text(course::stars(b, par))
+                )
+            },
         );
         if big_button(ui, &format!("{}. {}", i + 1, c.name), &best, 64.0) {
             actions.push(Action::Start(i));
@@ -1001,7 +1059,11 @@ fn lobby_ui(ui: &mut egui::Ui, v: &MenuView, actions: &mut Vec<Action>) {
             .size(14.0)
             .color(MUTED),
     );
-    ui.label(egui::RichText::new(&v.link).size(18.0).color(link_color(&v.link)));
+    ui.label(
+        egui::RichText::new(&v.link)
+            .size(18.0)
+            .color(link_color(&v.link)),
+    );
     if let Some(n) = v.rival {
         let _ = n;
         ui.label(
@@ -1021,7 +1083,12 @@ fn scoreboard_ui(ui: &mut egui::Ui, v: &MenuView) {
             .size(38.0)
             .color(MUTED),
     );
-    ui.label(egui::RichText::new(h.name).size(54.0).strong().color(ACCENT));
+    ui.label(
+        egui::RichText::new(h.name)
+            .size(54.0)
+            .strong()
+            .color(ACCENT),
+    );
     ui.add_space(10.0);
     ui.label(
         egui::RichText::new(format!("Coups {}  ·  Par {}", v.strokes[v.hole], h.par))
@@ -1040,7 +1107,11 @@ fn scoreboard_ui(ui: &mut egui::Ui, v: &MenuView) {
         .color(MUTED),
     );
     if v.rival.is_none() {
-        ui.label(egui::RichText::new(&v.link).size(26.0).color(link_color(&v.link)));
+        ui.label(
+            egui::RichText::new(&v.link)
+                .size(26.0)
+                .color(link_color(&v.link)),
+        );
     }
     if let Some(n) = v.rival {
         ui.label(
@@ -1055,13 +1126,23 @@ fn summary_ui(ui: &mut egui::Ui, v: &MenuView, actions: &mut Vec<Action>) {
     let c = &COURSES[v.course];
     let par = course::course_par(v.course);
     let total: u32 = v.strokes.iter().sum();
-    ui.label(egui::RichText::new(format!("{} terminé", c.name)).size(28.0).color(ACCENT));
+    ui.label(
+        egui::RichText::new(format!("{} terminé", c.name))
+            .size(28.0)
+            .color(ACCENT),
+    );
     ui.label(
         egui::RichText::new(stars_text(course::stars(total, par)))
             .size(44.0)
             .color(ACCENT),
     );
-    ui.label(egui::RichText::new(format!("{total} coups · par {par} · {}", signed(total as i32 - par as i32))).size(24.0));
+    ui.label(
+        egui::RichText::new(format!(
+            "{total} coups · par {par} · {}",
+            signed(total as i32 - par as i32)
+        ))
+        .size(24.0),
+    );
     let holes: Vec<String> = v.strokes.iter().map(u32::to_string).collect();
     ui.label(
         egui::RichText::new(format!("Trous : {}", holes.join(" / ")))
@@ -1069,14 +1150,23 @@ fn summary_ui(ui: &mut egui::Ui, v: &MenuView, actions: &mut Vec<Action>) {
             .color(MUTED),
     );
     if v.new_record {
-        ui.label(egui::RichText::new("Nouveau record !").size(20.0).color(ACCENT));
+        ui.label(
+            egui::RichText::new("Nouveau record !")
+                .size(20.0)
+                .color(ACCENT),
+        );
     }
     ui.add_space(4.0);
     if big_button(ui, "Rejouer ce parcours", "", 46.0) {
         actions.push(Action::Start(v.course));
     }
     if v.course + 1 < COURSES.len()
-        && big_button(ui, &format!("Parcours suivant : {}", COURSES[v.course + 1].name), "", 46.0)
+        && big_button(
+            ui,
+            &format!("Parcours suivant : {}", COURSES[v.course + 1].name),
+            "",
+            46.0,
+        )
     {
         actions.push(Action::Start(v.course + 1));
     }
@@ -1144,14 +1234,15 @@ mod tests {
                     .iter()
                     .filter(|b| b.material == Material::Target)
                     .collect();
-                assert!(!targets.is_empty(), "parcours {course} trou {hole} sans cible");
+                assert!(
+                    !targets.is_empty(),
+                    "parcours {course} trou {hole} sans cible"
+                );
                 let down = targets.iter().filter(|b| w.is_down(b)).count();
                 assert_eq!(
-                    down,
-                    0,
+                    down, 0,
                     "{} / {} : {down} cible(s) tombée(s) toute(s) seule(s)",
-                    COURSES[course].name,
-                    COURSES[course].holes[hole].name
+                    COURSES[course].name, COURSES[course].holes[hole].name
                 );
             }
         }

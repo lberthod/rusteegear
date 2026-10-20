@@ -1172,7 +1172,11 @@ impl Scene {
                 continue;
             };
             let y = terrain_height(&terrain, spot.x, spot.z);
-            let mut m = demo_obj(spot.species, MeshKind::Imported(idx), Vec3::new(spot.x, y, spot.z));
+            let mut m = demo_obj(
+                spot.species,
+                MeshKind::Imported(idx),
+                Vec3::new(spot.x, y, spot.z),
+            );
             m.transform = m.transform.with_scale(Vec3::splat(spot.scale));
             m.transform.rotation = Quat::from_rotation_y(rng.range(0.0, std::f32::consts::TAU));
             if let Some(tint) = spot.tint {
@@ -1444,8 +1448,7 @@ impl Scene {
             // roster ordinaire (`tag == "monstre"`) et de ses tests de
             // variété d'espèces (cf. `riviere_demo_monsters_are_varied_
             // species` et consorts, qui filtrent strictement par ce tag).
-            let minion_offsets: [(f32, f32); 3] =
-                [(2.5, 2.0), (-2.0, 3.0), (3.0, -2.5)];
+            let minion_offsets: [(f32, f32); 3] = [(2.5, 2.0), (-2.0, 3.0), (3.0, -2.5)];
             for (i, (dx, dz)) in minion_offsets.into_iter().enumerate() {
                 let Some(midx) = loader.load("monster_mushnub.glb") else {
                     continue;
@@ -1487,7 +1490,8 @@ impl Scene {
                 // défaut à 0) : la couvée entière revient avec le boss, via
                 // `update_boss2`, pas via la file de réapparition générique.
                 let prefix = format!("boss2_minion{i}_");
-                minion.script = creature_bite_script(&prefix, 1.6, 0.5, 0.1, 211.0 + i as f32 * 7.0);
+                minion.script =
+                    creature_bite_script(&prefix, 1.6, 0.5, 0.1, 211.0 + i as f32 * 7.0);
                 objects.push(minion);
             }
         }
@@ -1833,7 +1837,10 @@ mod tests {
                 o.name
             );
         }
-        assert!(checked > 0, "aucun décor solide trouvé — le test ne teste rien");
+        assert!(
+            checked > 0,
+            "aucun décor solide trouvé — le test ne teste rien"
+        );
     }
 
     /// Régression « joueur monté sur un rocher » (diagnostic du 15 septembre
@@ -1852,7 +1859,11 @@ mod tests {
     fn riviere_demo_round_climbable_decor_uses_a_non_climbable_cylinder_collider() {
         let scene = Scene::riviere_demo();
         let mut checked = 0;
-        for o in scene.objects.iter().filter(|o| o.physics == PhysicsKind::Static) {
+        for o in scene
+            .objects
+            .iter()
+            .filter(|o| o.physics == PhysicsKind::Static)
+        {
             let MeshKind::Imported(idx) = o.mesh else {
                 continue;
             };
@@ -2127,10 +2138,22 @@ mod tests {
             let f = t as f32 / 20.0;
             let x = min.x + (max.x - min.x) * f;
             let z = min.z + (max.z - min.z) * f;
-            assert!(covered(Vec3::new(x, mid_y, min.z)), "bord nord ouvert en x={x}");
-            assert!(covered(Vec3::new(x, mid_y, max.z)), "bord sud ouvert en x={x}");
-            assert!(covered(Vec3::new(min.x, mid_y, z)), "bord ouest ouvert en z={z}");
-            assert!(covered(Vec3::new(max.x, mid_y, z)), "bord est ouvert en z={z}");
+            assert!(
+                covered(Vec3::new(x, mid_y, min.z)),
+                "bord nord ouvert en x={x}"
+            );
+            assert!(
+                covered(Vec3::new(x, mid_y, max.z)),
+                "bord sud ouvert en x={x}"
+            );
+            assert!(
+                covered(Vec3::new(min.x, mid_y, z)),
+                "bord ouest ouvert en z={z}"
+            );
+            assert!(
+                covered(Vec3::new(max.x, mid_y, z)),
+                "bord est ouvert en z={z}"
+            );
         }
         // Rien (joueur, arbres, monstres…) n'est posé hors de l'enceinte.
         for o in &scene.objects {
@@ -2173,8 +2196,16 @@ mod tests {
     #[test]
     fn riviere_demo_monsters_never_spawn_in_or_too_close_to_the_water() {
         let scene = Scene::riviere_demo();
-        let monsters: Vec<&SceneObject> = scene.objects.iter().filter(|o| o.group == "Monstre").collect();
-        assert_eq!(monsters.len(), 9, "9 monstres attendus dans le groupe \"Monstre\"");
+        let monsters: Vec<&SceneObject> = scene
+            .objects
+            .iter()
+            .filter(|o| o.group == "Monstre")
+            .collect();
+        assert_eq!(
+            monsters.len(),
+            9,
+            "9 monstres attendus dans le groupe \"Monstre\""
+        );
         for m in &monsters {
             let p = m.transform.position;
             assert!(
@@ -2274,7 +2305,12 @@ mod tests {
             "le roster ordinaire doit rester à 9, le boss ne doit pas y être tagué"
         );
         assert!(
-            scene.objects.iter().filter(|o| o.group == "Monstre").count() == 9
+            scene
+                .objects
+                .iter()
+                .filter(|o| o.group == "Monstre")
+                .count()
+                == 9
         );
     }
 
@@ -2391,20 +2427,36 @@ mod tests {
     fn riviere_demo_second_boss_is_not_counted_among_the_ordinary_monster_roster_or_the_first_boss()
     {
         let scene = Scene::riviere_demo();
-        assert!(scene.objects.iter().any(|o| o.group == "Boss2" && o.tag == "boss2"));
+        assert!(
+            scene
+                .objects
+                .iter()
+                .any(|o| o.group == "Boss2" && o.tag == "boss2")
+        );
         assert_eq!(
             scene.objects.iter().filter(|o| o.tag == "monstre").count(),
             9,
             "le roster ordinaire doit rester à 9, le second boss (ni ses Champiblobs) ne doit pas y être tagué"
         );
-        assert_eq!(scene.objects.iter().filter(|o| o.group == "Monstre").count(), 9);
+        assert_eq!(
+            scene
+                .objects
+                .iter()
+                .filter(|o| o.group == "Monstre")
+                .count(),
+            9
+        );
         assert_eq!(
             scene.objects.iter().filter(|o| o.group == "Boss").count(),
             1,
             "un seul objet du groupe \"Boss\" : le second boss ne doit pas s'y confondre"
         );
         assert_eq!(
-            scene.objects.iter().filter(|o| o.tag == "boss2_minion").count(),
+            scene
+                .objects
+                .iter()
+                .filter(|o| o.tag == "boss2_minion")
+                .count(),
             3,
             "3 Champiblobs attendus, tous dans le groupe \"Boss2\", jamais taggés \"monstre\""
         );
@@ -2430,7 +2482,10 @@ mod tests {
             "aucun objet nommé `app::boss2::BOSS2_LOOT_NAME` dans la démo Rivière"
         );
         assert!(
-            scene.objects.iter().any(|o| o.tag == crate::app::boss2::BOSS2_MINION_TAG),
+            scene
+                .objects
+                .iter()
+                .any(|o| o.tag == crate::app::boss2::BOSS2_MINION_TAG),
             "aucun Champiblob taggé `app::boss2::BOSS2_MINION_TAG` dans la démo Rivière"
         );
     }
@@ -2496,12 +2551,22 @@ mod tests {
     #[test]
     fn riviere_demo_monsters_are_varied_species() {
         let scene = Scene::riviere_demo();
-        let monsters: Vec<&SceneObject> = scene.objects.iter().filter(|o| o.tag == "monstre").collect();
-        assert_eq!(monsters.len(), 9, "9 monstres attendus (8 espèces, le renard ×2)");
+        let monsters: Vec<&SceneObject> = scene
+            .objects
+            .iter()
+            .filter(|o| o.tag == "monstre")
+            .collect();
+        assert_eq!(
+            monsters.len(),
+            9,
+            "9 monstres attendus (8 espèces, le renard ×2)"
+        );
         let species: std::collections::HashSet<String> = monsters
             .iter()
             .filter_map(|m| match m.mesh {
-                MeshKind::Imported(idx) => scene.imported.get(idx as usize).map(|im| im.path.clone()),
+                MeshKind::Imported(idx) => {
+                    scene.imported.get(idx as usize).map(|im| im.path.clone())
+                }
                 _ => None,
             })
             .collect();
@@ -2521,10 +2586,18 @@ mod tests {
     #[test]
     fn riviere_demo_monster_roster_follows_authoring_rules() {
         let scene = Scene::riviere_demo();
-        let monsters: Vec<&SceneObject> = scene.objects.iter().filter(|o| o.tag == "monstre").collect();
+        let monsters: Vec<&SceneObject> = scene
+            .objects
+            .iter()
+            .filter(|o| o.tag == "monstre")
+            .collect();
         for m in &monsters {
             let hp = m.combat.as_ref().unwrap().hp;
-            assert!((1..=6).contains(&hp), "{} : PV hors bornes [1,6] : {hp}", m.name);
+            assert!(
+                (1..=6).contains(&hp),
+                "{} : PV hors bornes [1,6] : {hp}",
+                m.name
+            );
             let speed = m.ai_chaser.as_ref().unwrap().speed;
             assert!(
                 speed > 0.0 && speed <= 3.0,
@@ -2537,7 +2610,10 @@ mod tests {
             .filter(|m| m.ai_chaser.as_ref().unwrap().archetype == Archetype::Colosse)
             .map(|m| m.combat.as_ref().unwrap().hp)
             .collect();
-        assert!(!colosse_hp.is_empty(), "au moins un Colosse attendu (le golem)");
+        assert!(
+            !colosse_hp.is_empty(),
+            "au moins un Colosse attendu (le golem)"
+        );
         let traqueuse_hps: Vec<u32> = monsters
             .iter()
             .filter(|m| m.ai_chaser.as_ref().unwrap().archetype == Archetype::Traqueuse)
@@ -2587,7 +2663,10 @@ mod tests {
                 .iter()
                 .position(|o| o.name == name)
                 .unwrap_or_else(|| panic!("espèce absente du roster : {name}"));
-            assert_eq!(scene.objects[i].tag, "monstre", "{name} doit être tagué monstre");
+            assert_eq!(
+                scene.objects[i].tag, "monstre",
+                "{name} doit être tagué monstre"
+            );
             let mesh_path = match scene.objects[i].mesh {
                 MeshKind::Imported(idx) => scene.imported[idx as usize].path.clone(),
                 _ => panic!("{name} : mesh non importé"),

@@ -165,7 +165,15 @@ impl B<'_> {
     }
 
     /// Pyramide de `n` blocs à la base, posée à la hauteur `top`.
-    fn pyramid(&mut self, x: f32, z: f32, top: f32, n: usize, half: f32, m: impl Fn(usize) -> Material) {
+    fn pyramid(
+        &mut self,
+        x: f32,
+        z: f32,
+        top: f32,
+        n: usize,
+        half: f32,
+        m: impl Fn(usize) -> Material,
+    ) {
         let size = half * 2.0 + 0.004;
         for row in 0..n {
             let k = n - row;
@@ -225,17 +233,15 @@ fn layout(course: usize, hole: usize, part: Part, world: &mut World) {
         }
         (0, 2) => {
             b.table(0.0, -3.0, Vec3::new(0.5, 0.4, 0.35));
-            b.pyramid(0.0, -3.0, 0.8, 5, 0.06, |row| if row == 0 { Wood } else { Target });
+            b.pyramid(0.0, -3.0, 0.8, 5, 0.06, |row| {
+                if row == 0 { Wood } else { Target }
+            });
         }
         // --- Mécanique ---
         (1, 0) => {
             // Rail sous le chariot, qui glisse de gauche à droite.
             b.table(0.0, -2.6, Vec3::new(1.4, 0.33, 0.12));
-            let (a, c, period) = (
-                Vec3::new(-1.0, 0.72, -2.6),
-                Vec3::new(1.0, 0.72, -2.6),
-                5.0,
-            );
+            let (a, c, period) = (Vec3::new(-1.0, 0.72, -2.6), Vec3::new(1.0, 0.72, -2.6), 5.0);
             b.mover(Vec3::new(0.3, 0.04, 0.3), Motion::Slide { a, b: c, period });
             // Le plateau part de `a`, à l'arrêt (cf. `world::Mover::t0`).
             let p = a;
@@ -305,7 +311,10 @@ fn layout(course: usize, hole: usize, part: Part, world: &mut World) {
                 // trois cubes bascule toute seule (test ci-dessous).
                 4.2,
             );
-            b.mover(Vec3::new(0.25, 0.04, 0.25), Motion::Slide { a, b: c, period });
+            b.mover(
+                Vec3::new(0.25, 0.04, 0.25),
+                Motion::Slide { a, b: c, period },
+            );
             // Le plateau part de `a`, à l'arrêt (cf. `world::Mover::t0`).
             let p = a;
             b.tower(p.x, p.z, p.y + 0.04, 3, 0.06, Target);

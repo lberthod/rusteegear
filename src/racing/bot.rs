@@ -64,7 +64,10 @@ impl Bot {
         // Dans un saut, on ne touche à rien : plein gaz, cap tenu.
         let (throttle, brake) = if !car.grounded {
             (1.0, 0.0)
-        } else if car.speed() > allowed * 1.02 && car.speed() > self.cap * 0.999 - 0.01 && allowed >= self.cap {
+        } else if car.speed() > allowed * 1.02
+            && car.speed() > self.cap * 0.999 - 0.01
+            && allowed >= self.cap
+        {
             (0.0, 0.3)
         } else if car.speed() > allowed * 1.02 {
             (0.0, ((car.speed() - allowed) / 6.0).clamp(0.2, 1.0))
@@ -119,7 +122,10 @@ mod tests {
         eprintln!("plafond m/s → chutes, temps : {report:?}");
         for (cap, falls, total) in &report {
             assert!(total.is_some(), "plafond {cap} m/s : course non terminée");
-            assert_eq!(*falls, 0, "plafond {cap} m/s : {falls} chutes (saut trop dur)");
+            assert_eq!(
+                *falls, 0,
+                "plafond {cap} m/s : {falls} chutes (saut trop dur)"
+            );
         }
     }
 
@@ -149,7 +155,9 @@ mod tests {
                 }
             }
             race.update(dt, &car, prev, &track);
-            if std::env::var_os("BOT_TRACE").is_some() && (steps % 120 == 0 || (race.time > 22.0 && race.time < 30.0 && steps % 6 == 0)) {
+            if std::env::var_os("BOT_TRACE").is_some()
+                && (steps % 120 == 0 || (race.time > 22.0 && race.time < 30.0 && steps % 6 == 0))
+            {
                 eprintln!(
                     "t={:.1} frame={} kmh={:.0} grounded={} lap={} gate={} pos=({:.0},{:.0},{:.0})",
                     race.time,
@@ -164,7 +172,11 @@ mod tests {
                 );
             }
         }
-        assert_eq!(race.phase, Phase::Finished, "course non terminée après {steps} pas");
+        assert_eq!(
+            race.phase,
+            Phase::Finished,
+            "course non terminée après {steps} pas"
+        );
         let total = race.total.unwrap();
         eprintln!(
             "bot : {total:.2} s pour {LAPS} tours ({falls} chutes), tours {:?}",

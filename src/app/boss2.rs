@@ -52,8 +52,8 @@
 
 use glam::Vec3;
 
-use super::creature_attack;
 use super::AppState;
+use super::creature_attack;
 use crate::runtime::physics::{Physics, PhysicsKind};
 
 /// Nom de l'objet de scène du boss (`Scene::riviere_demo`) — sert aussi de
@@ -245,7 +245,10 @@ impl AppState {
     /// éruption) — même rôle que `boss_is_frozen`, consulté par
     /// `sim_step_inner` pour ne pas laisser la chasse IA écraser le gel.
     pub(super) fn boss2_is_frozen(&self, idx: usize) -> bool {
-        self.scene.objects.get(idx).is_some_and(|o| o.name == BOSS2_NAME)
+        self.scene
+            .objects
+            .get(idx)
+            .is_some_and(|o| o.name == BOSS2_NAME)
             && self.boss2.hazard.stopped_until.is_some()
     }
 
@@ -373,12 +376,16 @@ impl AppState {
                     // module) — contre-jeu « sortir du disque », pas
                     // « esquiver une trajectoire ».
                     if let Some(center) = self.boss2.hazard.pending_center {
-                        let hit = player_pos.with_y(0.0).distance(center.with_y(0.0)) <= tune.radius;
+                        let hit =
+                            player_pos.with_y(0.0).distance(center.with_y(0.0)) <= tune.radius;
                         if hit && self.play_grace <= 0.0 {
                             self.hud_health = self.hud_health.map(|h| (h - tune.damage).max(0.0));
                             self.fx.damage_flash = 1.0;
                             self.fx.camera_shake = 1.0;
-                            crate::runtime::sfx::play(&mut self.audio, crate::runtime::sfx::Sfx::Hit);
+                            crate::runtime::sfx::play(
+                                &mut self.audio,
+                                crate::runtime::sfx::Sfx::Hit,
+                            );
                         }
                     }
                     crate::runtime::sfx::play(&mut self.audio, crate::runtime::sfx::Sfx::Jump);
@@ -475,7 +482,9 @@ impl AppState {
             BOSS2_NAME,
         );
         self.boss2.boss_idx_cache = boss_idx;
-        let Some(boss_visible) = boss_idx.and_then(|i| self.scene.objects.get(i)).map(|o| o.visible)
+        let Some(boss_visible) = boss_idx
+            .and_then(|i| self.scene.objects.get(i))
+            .map(|o| o.visible)
         else {
             return;
         };
@@ -551,7 +560,12 @@ impl AppState {
     /// idempotent, appelé sans condition depuis le début de `update_boss2`
     /// tant que le boss est invisible (cf. sa doc).
     fn hide_all_boss2_minions(&mut self) {
-        for o in self.scene.objects.iter_mut().filter(|o| o.tag == BOSS2_MINION_TAG) {
+        for o in self
+            .scene
+            .objects
+            .iter_mut()
+            .filter(|o| o.tag == BOSS2_MINION_TAG)
+        {
             o.visible = false;
         }
     }
@@ -623,12 +637,21 @@ mod tests {
             .position(|o| o.name == BOSS2_NAME)
             .expect("second boss absent de la démo Rivière");
         let boss = &scene.objects[idx];
-        assert!(boss.visible, "le second boss doit apparaître visible dès le départ");
+        assert!(
+            boss.visible,
+            "le second boss doit apparaître visible dès le départ"
+        );
         assert_eq!(boss.tag, "boss2");
         assert_eq!(boss.group, "Boss2");
-        let combat = boss.combat.as_ref().expect("le second boss doit être attaquable");
+        let combat = boss
+            .combat
+            .as_ref()
+            .expect("le second boss doit être attaquable");
         assert!(combat.attackable);
-        assert_eq!(combat.hp, 70, "PV d'authoring inattendus pour le second boss");
+        assert_eq!(
+            combat.hp, 70,
+            "PV d'authoring inattendus pour le second boss"
+        );
         assert_eq!(combat.wave, 0);
         assert_eq!(
             boss.ai_chaser.as_ref().map(|c| c.archetype),
@@ -643,14 +666,24 @@ mod tests {
             .iter()
             .find(|o| o.name == BOSS2_LOOT_NAME)
             .expect("butin du second boss absent de la démo Rivière");
-        assert!(!loot.visible, "le butin garanti doit être masqué tant que le boss est vivant");
+        assert!(
+            !loot.visible,
+            "le butin garanti doit être masqué tant que le boss est vivant"
+        );
         assert!(loot.weapon_pickup.is_some());
 
-        let minions: Vec<&crate::scene::SceneObject> =
-            scene.objects.iter().filter(|o| o.tag == BOSS2_MINION_TAG).collect();
+        let minions: Vec<&crate::scene::SceneObject> = scene
+            .objects
+            .iter()
+            .filter(|o| o.tag == BOSS2_MINION_TAG)
+            .collect();
         assert_eq!(minions.len(), 3, "3 Champiblobs attendus");
         for m in &minions {
-            assert!(!m.visible, "{} ne doit pas être visible avant le combat", m.name);
+            assert!(
+                !m.visible,
+                "{} ne doit pas être visible avant le combat",
+                m.name
+            );
             assert!(m.ai_chaser.is_some());
             assert!(m.bite.is_some());
             assert!(m.combat.as_ref().is_some_and(|c| c.attackable));
@@ -752,7 +785,10 @@ mod tests {
         app.boss2.hazard.pending_center = Some(center);
         app.boss2.hazard.stopped_until = Some(app.time + 1.0 / 60.0);
         app.sim_step(1.0 / 60.0);
-        assert_eq!(app.hud_health, Some(1.0 - tuning2(Boss2Phase::Germination).damage));
+        assert_eq!(
+            app.hud_health,
+            Some(1.0 - tuning2(Boss2Phase::Germination).damage)
+        );
 
         // Rejoue le même scénario, mais le joueur s'échappe avant la
         // détonation : aucun dégât.
@@ -764,7 +800,11 @@ mod tests {
         app.boss2.hazard.pending_center = Some(center);
         app.boss2.hazard.stopped_until = Some(app.time + 1.0 / 60.0);
         app.sim_step(1.0 / 60.0);
-        assert_eq!(app.hud_health, Some(1.0), "joueur sorti à temps : aucun dégât");
+        assert_eq!(
+            app.hud_health,
+            Some(1.0),
+            "joueur sorti à temps : aucun dégât"
+        );
     }
 
     /// Preuve de la pause de récupération après la grande éruption de la
@@ -818,7 +858,10 @@ mod tests {
         app.scene.objects[idx].combat.as_mut().unwrap().max_hp = 100;
         app.scene.objects[idx].combat.as_mut().unwrap().hp = 51;
         app.update_boss2(1.0 / 60.0, 1.0);
-        assert_eq!(app.fx.damage_flash, 0.0, "reste en Germination : pas de transition");
+        assert_eq!(
+            app.fx.damage_flash, 0.0,
+            "reste en Germination : pas de transition"
+        );
 
         app.scene.objects[idx].combat.as_mut().unwrap().hp = 50;
         app.update_boss2(1.0 / 60.0, 2.0);
@@ -857,7 +900,10 @@ mod tests {
             .collect();
         assert_eq!(revealed.len(), 2, "2 Champiblobs attendus en Prolifération");
         let victim = revealed[0];
-        assert_eq!(app.scene.objects[victim].respawn_delay, 0.0, "les Champiblobs ne réapparaissent jamais tout seuls");
+        assert_eq!(
+            app.scene.objects[victim].respawn_delay, 0.0,
+            "les Champiblobs ne réapparaissent jamais tout seuls"
+        );
 
         // Le joueur achève ce Champiblob (respawn_delay == 0 : pas de mise en
         // file dans `respawn_queue`, `AppState::process_respawns` ne le
@@ -867,7 +913,10 @@ mod tests {
         let authored_hp = app.scene.objects[victim].combat.as_ref().unwrap().hp;
         while !app.scene.damage_attackable_by(victim, 1) {}
         assert_eq!(app.scene.objects[victim].combat.as_ref().unwrap().hp, 0);
-        assert!(!app.scene.objects[victim].visible, "un Champiblob vaincu doit disparaître");
+        assert!(
+            !app.scene.objects[victim].visible,
+            "un Champiblob vaincu doit disparaître"
+        );
         assert_eq!(
             app.scene.objects[victim].combat.as_ref().unwrap().max_hp,
             authored_hp,
@@ -889,7 +938,10 @@ mod tests {
             victim_combat.hp, victim_combat.max_hp,
             "il doit revenir à PLEINE vie, pas rester à 0 PV (bug des sbires zombies)"
         );
-        assert!(victim_combat.hp > 0, "max_hp doit être positif : pas un cadavre indestructible-en-apparence mais déjà mort");
+        assert!(
+            victim_combat.hp > 0,
+            "max_hp doit être positif : pas un cadavre indestructible-en-apparence mais déjà mort"
+        );
         assert!(victim_combat.attackable, "il doit rester une cible valide");
 
         // Pleinement fonctionnel, pas seulement visible : un coup ne doit
