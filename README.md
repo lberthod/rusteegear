@@ -8,7 +8,7 @@
 
 winit · wgpu · egui — aucun moteur tiers.
 
-![CI](https://github.com/lberthod/rusteegear/actions/workflows/ci.yml/badge.svg?branch=main)
+[![CI](https://github.com/lberthod/rusteegear/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/lberthod/rusteegear/actions/workflows/ci.yml?query=branch%3Amain)
 ![langage](https://img.shields.io/badge/Rust-1.98-orange?logo=rust)
 ![plateformes](https://img.shields.io/badge/macOS%20·%20Android%20·%20iOS-qui%20tournent-success?logo=apple)
 ![rendu](https://img.shields.io/badge/wgpu-Metal%20%7C%20Vulkan-blue)

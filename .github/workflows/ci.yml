@@ -226,14 +226,13 @@ jobs:
         run: cargo build --lib --target ${{ matrix.target }} --features vr
 
   # Avis de sécurité RustSec sur les dépendances (roadmap post-audit 2026-09-03,
-  # 1.5). `continue-on-error` le temps de vérifier que la base d'avis ne produit
-  # pas de faux positifs bruyants sur ce dépôt — même précaution que le job
-  # `golden` à son introduction (15 runs verts avant de le retirer). Pas de
-  # `lfs: true` : un scan de Cargo.lock n'a besoin d'aucun asset.
+  # 1.5). Bloquant depuis l'audit 2026-10-20 (0.5) : en `continue-on-error`, il
+  # a signalé rustls (RUSTSEC-2026-0285) pendant un mois sans que personne le
+  # voie. Les exceptions acceptées sont dans `.cargo/audit.toml`, avec leur
+  # raison. Pas de `lfs: true` : un scan de Cargo.lock n'a besoin d'aucun asset.
   audit:
     name: Avis de sécurité (cargo audit)
     runs-on: ubuntu-latest
-    continue-on-error: true
     steps:
       - uses: actions/checkout@v4
 
