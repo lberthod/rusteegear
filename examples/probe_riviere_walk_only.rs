@@ -43,16 +43,16 @@ fn main() {
         });
         if let Ok(ServerMsg::Snapshot(s)) = client.inbox.recv_timeout(Duration::from_millis(50)) {
             n += 1;
-            if let Some(e) = s.entities.iter().find(|e| e.player_id == Some(my_id)) {
-                if last_print.elapsed() > Duration::from_millis(400) {
-                    println!(
-                        "t={:.2}s tick#{} pos={:?}",
-                        start.elapsed().as_secs_f32(),
-                        n,
-                        e.position
-                    );
-                    last_print = Instant::now();
-                }
+            if let Some(e) = s.entities.iter().find(|e| e.player_id == Some(my_id))
+                && last_print.elapsed() > Duration::from_millis(400)
+            {
+                println!(
+                    "t={:.2}s tick#{} pos={:?}",
+                    start.elapsed().as_secs_f32(),
+                    n,
+                    e.position
+                );
+                last_print = Instant::now();
             }
         }
     }

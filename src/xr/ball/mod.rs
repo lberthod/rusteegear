@@ -1220,7 +1220,7 @@ mod tests {
     /// Chaque trou tient debout seul (éléments mobiles compris) pendant 4 s.
     #[test]
     fn every_hole_stands_still_until_hit() {
-        for course in 0..3 {
+        for (course, spec) in COURSES.iter().enumerate() {
             for hole in 0..3 {
                 let mut w = World::new();
                 super::course::build_statics(course, &mut w);
@@ -1242,7 +1242,7 @@ mod tests {
                 assert_eq!(
                     down, 0,
                     "{} / {} : {down} cible(s) tombée(s) toute(s) seule(s)",
-                    COURSES[course].name, COURSES[course].holes[hole].name
+                    spec.name, spec.holes[hole].name
                 );
             }
         }

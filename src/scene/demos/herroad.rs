@@ -738,7 +738,7 @@ pub fn herroad_build() -> (Scene, RaceLayout, Track) {
             if f.void || !f.wall_l {
                 continue;
             }
-            let side = if idx % 2 == 0 { -1.0 } else { 1.0 };
+            let side = if idx.is_multiple_of(2) { -1.0 } else { 1.0 };
             let c = colors[idx % colors.len()];
             idx += 1;
             // Pas de panneau sous le pont, ni sur un virage serré.

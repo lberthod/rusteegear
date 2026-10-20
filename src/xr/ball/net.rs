@@ -310,7 +310,7 @@ mod native {
             }
             status.store(OFFLINE, Ordering::Relaxed);
             // Adresse suivante tout de suite ; pause une fois la liste parcourue.
-            if attempt % urls.len().max(1) == 0 {
+            if attempt.is_multiple_of(urls.len().max(1)) {
                 tokio::time::sleep(Duration::from_secs(3)).await;
             }
         }

@@ -237,12 +237,12 @@ impl Terrain {
                     smoothstep(0.12, 0.3, slope) + smoothstep(38.0, 60.0, h - self.base) * 0.6;
                 let rock = rock.clamp(0.0, 1.0);
                 let rock_c = [0.42, 0.39, 0.36];
-                for k in 0..3 {
-                    c[k] = c[k] * (1.0 - rock) + rock_c[k] * rock;
+                for (ck, rk) in c.iter_mut().zip(rock_c) {
+                    *ck = *ck * (1.0 - rock) + rk * rock;
                 }
                 let snow = smoothstep(62.0, 80.0, h - self.base);
-                for k in 0..3 {
-                    c[k] = c[k] * (1.0 - snow) + 0.93 * snow;
+                for ck in &mut c {
+                    *ck = *ck * (1.0 - snow) + 0.93 * snow;
                 }
                 mesh.vertices.push(Vertex {
                     position: [x, h, z],

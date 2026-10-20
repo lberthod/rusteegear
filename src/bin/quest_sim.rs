@@ -632,7 +632,7 @@ impl ApplicationHandler for Sim {
                     // Aussi dans le journal toutes les ~5 s : lisible par un script
                     // ou un agent, qui ne voit pas le titre de la fenêtre.
                     self.title_updates += 1;
-                    if self.title_updates % 10 == 0 {
+                    if self.title_updates.is_multiple_of(10) {
                         let detail = match &gpu.content {
                             XrContent::Game(g) => format!(
                                 " · dernière image : simulation {:.2} ms, rendu CPU {:.2} ms, scripts {:.2} ms, physique {:.2} ms",

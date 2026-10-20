@@ -93,8 +93,8 @@ const GEARS: [f32; 7] = [0.0, 16.0, 30.0, 44.0, 58.0, 72.0, 95.0];
 pub fn engine_voice(speed: f32, throttle: f32, boost: bool) -> (f32, f32) {
     let v = speed.abs();
     let mut gear = 0;
-    for g in 0..GEARS.len() - 1 {
-        if v >= GEARS[g] {
+    for (g, &floor) in GEARS[..GEARS.len() - 1].iter().enumerate() {
+        if v >= floor {
             gear = g;
         }
     }

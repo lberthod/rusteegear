@@ -475,6 +475,7 @@ pub(super) struct PipelineBundle {
 /// device/queue/surface, déjà créés par l'appelant). Extrait de `Renderer::new_impl`
 /// (Sprint 113a) — corps inchangé, seul le point de retour diffère (un `PipelineBundle`
 /// au lieu d'alimenter directement le littéral `Renderer { .. }`).
+#[allow(clippy::too_many_arguments)]
 pub(super) fn build(
     device: &wgpu::Device,
     queue: &wgpu::Queue,

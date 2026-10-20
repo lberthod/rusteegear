@@ -208,22 +208,19 @@ fn main() {
         let phase_deadline = t0 + Duration::from_millis(600);
         while Instant::now() < phase_deadline {
             send_input(&client, 1.0, 0.0, 0.0, false, false, false);
-            match client.inbox.recv_timeout(Duration::from_millis(40)) {
-                Ok(ServerMsg::Snapshot(s)) => {
-                    if let Some(e) = s.entities.iter().find(|e| e.player_id == Some(my_id)) {
-                        current_pos = e.position;
-                        if !got && dist2(current_pos, baseline).sqrt() > 0.03 {
-                            let lat = t0.elapsed();
-                            reflect_samples.push(lat);
-                            println!(
-                                "  essai {trial} : mouvement reflété après {:.1} ms",
-                                lat.as_secs_f64() * 1000.0
-                            );
-                            got = true;
-                        }
-                    }
+            if let Ok(ServerMsg::Snapshot(s)) = client.inbox.recv_timeout(Duration::from_millis(40))
+                && let Some(e) = s.entities.iter().find(|e| e.player_id == Some(my_id))
+            {
+                current_pos = e.position;
+                if !got && dist2(current_pos, baseline).sqrt() > 0.03 {
+                    let lat = t0.elapsed();
+                    reflect_samples.push(lat);
+                    println!(
+                        "  essai {trial} : mouvement reflété après {:.1} ms",
+                        lat.as_secs_f64() * 1000.0
+                    );
+                    got = true;
                 }
-                _ => {}
             }
         }
         if !got {
@@ -620,7 +617,6 @@ fn main() {
                     && let Some(e) = s.entities.iter().find(|e| e.player_id == Some(my_id))
                 {
                     health_end_a = e.health;
-                    current_pos = e.position;
                 }
             }
             let phase_b_start = Instant::now();

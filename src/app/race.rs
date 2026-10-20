@@ -113,10 +113,7 @@ fn read_saved() -> SavedBest {
 
 fn write_saved(saved: &SavedBest) {
     #[cfg(test)]
-    {
-        let _ = saved;
-        return;
-    }
+    let _ = saved;
     #[cfg(not(test))]
     write_saved_to_disk(saved);
 }
