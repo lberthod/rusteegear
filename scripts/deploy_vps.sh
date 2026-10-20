@@ -47,14 +47,22 @@ git push origin main
 echo "── 3/5 Pull + build release + restart sur le VPS ──────────────────────"
 # --ff-only : le VPS ne doit jamais diverger de main ; un échec ici signale
 # une divergence à résoudre à la main plutôt qu'à écraser en silence.
+# Le serveur n'écoute que sur la boucle locale (audit 2026-10-20, 1.1) : Caddy
+# est son seul client, et le plafond par IP lit l'adresse réelle dans
+# X-Forwarded-For. Override systemd idempotent, retirable d'un `rm` + restart.
+# Le relais Ball (`ball-relay`, 127.0.0.1:7790) est reconstruit et relancé avec.
 ssh -i "$VPS_KEY" "$VPS_SSH" "set -euo pipefail
     cd $VPS_DIR
     git pull --ff-only
     source ~/.cargo/env
-    cargo build --release --bin server
-    sudo systemctl restart rusteegear-server
+    cargo build --release --bin server --bin ball_relay
+    sudo mkdir -p /etc/systemd/system/rusteegear-server.service.d
+    printf '[Service]\nEnvironment=RUSTEEGEAR_SERVER_ADDR=127.0.0.1:7777\n' \
+        | sudo tee /etc/systemd/system/rusteegear-server.service.d/listen-local.conf >/dev/null
+    sudo systemctl daemon-reload
+    sudo systemctl restart rusteegear-server ball-relay
     sleep 2
-    sudo systemctl is-active rusteegear-server"
+    sudo systemctl is-active rusteegear-server ball-relay"
 
 echo "── 4/5 Smoke test façade TLS ($WSS_URL) — le chemin des vrais joueurs ─"
 cargo run --release --example smoke_vps "$WSS_URL"
